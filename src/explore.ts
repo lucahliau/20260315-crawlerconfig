@@ -2176,7 +2176,7 @@ export async function exploreRetailer(
     log(session, `Retailer: ${retailer} (${displayName})`);
     log(session, "");
 
-    const configsDir = path.join(process.cwd(), "configs");
+    const configsDir = process.env.CONFIGS_DIR ?? path.join(process.cwd(), "configs");
     fs.mkdirSync(configsDir, { recursive: true });
 
     log(session, "Initializing Stagehand (LOCAL, headed browser)...");

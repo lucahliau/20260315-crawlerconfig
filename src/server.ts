@@ -14,8 +14,8 @@ const app = express();
 app.use(express.json());
 
 const PORT = parseInt(process.env.PORT ?? "3456", 10);
-const CONFIGS_DIR = path.join(process.cwd(), "configs");
-const PRODUCT_URLS_DIR = path.join(process.cwd(), "product-urls");
+const CONFIGS_DIR = process.env.CONFIGS_DIR ?? path.join(process.cwd(), "configs");
+const PRODUCT_URLS_DIR = process.env.PRODUCT_URLS_DIR ?? path.join(process.cwd(), "product-urls");
 
 // Delay between processing consecutive URLs (helps with rate limits)
 const INTER_URL_DELAY_MS = parseInt(process.env.INTER_URL_DELAY_MS ?? "5000", 10);
