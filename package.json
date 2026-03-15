@@ -4,11 +4,12 @@
   "description": "Stagehand-based tool that explores retailer websites and generates JSON config files for automated crawling",
   "type": "module",
   "scripts": {
-    "start": "tsx --env-file=.env src/explore.ts",
-    "explore": "tsx --env-file=.env src/explore.ts",
-    "ui": "tsx --env-file=.env src/server.ts"
+    "start": "tsx src/explore.ts",
+    "explore": "tsx src/explore.ts",
+    "ui": "tsx src/server.ts"
   },
   "dependencies": {
+    "dotenv": "^16.4.5",
     "@aws-sdk/client-s3": "^3.1009.0",
     "@browserbasehq/stagehand": "^3.1.0",
     "express": "^5.1.0",

@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { Stagehand } from "@browserbasehq/stagehand";
 import { z } from "zod";
 import fs from "node:fs";
@@ -1577,7 +1578,8 @@ async function findProductLinkSelector(
   page: StagehandPage,
   baseUrl: string,
 ): Promise<{ selector: string; urlIsRelative: boolean; sampleHrefs: string[] } | null> {
-  return page.evaluate((base: string, cardSelectors: string[]) => {
+  return page.evaluate((args: { base: string; cardSelectors: string[] }) => {
+    const { cardSelectors } = args;
     // Strategy 1: Look for product cards with links
     for (const sel of cardSelectors) {
       try {
@@ -1673,7 +1675,7 @@ async function findProductLinkSelector(
     }
 
     return null;
-  }, baseUrl, PRODUCT_CARD_SELECTORS);
+  }, { base: baseUrl, cardSelectors: PRODUCT_CARD_SELECTORS });
 }
 
 // ---------------------------------------------------------------------------
@@ -1993,7 +1995,8 @@ async function extractProductUrlsFromListing(
   await page.waitForTimeout(2000);
 
   // Try DOM-based extraction first with expanded selectors
-  const domLinks = await page.evaluate((base: string, cardSelectors: string[]) => {
+  const domLinks = await page.evaluate((args: { base: string; cardSelectors: string[] }) => {
+    const { base, cardSelectors } = args;
     // Strategy 1: product card selectors
     for (const sel of cardSelectors) {
       try {
@@ -2049,7 +2052,7 @@ async function extractProductUrlsFromListing(
     }
 
     return [] as string[];
-  }, baseUrl, PRODUCT_CARD_SELECTORS);
+  }, { base: baseUrl, cardSelectors: PRODUCT_CARD_SELECTORS });
 
   if (domLinks.length >= 3) {
     log(session, `    Found ${domLinks.length} product URLs via DOM.`);
