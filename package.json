@@ -4,7 +4,7 @@
   "description": "Stagehand-based tool that explores retailer websites and generates JSON config files for automated crawling",
   "type": "module",
   "scripts": {
-    "start": "tsx src/explore.ts",
+    "start": "tsx src/server.ts",
     "explore": "tsx src/explore.ts",
     "ui": "tsx src/server.ts"
   },
