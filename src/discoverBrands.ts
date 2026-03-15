@@ -97,8 +97,15 @@ export async function discoverBrands(
 - Independent, underground, or lesser-known
 - Examples of niches: streetwear boutiques, sustainable/ethical brands, vintage-inspired, avant-garde, workwear, technical apparel, Japanese/European independents
 
-${exclusionText}Search the web, then respond with ONLY valid JSON in this exact format (no other text):
-{"brands":[{"name":"Brand Name","url":"https://example.com"},...]}`;
+${exclusionText}REQUIREMENTS:
+- Return EXACTLY 15-20 brands (fewer is not acceptable)
+- Each brand must have a valid homepage URL (https preferred)
+- Respond with ONLY a single JSON object—no markdown, no code blocks, no explanation before or after
+
+Output format (copy this structure exactly):
+{"brands":[{"name":"Brand Name","url":"https://example.com"},{"name":"Another Brand","url":"https://another.com"},...]}
+
+Search the web, then respond with ONLY the JSON object as shown above.`;
 
   onProgress("Searching the web for niche brands...");
 
@@ -115,6 +122,7 @@ ${exclusionText}Search the web, then respond with ONLY valid JSON in this exact 
 
   const textBlock = response.content.find((b) => b.type === "text");
   const text = textBlock && "text" in textBlock ? textBlock.text : "";
+  onProgress("Full Claude response:\n" + text);
 
   const parsed = extractJsonFromResponse(text);
   if (!parsed || parsed.brands.length === 0) {
