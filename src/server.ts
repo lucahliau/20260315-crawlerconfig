@@ -444,7 +444,7 @@ app.post("/api/upload/:retailer", (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.get("/", (_req, res) => {
-  res.sendFile(path.join(__dirname, "ui.html"));
+  res.sendFile(path.join(__dirname, "Ui.html"));
 });
 
 // ---------------------------------------------------------------------------
