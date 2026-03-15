@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Crawler Config Generator</title>
+<style>
+  :root {
+    --bg: #f8f9fa;
+    --card: #ffffff;
+    --border: #dee2e6;
+    --text: #212529;
+    --muted: #6c757d;
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --danger: #dc3545;
+    --success: #198754;
+    --warn: #fd7e14;
+    --log-bg: #1e1e1e;
+    --log-text: #d4d4d4;
+    --json-bg: #f1f3f5;
+    --radius: 8px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111827;
+      --card: #1f2937;
+      --border: #374151;
+      --text: #f9fafb;
+      --muted: #9ca3af;
+      --json-bg: #111827;
+      --log-bg: #0d1117;
+      --log-text: #c9d1d9;
+    }
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    padding: 2rem;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  h1 { font-size: 1.5rem; margin-bottom: 1.5rem; }
+  h2 { font-size: 1.15rem; margin-bottom: 0.75rem; color: var(--muted); font-weight: 500; }
+
+  section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.25rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .input-row {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+  .input-row input[type="text"] {
+    flex: 1;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .input-row input[type="text"]:focus { outline: 2px solid var(--accent); border-color: transparent; }
+
+  button {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+    transition: background 0.15s;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-secondary { background: var(--border); color: var(--text); }
+  .btn-secondary:hover { background: var(--muted); color: #fff; }
+  .btn-danger { background: transparent; color: var(--danger); font-size: 1.1rem; padding: 0.25rem 0.5rem; }
+  .btn-danger:hover { background: var(--danger); color: #fff; }
+  .btn-small { padding: 0.3rem 0.6rem; font-size: 0.8rem; }
+
+  .file-label {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    padding: 0.5rem 1rem; border-radius: var(--radius);
+    background: var(--border); color: var(--text);
+    cursor: pointer; font-size: 0.85rem; font-weight: 500;
+    transition: background 0.15s;
+  }
+  .file-label:hover { background: var(--muted); color: #fff; }
+  .file-label input { display: none; }
+
+  .queue-list {
+    list-style: none;
+    margin-top: 0.5rem;
+  }
+  .queue-list li {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.35rem 0.5rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.85rem;
+    font-family: monospace;
+  }
+  .queue-list li:last-child { border-bottom: none; }
+
+  .actions-row {
+    display: flex; gap: 0.5rem; margin-top: 0.75rem; align-items: center;
+  }
+  .progress-text { font-size: 0.85rem; color: var(--muted); margin-left: auto; }
+
+  .log-area {
+    background: var(--log-bg);
+    color: var(--log-text);
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 0.8rem;
+    padding: 1rem;
+    border-radius: var(--radius);
+    height: 320px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .config-entry {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 0.75rem;
+    overflow: hidden;
+  }
+  .config-header {
+    display: flex; align-items: center; gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    user-select: none;
+    background: var(--bg);
+  }
+  .config-header:hover { background: var(--border); }
+  .config-name { font-weight: 600; flex: 1; }
+  .badge {
+    font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+    padding: 0.15rem 0.5rem; border-radius: 999px; letter-spacing: 0.03em;
+  }
+  .badge-recommended { background: #d1fae5; color: #065f46; }
+  .badge-usable { background: #fef3c7; color: #92400e; }
+  .badge-not-recommended { background: #fee2e2; color: #991b1b; }
+  @media (prefers-color-scheme: dark) {
+    .badge-recommended { background: #064e3b; color: #6ee7b7; }
+    .badge-usable { background: #78350f; color: #fcd34d; }
+    .badge-not-recommended { background: #7f1d1d; color: #fca5a5; }
+  }
+  .method-tag { font-size: 0.75rem; color: var(--muted); }
+
+  .config-body {
+    display: none;
+    padding: 0.75rem 1rem;
+    border-top: 1px solid var(--border);
+  }
+  .config-body.open { display: block; }
+  .config-json {
+    background: var(--json-bg);
+    padding: 0.75rem;
+    border-radius: var(--radius);
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 400px;
+    overflow-y: auto;
+    position: relative;
+  }
+  .copy-btn {
+    position: absolute; top: 0.5rem; right: 0.5rem;
+  }
+  .copied-toast {
+    position: fixed; bottom: 1.5rem; right: 1.5rem;
+    background: var(--success); color: #fff;
+    padding: 0.5rem 1rem; border-radius: var(--radius);
+    font-size: 0.85rem; opacity: 0; transition: opacity 0.3s;
+    pointer-events: none;
+  }
+  .copied-toast.show { opacity: 1; }
+
+  .empty-state {
+    text-align: center; color: var(--muted); padding: 2rem 0; font-size: 0.9rem;
+  }
+
+  .input-status {
+    font-size: 0.82rem;
+    min-height: 1.4em;
+    margin-top: 0.25rem;
+    padding: 0 0.25rem;
+  }
+  .input-status.error { color: var(--danger); }
+  .input-status.success { color: var(--success); }
+  .input-status.info { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>Crawler Config Generator</h1>
+
+<!-- Input Section -->
+<section>
+  <h2>Add URLs</h2>
+  <div class="input-row">
+    <input type="text" id="urlInput" placeholder="https://www.example.com" />
+    <button type="button" class="btn-primary" id="addUrlBtn">Add URL</button>
+    <label class="file-label">
+      Upload CSV
+      <input type="file" id="csvInput" accept=".csv,.txt" />
+    </label>
+  </div>
+  <div id="inputStatus" class="input-status"></div>
+  <ul class="queue-list" id="queueList"></ul>
+  <div class="actions-row">
+    <button type="button" class="btn-primary" id="runBtn" disabled>Run</button>
+    <button type="button" class="btn-secondary btn-small" id="clearBtn" style="display:none">Clear</button>
+    <span class="progress-text" id="progressText"></span>
+  </div>
+</section>
+
+<!-- Progress Section -->
+<section id="progressSection" style="display:none">
+  <h2>Progress</h2>
+  <div class="log-area" id="logArea"></div>
+</section>
+
+<!-- Results Section -->
+<section>
+  <h2>Generated Configs</h2>
+  <div id="configList"><div class="empty-state">No configs generated yet.</div></div>
+</section>
+
+<div class="copied-toast" id="copiedToast">Copied to clipboard</div>
+
+<script>
+"use strict";
+
+// ── Global error handler ────────────────────────────────────────────────
+window.onerror = function (msg, src, line, col) {
+  var errorMsg = "JS Error: " + msg + " (line " + line + ", col " + col + ")";
+  console.error(errorMsg);
+  showStatus(errorMsg, "error", 0);
+};
+
+// ── State ───────────────────────────────────────────────────────────────
+var queue = [];
+var running = false;
+var statusTimer = null;
+
+// ── Status helper ───────────────────────────────────────────────────────
+function showStatus(msg, type, autoHideMs) {
+  var el = document.getElementById("inputStatus");
+  if (!el) { console.warn("[showStatus] #inputStatus not found"); return; }
+  el.textContent = msg;
+  el.className = "input-status " + (type || "info");
+  if (statusTimer) clearTimeout(statusTimer);
+  if (typeof autoHideMs === "number" && autoHideMs > 0) {
+    statusTimer = setTimeout(function () {
+      el.textContent = "";
+      el.className = "input-status";
+    }, autoHideMs);
+  }
+}
+
+// ── Queue rendering ─────────────────────────────────────────────────────
+function renderQueue() {
+  var list = document.getElementById("queueList");
+  var runBtn = document.getElementById("runBtn");
+  var clearBtn = document.getElementById("clearBtn");
+  if (!list || !runBtn) return;
+
+  list.innerHTML = "";
+  for (var i = 0; i < queue.length; i++) {
+    (function (idx) {
+      var li = document.createElement("li");
+      li.textContent = queue[idx];
+      var btn = document.createElement("button");
+      btn.className = "btn-danger";
+      btn.textContent = "\u00D7"; // ×
+      btn.onclick = function () { queue.splice(idx, 1); renderQueue(); };
+      li.appendChild(btn);
+      list.appendChild(li);
+    })(i);
+  }
+  runBtn.disabled = queue.length === 0 || running;
+  clearBtn.style.display = queue.length > 0 && !running ? "" : "none";
+}
+
+// ── URL normalisation ───────────────────────────────────────────────────
+function normalizeUrl(raw) {
+  var s = raw.trim().replace(/^["'<]+|["'>]+$/g, "");
+  if (!s) return { url: null, reason: "Input is empty." };
+
+  if (s.indexOf("//") === 0) {
+    s = "https:" + s;
+  } else if (s.indexOf("http://") !== 0 && s.indexOf("https://") !== 0) {
+    s = "https://" + s;
+  }
+
+  try {
+    var u = new URL(s);
+    if (!u.pathname || u.pathname === "/") u.pathname = "/";
+    return { url: u.toString(), reason: null };
+  } catch (e) {
+    return { url: null, reason: "Invalid URL: " + s };
+  }
+}
+
+// ── Add URL handler ─────────────────────────────────────────────────────
+function addUrl() {
+  console.log("[addUrl] called");
+  var input = document.getElementById("urlInput");
+  if (!input) {
+    showStatus("Bug: #urlInput not found.", "error", 0);
+    return;
+  }
+
+  var raw = input.value.trim();
+  console.log("[addUrl] raw:", raw);
+
+  if (!raw) {
+    showStatus("Please enter a URL first.", "error", 4000);
+    return;
+  }
+
+  var result = normalizeUrl(raw);
+  console.log("[addUrl] normalizeUrl:", JSON.stringify(result));
+
+  if (!result.url) {
+    showStatus(result.reason, "error", 6000);
+    return;
+  }
+
+  for (var i = 0; i < queue.length; i++) {
+    if (queue[i] === result.url) {
+      showStatus("URL already in queue.", "error", 4000);
+      return;
+    }
+  }
+
+  queue.push(result.url);
+  input.value = "";
+  showStatus("Added: " + result.url, "success", 3000);
+  renderQueue();
+}
+
+// ── CSV handler ─────────────────────────────────────────────────────────
+function handleCsv(e) {
+  var file = e.target.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function () {
+    var text = reader.result;
+    var lines = text.split(/\r?\n/).filter(function (l) { return l.trim(); });
+    var added = 0, skipped = 0;
+    for (var i = 0; i < lines.length; i++) {
+      var raw = lines[i].split(",")[0].trim().replace(/^["']|["']$/g, "");
+      var result = normalizeUrl(raw);
+      if (!result.url) { skipped++; continue; }
+      queue.push(result.url);
+      added++;
+    }
+    if (added > 0) {
+      showStatus("Added " + added + " URL(s) from CSV" + (skipped > 0 ? " (" + skipped + " skipped)" : ""), "success", 5000);
+    } else {
+      showStatus("No valid URLs found in CSV.", "error", 5000);
+    }
+    renderQueue();
+  };
+  reader.readAsText(file);
+  e.target.value = "";
+}
+
+// ── Clear queue ─────────────────────────────────────────────────────────
+function clearQueue() {
+  queue.length = 0;
+  renderQueue();
+}
+
+// ── Run exploration ─────────────────────────────────────────────────────
+function runExplore() {
+  if (queue.length === 0 || running) return;
+  running = true;
+  document.getElementById("runBtn").disabled = true;
+  document.getElementById("clearBtn").style.display = "none";
+  var section = document.getElementById("progressSection");
+  section.style.display = "";
+  var logArea = document.getElementById("logArea");
+  logArea.textContent = "";
+  var progressText = document.getElementById("progressText");
+  progressText.textContent = "Starting...";
+
+  var urls = queue.slice();
+  queue.length = 0;
+  renderQueue();
+
+  fetch("/api/explore", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ urls: urls }),
+  })
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      if (data.error) throw new Error(data.error);
+      var jobId = data.jobId;
+
+      var es = new EventSource("/api/progress/" + jobId);
+      es.onmessage = function (e) {
+        var msg = JSON.parse(e.data);
+        if (msg.type === "log") {
+          logArea.textContent += msg.msg + "\n";
+          logArea.scrollTop = logArea.scrollHeight;
+        } else if (msg.type === "progress") {
+          progressText.textContent = "Processing " + msg.current + "/" + msg.total + ": " + msg.url;
+        } else if (msg.type === "done") {
+          es.close();
+          progressText.textContent = "Done \u2014 " + urls.length + " URL(s) processed.";
+          running = false;
+          renderQueue();
+          loadConfigs();
+        }
+      };
+      es.onerror = function () {
+        es.close();
+        progressText.textContent = "Connection lost.";
+        running = false;
+        renderQueue();
+        loadConfigs();
+      };
+    })
+    .catch(function (err) {
+      console.error("[runExplore] Error:", err);
+      progressText.textContent = "Error: " + err.message;
+      running = false;
+      renderQueue();
+    });
+}
+
+// ── Load existing configs ───────────────────────────────────────────────
+function loadConfigs() {
+  var container = document.getElementById("configList");
+  fetch("/api/configs")
+    .then(function (res) { return res.json(); })
+    .then(function (configs) {
+      if (configs.length === 0) {
+        container.innerHTML = '<div class="empty-state">No configs generated yet.</div>';
+        return;
+      }
+      container.innerHTML = "";
+      for (var i = 0; i < configs.length; i++) {
+        var entry = configs[i];
+        var rec = (entry.config && entry.config.dataQuality && entry.config.dataQuality.overallRecommendation) || "unknown";
+        var method = (entry.config && entry.config.discovery && entry.config.discovery.method) || "unknown";
+        var badgeClass = rec === "recommended" ? "badge-recommended"
+          : rec === "usable" ? "badge-usable" : "badge-not-recommended";
+
+        var div = document.createElement("div");
+        div.className = "config-entry";
+        div.innerHTML =
+          '<div class="config-header">' +
+            '<span class="config-name">' + escHtml(entry.retailer) + '</span>' +
+            '<span class="badge ' + badgeClass + '">' + escHtml(rec) + '</span>' +
+            '<span class="method-tag">' + escHtml(method) + '</span>' +
+          '</div>' +
+          '<div class="config-body">' +
+            '<div class="config-json" style="position:relative">' +
+              '<button class="btn-primary btn-small copy-btn">Copy JSON</button>' +
+              '<pre style="margin:0">' + escHtml(JSON.stringify(entry.config, null, 2)) + '</pre>' +
+            '</div>' +
+          '</div>';
+
+        // attach listeners via JS, not inline handlers
+        (function (el) {
+          el.querySelector(".config-header").onclick = function () {
+            el.querySelector(".config-body").classList.toggle("open");
+          };
+          el.querySelector(".copy-btn").onclick = function () { copyJson(el); };
+        })(div);
+
+        container.appendChild(div);
+      }
+    })
+    .catch(function (err) {
+      console.error("[loadConfigs] Error:", err);
+      container.innerHTML = '<div class="empty-state">Could not load configs.</div>';
+    });
+}
+
+function copyJson(entry) {
+  var pre = entry.querySelector("pre");
+  navigator.clipboard.writeText(pre.textContent).then(function () {
+    var toast = document.getElementById("copiedToast");
+    toast.classList.add("show");
+    setTimeout(function () { toast.classList.remove("show"); }, 1500);
+  });
+}
+
+function escHtml(s) {
+  var d = document.createElement("div");
+  d.textContent = s == null ? "" : String(s);
+  return d.innerHTML;
+}
+
+// ── Attach all event listeners ──────────────────────────────────────────
+document.getElementById("addUrlBtn").addEventListener("click", addUrl);
+document.getElementById("urlInput").addEventListener("keydown", function (e) {
+  if (e.key === "Enter") addUrl();
+});
+document.getElementById("csvInput").addEventListener("change", handleCsv);
+document.getElementById("clearBtn").addEventListener("click", clearQueue);
+document.getElementById("runBtn").addEventListener("click", runExplore);
+
+// ── Initial load ────────────────────────────────────────────────────────
+loadConfigs();
+console.log("[init] UI ready");
+</script>
+</body>
+</html>
