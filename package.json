@@ -9,14 +9,17 @@
     "ui": "tsx --env-file=.env src/server.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1009.0",
     "@browserbasehq/stagehand": "^3.1.0",
     "express": "^5.1.0",
+    "pg": "^8.20.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.18.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.7.0"
   }
 }

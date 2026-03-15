@@ -205,8 +205,10 @@
   .input-status.success { color: var(--success); }
   .input-status.info { color: var(--muted); }
 
-  .crawl-btn { white-space: nowrap; }
-  .crawl-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .crawl-btn, .upload-btn { white-space: nowrap; }
+  .crawl-btn:disabled, .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .upload-btn { background: var(--success); color: #fff; }
+  .upload-btn:hover:not(:disabled) { background: #157347; }
 
   .crawl-status {
     padding: 0.5rem 1rem;
@@ -513,8 +515,9 @@ function runExplore() {
     });
 }
 
-// ── Crawl state per retailer ─────────────────────────────────────────────
+// ── Crawl & upload state per retailer ────────────────────────────────────
 var crawlingRetailers = {};
+var uploadingRetailers = {};
 var productUrlsCache = {};
 
 // ── Load existing configs ───────────────────────────────────────────────
@@ -559,6 +562,7 @@ function loadConfigs() {
           '<span class="method-tag">' + escHtml(method) + '</span>' +
           (hasUrls ? '<span class="method-tag">' + urlCount + ' URLs</span>' : '') +
           '<button class="btn-primary btn-small crawl-btn" data-retailer="' + escHtml(entry.retailer) + '">' + crawlLabel + '</button>' +
+          (hasUrls ? '<button class="btn-primary btn-small upload-btn" data-retailer="' + escHtml(entry.retailer) + '">Upload</button>' : '') +
         '</div>' +
         '<div class="crawl-status" data-crawl-status="' + escHtml(entry.retailer) + '">' +
           '<span class="crawl-progress-text"></span>' +
@@ -574,7 +578,7 @@ function loadConfigs() {
 
       (function (el, retailer) {
         el.querySelector(".config-header").onclick = function (e) {
-          if (e.target.classList.contains("crawl-btn")) return;
+          if (e.target.classList.contains("crawl-btn") || e.target.classList.contains("upload-btn")) return;
           el.querySelector(".config-body").classList.toggle("open");
         };
         el.querySelector(".copy-btn").onclick = function (e) {
@@ -585,6 +589,13 @@ function loadConfigs() {
           e.stopPropagation();
           startCrawl(retailer);
         };
+        var uploadBtn = el.querySelector(".upload-btn");
+        if (uploadBtn) {
+          uploadBtn.onclick = function (e) {
+            e.stopPropagation();
+            startUpload(retailer);
+          };
+        }
       })(div, entry.retailer);
 
       container.appendChild(div);
@@ -682,6 +693,72 @@ function startCrawl(retailer) {
       crawlingRetailers[retailer] = false;
       btn.disabled = false;
       btn.textContent = "Retry Crawl";
+      progressText.textContent = "Error: " + err.message;
+    });
+}
+
+// ── Start upload for a retailer ──────────────────────────────────────────
+function startUpload(retailer) {
+  if (uploadingRetailers[retailer]) return;
+  uploadingRetailers[retailer] = true;
+
+  var entry = document.querySelector('[data-retailer="' + retailer + '"]');
+  if (!entry) return;
+
+  var btn = entry.querySelector(".upload-btn");
+  btn.disabled = true;
+  btn.textContent = "Uploading...";
+
+  var statusDiv = entry.querySelector('[data-crawl-status="' + retailer + '"]');
+  statusDiv.classList.add("active");
+  var progressText = statusDiv.querySelector(".crawl-progress-text");
+  var logDiv = statusDiv.querySelector(".crawl-log");
+  progressText.textContent = "Starting upload...";
+  logDiv.textContent = "";
+
+  fetch("/api/upload/" + encodeURIComponent(retailer), { method: "POST" })
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      if (data.error) throw new Error(data.error);
+
+      var es = new EventSource("/api/progress/" + data.jobId);
+      es.onmessage = function (e) {
+        var msg = JSON.parse(e.data);
+        if (msg.type === "log") {
+          logDiv.textContent += msg.msg + "\n";
+          logDiv.scrollTop = logDiv.scrollHeight;
+        } else if (msg.type === "upload-progress") {
+          progressText.textContent = "Uploading... " + msg.uploaded + " done, " + msg.skipped + " skipped, " + msg.failed + " failed / " + msg.total + " total";
+        } else if (msg.type === "done") {
+          es.close();
+          uploadingRetailers[retailer] = false;
+          btn.disabled = false;
+          btn.textContent = "Upload";
+
+          if (msg.error) {
+            progressText.textContent = "Upload failed: " + msg.error;
+          } else {
+            progressText.textContent = "Done \u2014 " + (msg.uploaded || 0) + " uploaded, " + (msg.skipped || 0) + " skipped, " + (msg.failed || 0) + " failed";
+          }
+
+          setTimeout(function () {
+            statusDiv.classList.remove("active");
+          }, 8000);
+        }
+      };
+      es.onerror = function () {
+        es.close();
+        uploadingRetailers[retailer] = false;
+        btn.disabled = false;
+        btn.textContent = "Upload";
+        progressText.textContent = "Connection lost during upload.";
+      };
+    })
+    .catch(function (err) {
+      console.error("[startUpload] Error:", err);
+      uploadingRetailers[retailer] = false;
+      btn.disabled = false;
+      btn.textContent = "Upload";
       progressText.textContent = "Error: " + err.message;
     });
 }

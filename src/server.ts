@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import { exploreRetailer } from "./explore.js";
 import { crawlProductUrls, type CrawlResult } from "./crawl.js";
+import { uploadRetailer, type UploadResult } from "./upload.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -341,6 +342,100 @@ app.get("/api/product-urls/:retailer", (req, res) => {
   } catch {
     res.status(500).json({ error: "Failed to read product URLs." });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Upload endpoints — scrape product URLs, upload images to R2, upsert to DB
+// ---------------------------------------------------------------------------
+
+app.post("/api/upload/:retailer", (req, res) => {
+  const retailer = req.params.retailer;
+  const configPath = path.join(CONFIGS_DIR, `${retailer}.json`);
+  if (!fs.existsSync(configPath)) {
+    res.status(404).json({ error: "Config not found." });
+    return;
+  }
+
+  const urlsPath = path.join(PRODUCT_URLS_DIR, `${retailer}.json`);
+  if (!fs.existsSync(urlsPath)) {
+    res.status(404).json({ error: "Product URLs not found. Crawl first." });
+    return;
+  }
+
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+  } catch {
+    res.status(500).json({ error: "Failed to parse config." });
+    return;
+  }
+
+  let urlsData;
+  try {
+    urlsData = JSON.parse(fs.readFileSync(urlsPath, "utf-8")) as CrawlResult;
+  } catch {
+    res.status(500).json({ error: "Failed to parse product URLs." });
+    return;
+  }
+
+  if (!urlsData.urls || urlsData.urls.length === 0) {
+    res.status(400).json({ error: "No product URLs available." });
+    return;
+  }
+
+  const id = crypto.randomUUID();
+  const job: Job = {
+    id,
+    urls: urlsData.urls,
+    current: 0,
+    status: "running",
+    logs: [],
+    results: [],
+  };
+  jobs.set(id, job);
+
+  (async () => {
+    try {
+      const result = await uploadRetailer(
+        config,
+        urlsData.urls,
+        (msg) => pushLog(job.id, msg),
+        (progress) => pushEvent(job.id, {
+          type: "upload-progress",
+          uploaded: progress.uploaded,
+          skipped: progress.skipped,
+          failed: progress.failed,
+          total: progress.total,
+          currentUrl: progress.currentUrl,
+        }),
+      );
+
+      job.results.push(result as unknown as Record<string, unknown>);
+      job.status = "done";
+      pushEvent(job.id, {
+        type: "done",
+        uploaded: result.uploaded,
+        skipped: result.skipped,
+        failed: result.failed,
+        total: result.total,
+      });
+    } catch (err) {
+      const msg = (err as Error).message ?? String(err);
+      console.error(`[upload] Error uploading ${retailer}:`, err);
+      pushLog(job.id, `ERROR: ${msg}`);
+      job.status = "error";
+      job.error = msg;
+      pushEvent(job.id, { type: "done", error: msg });
+    }
+
+    const clients = sseClients.get(job.id);
+    if (clients) {
+      for (const res of clients) res.end();
+      sseClients.delete(job.id);
+    }
+  })();
+
+  res.json({ jobId: id });
 });
 
 // ---------------------------------------------------------------------------
