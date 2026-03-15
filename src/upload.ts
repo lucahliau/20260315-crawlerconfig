@@ -880,7 +880,7 @@ export async function uploadRetailer(
     if (needsBrowser) {
       log("  Initializing headless browser...");
       stagehand = new Stagehand({
-        env: "LOCAL",
+        env: (process.env.STAGEHAND_ENV as "LOCAL" | "BROWSERBASE") || "LOCAL",
         localBrowserLaunchOptions: { headless: true },
       });
       await stagehand.init();

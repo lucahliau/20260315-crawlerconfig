@@ -2182,7 +2182,7 @@ export async function exploreRetailer(
     log(session, "Initializing Stagehand (LOCAL, headed browser)...");
 
     const stagehand = new Stagehand({
-      env: "LOCAL",
+      env: (process.env.STAGEHAND_ENV as "LOCAL" | "BROWSERBASE") || "LOCAL",
       localBrowserLaunchOptions: {
         headless: false,
         args: [

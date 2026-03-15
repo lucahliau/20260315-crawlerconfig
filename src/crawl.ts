@@ -184,7 +184,9 @@ async function crawlCategoryPagination(
 
   if (needsBrowser) {
     log("  JS rendering required — using headless browser");
-    const stagehand = new Stagehand({ env: "LOCAL" });
+    const stagehand = new Stagehand({
+      env: (process.env.STAGEHAND_ENV as "LOCAL" | "BROWSERBASE") || "LOCAL",
+    });
     try {
       await stagehand.init();
       const page = stagehand.context.pages()[0];
@@ -313,7 +315,9 @@ async function crawlInfiniteScroll(
 
   const pattern = new RegExp(extraction.productUrlPattern);
 
-  const stagehand = new Stagehand({ env: "LOCAL" });
+  const stagehand = new Stagehand({
+    env: (process.env.STAGEHAND_ENV as "LOCAL" | "BROWSERBASE") || "LOCAL",
+  });
   try {
     await stagehand.init();
     const page = stagehand.context.pages()[0];
