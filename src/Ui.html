@@ -204,6 +204,71 @@
   .input-status.error { color: var(--danger); }
   .input-status.success { color: var(--success); }
   .input-status.info { color: var(--muted); }
+
+  .crawl-btn { white-space: nowrap; }
+  .crawl-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .crawl-status {
+    padding: 0.5rem 1rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+    border-top: 1px solid var(--border);
+    display: none;
+  }
+  .crawl-status.active { display: block; }
+
+  .crawl-log {
+    background: var(--log-bg);
+    color: var(--log-text);
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.75rem;
+    padding: 0.5rem;
+    border-radius: var(--radius);
+    max-height: 160px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin-top: 0.4rem;
+  }
+
+  .product-urls-panel {
+    border-top: 1px solid var(--border);
+    padding: 0.75rem 1rem;
+    display: none;
+  }
+  .product-urls-panel.has-urls { display: block; }
+
+  .product-urls-header {
+    display: flex; align-items: center; gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+  .product-urls-header .url-count {
+    font-size: 0.85rem; font-weight: 600;
+  }
+  .product-urls-header .crawl-meta {
+    font-size: 0.75rem; color: var(--muted); margin-left: auto;
+  }
+
+  .product-urls-list {
+    background: var(--json-bg);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.75rem;
+    max-height: 300px;
+    overflow-y: auto;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.75rem;
+    line-height: 1.6;
+    position: relative;
+  }
+  .product-urls-list a {
+    color: var(--accent);
+    text-decoration: none;
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .product-urls-list a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -448,53 +513,230 @@ function runExplore() {
     });
 }
 
+// ── Crawl state per retailer ─────────────────────────────────────────────
+var crawlingRetailers = {};
+var productUrlsCache = {};
+
 // ── Load existing configs ───────────────────────────────────────────────
 function loadConfigs() {
   var container = document.getElementById("configList");
-  fetch("/api/configs")
-    .then(function (res) { return res.json(); })
-    .then(function (configs) {
-      if (configs.length === 0) {
-        container.innerHTML = '<div class="empty-state">No configs generated yet.</div>';
-        return;
-      }
-      container.innerHTML = "";
-      for (var i = 0; i < configs.length; i++) {
-        var entry = configs[i];
-        var rec = (entry.config && entry.config.dataQuality && entry.config.dataQuality.overallRecommendation) || "unknown";
-        var method = (entry.config && entry.config.discovery && entry.config.discovery.method) || "unknown";
-        var badgeClass = rec === "recommended" ? "badge-recommended"
-          : rec === "usable" ? "badge-usable" : "badge-not-recommended";
 
-        var div = document.createElement("div");
-        div.className = "config-entry";
-        div.innerHTML =
-          '<div class="config-header">' +
-            '<span class="config-name">' + escHtml(entry.retailer) + '</span>' +
-            '<span class="badge ' + badgeClass + '">' + escHtml(rec) + '</span>' +
-            '<span class="method-tag">' + escHtml(method) + '</span>' +
+  Promise.all([
+    fetch("/api/configs").then(function (r) { return r.json(); }),
+    fetch("/api/product-urls").then(function (r) { return r.json(); }).catch(function () { return []; }),
+  ]).then(function (results) {
+    var configs = results[0];
+    var urlSummaries = results[1];
+
+    var urlMap = {};
+    for (var u = 0; u < urlSummaries.length; u++) {
+      urlMap[urlSummaries[u].retailer] = urlSummaries[u];
+    }
+
+    if (configs.length === 0) {
+      container.innerHTML = '<div class="empty-state">No configs generated yet.</div>';
+      return;
+    }
+    container.innerHTML = "";
+    for (var i = 0; i < configs.length; i++) {
+      var entry = configs[i];
+      var rec = (entry.config && entry.config.dataQuality && entry.config.dataQuality.overallRecommendation) || "unknown";
+      var method = (entry.config && entry.config.discovery && entry.config.discovery.method) || "unknown";
+      var badgeClass = rec === "recommended" ? "badge-recommended"
+        : rec === "usable" ? "badge-usable" : "badge-not-recommended";
+
+      var hasUrls = !!urlMap[entry.retailer];
+      var urlCount = hasUrls ? urlMap[entry.retailer].totalUrls : 0;
+      var crawlLabel = hasUrls ? "Re-crawl URLs" : "Crawl URLs";
+
+      var div = document.createElement("div");
+      div.className = "config-entry";
+      div.setAttribute("data-retailer", entry.retailer);
+      div.innerHTML =
+        '<div class="config-header">' +
+          '<span class="config-name">' + escHtml(entry.retailer) + '</span>' +
+          '<span class="badge ' + badgeClass + '">' + escHtml(rec) + '</span>' +
+          '<span class="method-tag">' + escHtml(method) + '</span>' +
+          (hasUrls ? '<span class="method-tag">' + urlCount + ' URLs</span>' : '') +
+          '<button class="btn-primary btn-small crawl-btn" data-retailer="' + escHtml(entry.retailer) + '">' + crawlLabel + '</button>' +
+        '</div>' +
+        '<div class="crawl-status" data-crawl-status="' + escHtml(entry.retailer) + '">' +
+          '<span class="crawl-progress-text"></span>' +
+          '<div class="crawl-log"></div>' +
+        '</div>' +
+        '<div class="config-body">' +
+          '<div class="config-json" style="position:relative">' +
+            '<button class="btn-primary btn-small copy-btn">Copy JSON</button>' +
+            '<pre style="margin:0">' + escHtml(JSON.stringify(entry.config, null, 2)) + '</pre>' +
           '</div>' +
-          '<div class="config-body">' +
-            '<div class="config-json" style="position:relative">' +
-              '<button class="btn-primary btn-small copy-btn">Copy JSON</button>' +
-              '<pre style="margin:0">' + escHtml(JSON.stringify(entry.config, null, 2)) + '</pre>' +
-            '</div>' +
-          '</div>';
+        '</div>' +
+        '<div class="product-urls-panel" data-urls-panel="' + escHtml(entry.retailer) + '"></div>';
 
-        // attach listeners via JS, not inline handlers
-        (function (el) {
-          el.querySelector(".config-header").onclick = function () {
-            el.querySelector(".config-body").classList.toggle("open");
-          };
-          el.querySelector(".copy-btn").onclick = function () { copyJson(el); };
-        })(div);
+      (function (el, retailer) {
+        el.querySelector(".config-header").onclick = function (e) {
+          if (e.target.classList.contains("crawl-btn")) return;
+          el.querySelector(".config-body").classList.toggle("open");
+        };
+        el.querySelector(".copy-btn").onclick = function (e) {
+          e.stopPropagation();
+          copyJson(el);
+        };
+        el.querySelector(".crawl-btn").onclick = function (e) {
+          e.stopPropagation();
+          startCrawl(retailer);
+        };
+      })(div, entry.retailer);
 
-        container.appendChild(div);
+      container.appendChild(div);
+
+      if (hasUrls) {
+        loadProductUrlsForRetailer(entry.retailer);
       }
+    }
+  }).catch(function (err) {
+    console.error("[loadConfigs] Error:", err);
+    container.innerHTML = '<div class="empty-state">Could not load configs.</div>';
+  });
+}
+
+// ── Start crawl for a retailer ──────────────────────────────────────────
+function startCrawl(retailer) {
+  if (crawlingRetailers[retailer]) return;
+  crawlingRetailers[retailer] = true;
+
+  var entry = document.querySelector('[data-retailer="' + retailer + '"]');
+  if (!entry) return;
+
+  var btn = entry.querySelector(".crawl-btn");
+  btn.disabled = true;
+  btn.textContent = "Crawling...";
+
+  var statusDiv = entry.querySelector('[data-crawl-status="' + retailer + '"]');
+  statusDiv.classList.add("active");
+  var progressText = statusDiv.querySelector(".crawl-progress-text");
+  var logDiv = statusDiv.querySelector(".crawl-log");
+  progressText.textContent = "Starting crawl...";
+  logDiv.textContent = "";
+
+  fetch("/api/crawl/" + encodeURIComponent(retailer), { method: "POST" })
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      if (data.error) throw new Error(data.error);
+
+      var es = new EventSource("/api/progress/" + data.jobId);
+      es.onmessage = function (e) {
+        var msg = JSON.parse(e.data);
+        if (msg.type === "log") {
+          logDiv.textContent += msg.msg + "\n";
+          logDiv.scrollTop = logDiv.scrollHeight;
+        } else if (msg.type === "crawl-progress") {
+          progressText.textContent = "Crawling... " + msg.count + " product URLs found";
+        } else if (msg.type === "done") {
+          es.close();
+          crawlingRetailers[retailer] = false;
+          btn.disabled = false;
+
+          if (msg.error) {
+            progressText.textContent = "Crawl failed: " + msg.error;
+            btn.textContent = "Retry Crawl";
+          } else {
+            progressText.textContent = "Done \u2014 " + (msg.totalUrls || 0) + " product URLs found";
+            btn.textContent = "Re-crawl URLs";
+            loadProductUrlsForRetailer(retailer);
+
+            var countSpans = entry.querySelectorAll(".method-tag");
+            var urlSpan = null;
+            for (var s = 0; s < countSpans.length; s++) {
+              if (/\d+ URLs/.test(countSpans[s].textContent)) {
+                urlSpan = countSpans[s];
+                break;
+              }
+            }
+            if (msg.totalUrls > 0) {
+              if (urlSpan) {
+                urlSpan.textContent = msg.totalUrls + " URLs";
+              } else {
+                var newSpan = document.createElement("span");
+                newSpan.className = "method-tag";
+                newSpan.textContent = msg.totalUrls + " URLs";
+                entry.querySelector(".config-header").insertBefore(newSpan, btn);
+              }
+            }
+          }
+
+          setTimeout(function () {
+            statusDiv.classList.remove("active");
+          }, 5000);
+        }
+      };
+      es.onerror = function () {
+        es.close();
+        crawlingRetailers[retailer] = false;
+        btn.disabled = false;
+        btn.textContent = "Retry Crawl";
+        progressText.textContent = "Connection lost during crawl.";
+      };
     })
     .catch(function (err) {
-      console.error("[loadConfigs] Error:", err);
-      container.innerHTML = '<div class="empty-state">Could not load configs.</div>';
+      console.error("[startCrawl] Error:", err);
+      crawlingRetailers[retailer] = false;
+      btn.disabled = false;
+      btn.textContent = "Retry Crawl";
+      progressText.textContent = "Error: " + err.message;
+    });
+}
+
+// ── Load product URLs for a retailer ────────────────────────────────────
+function loadProductUrlsForRetailer(retailer) {
+  fetch("/api/product-urls/" + encodeURIComponent(retailer))
+    .then(function (res) {
+      if (!res.ok) return null;
+      return res.json();
+    })
+    .then(function (data) {
+      if (!data || !data.urls || data.urls.length === 0) return;
+
+      productUrlsCache[retailer] = data;
+      var panel = document.querySelector('[data-urls-panel="' + retailer + '"]');
+      if (!panel) return;
+
+      panel.classList.add("has-urls");
+
+      var crawledDate = data.crawledAt ? new Date(data.crawledAt).toLocaleString() : "";
+
+      panel.innerHTML =
+        '<div class="product-urls-header">' +
+          '<span class="url-count">' + data.totalUrls + ' Product URLs</span>' +
+          '<button class="btn-primary btn-small copy-urls-btn">Copy All URLs</button>' +
+          '<span class="crawl-meta">Crawled ' + escHtml(crawledDate) + ' via ' + escHtml(data.method) + '</span>' +
+        '</div>' +
+        '<div class="product-urls-list"></div>';
+
+      var listDiv = panel.querySelector(".product-urls-list");
+      for (var i = 0; i < data.urls.length; i++) {
+        var a = document.createElement("a");
+        a.href = data.urls[i];
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = data.urls[i];
+        listDiv.appendChild(a);
+      }
+
+      panel.querySelector(".copy-urls-btn").onclick = function (e) {
+        e.stopPropagation();
+        navigator.clipboard.writeText(data.urls.join("\n")).then(function () {
+          var toast = document.getElementById("copiedToast");
+          toast.textContent = "Copied " + data.totalUrls + " URLs";
+          toast.classList.add("show");
+          setTimeout(function () {
+            toast.classList.remove("show");
+            toast.textContent = "Copied to clipboard";
+          }, 1500);
+        });
+      };
+    })
+    .catch(function (err) {
+      console.error("[loadProductUrls] Error for " + retailer + ":", err);
     });
 }
 

@@ -2,5 +2,6 @@ node_modules/
 dist/
 .env
 configs/*.json
+product-urls/*.json
 tmp/
 .DS_Store

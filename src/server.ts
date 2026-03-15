@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import { exploreRetailer } from "./explore.js";
+import { crawlProductUrls, type CrawlResult } from "./crawl.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -12,6 +13,10 @@ app.use(express.json());
 
 const PORT = parseInt(process.env.PORT ?? "3456", 10);
 const CONFIGS_DIR = path.join(process.cwd(), "configs");
+const PRODUCT_URLS_DIR = path.join(process.cwd(), "product-urls");
+
+// Delay between processing consecutive URLs (helps with rate limits)
+const INTER_URL_DELAY_MS = parseInt(process.env.INTER_URL_DELAY_MS ?? "5000", 10);
 
 // ---------------------------------------------------------------------------
 // Job tracking — one Stagehand browser at a time
@@ -51,6 +56,12 @@ function pushEvent(jobId: string, event: Record<string, unknown>) {
 
 async function processJob(job: Job) {
   for (let i = 0; i < job.urls.length; i++) {
+    // Add a cooldown between URLs to avoid stacking rate limit usage
+    if (i > 0 && INTER_URL_DELAY_MS > 0) {
+      pushLog(job.id, `\nWaiting ${INTER_URL_DELAY_MS / 1000}s before next URL...\n`);
+      await new Promise((r) => setTimeout(r, INTER_URL_DELAY_MS));
+    }
+
     job.current = i;
     const url = job.urls[i];
     pushEvent(job.id, {
@@ -220,6 +231,116 @@ app.get("/api/configs/:retailer", (req, res) => {
     return;
   }
   res.sendFile(filePath);
+});
+
+// ---------------------------------------------------------------------------
+// Crawl endpoints — use a generated config to discover all product URLs
+// ---------------------------------------------------------------------------
+
+app.post("/api/crawl/:retailer", (req, res) => {
+  const retailer = req.params.retailer;
+  const configPath = path.join(CONFIGS_DIR, `${retailer}.json`);
+  if (!fs.existsSync(configPath)) {
+    res.status(404).json({ error: "Config not found." });
+    return;
+  }
+
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+  } catch {
+    res.status(500).json({ error: "Failed to parse config." });
+    return;
+  }
+
+  const id = crypto.randomUUID();
+  const job: Job = {
+    id,
+    urls: [config.baseUrl],
+    current: 0,
+    status: "running",
+    logs: [],
+    results: [],
+  };
+  jobs.set(id, job);
+
+  (async () => {
+    try {
+      const result = await crawlProductUrls(
+        config,
+        (msg) => pushLog(job.id, msg),
+        (count) => pushEvent(job.id, { type: "crawl-progress", count }),
+      );
+
+      fs.mkdirSync(PRODUCT_URLS_DIR, { recursive: true });
+      fs.writeFileSync(
+        path.join(PRODUCT_URLS_DIR, `${retailer}.json`),
+        JSON.stringify(result, null, 2),
+      );
+
+      job.results.push(result as unknown as Record<string, unknown>);
+      job.status = "done";
+      pushEvent(job.id, { type: "done", totalUrls: result.totalUrls });
+    } catch (err) {
+      const msg = (err as Error).message ?? String(err);
+      console.error(`[crawl] Error crawling ${retailer}:`, err);
+      pushLog(job.id, `ERROR: ${msg}`);
+      job.status = "error";
+      job.error = msg;
+      pushEvent(job.id, { type: "done", error: msg });
+    }
+
+    const clients = sseClients.get(job.id);
+    if (clients) {
+      for (const res of clients) res.end();
+      sseClients.delete(job.id);
+    }
+  })();
+
+  res.json({ jobId: id });
+});
+
+app.get("/api/product-urls", (_req, res) => {
+  try {
+    fs.mkdirSync(PRODUCT_URLS_DIR, { recursive: true });
+    const files = fs
+      .readdirSync(PRODUCT_URLS_DIR)
+      .filter((f) => f.endsWith(".json"));
+
+    const results = files.map((filename) => {
+      const raw = fs.readFileSync(path.join(PRODUCT_URLS_DIR, filename), "utf-8");
+      try {
+        const data = JSON.parse(raw) as CrawlResult;
+        return {
+          retailer: data.retailer,
+          crawledAt: data.crawledAt,
+          method: data.method,
+          totalUrls: data.totalUrls,
+        };
+      } catch {
+        return null;
+      }
+    }).filter(Boolean);
+
+    res.json(results);
+  } catch (err) {
+    console.error("[api/product-urls] Error:", err);
+    res.status(500).json({ error: "Failed to load product URLs." });
+  }
+});
+
+app.get("/api/product-urls/:retailer", (req, res) => {
+  const filePath = path.join(PRODUCT_URLS_DIR, `${req.params.retailer}.json`);
+  if (!fs.existsSync(filePath)) {
+    res.status(404).json({ error: "Product URLs not found." });
+    return;
+  }
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    res.json(data);
+  } catch {
+    res.status(500).json({ error: "Failed to read product URLs." });
+  }
 });
 
 // ---------------------------------------------------------------------------
