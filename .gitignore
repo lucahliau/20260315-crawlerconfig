@@ -3,5 +3,6 @@ dist/
 .env
 configs/*.json
 product-urls/*.json
+discovered-brands.json
 tmp/
 .DS_Store

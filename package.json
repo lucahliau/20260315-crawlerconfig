@@ -9,9 +9,10 @@
     "ui": "tsx src/server.ts"
   },
   "dependencies": {
-    "dotenv": "^16.4.5",
+    "@anthropic-ai/sdk": "^0.78.0",
     "@aws-sdk/client-s3": "^3.1009.0",
     "@browserbasehq/stagehand": "^3.1.0",
+    "dotenv": "^16.4.5",
     "express": "^5.1.0",
     "pg": "^8.20.0",
     "zod": "^3.24.0"

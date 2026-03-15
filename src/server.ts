@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import { exploreRetailer } from "./explore.js";
 import { crawlProductUrls, type CrawlResult } from "./crawl.js";
 import { uploadRetailer, type UploadResult } from "./upload.js";
+import { discoverBrands, type DiscoveredBrand } from "./discoverBrands.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -32,6 +33,7 @@ interface Job {
   logs: string[];
   results: Record<string, unknown>[];
   error?: string;
+  discoveredBrands?: DiscoveredBrand[];
 }
 
 const jobs = new Map<string, Job>();
@@ -169,6 +171,47 @@ app.post("/api/explore", (req, res) => {
   res.json({ jobId: id });
 });
 
+app.post("/api/discover-brands", (req, res) => {
+  const id = crypto.randomUUID();
+  const job: Job = {
+    id,
+    urls: [],
+    current: 0,
+    status: "running",
+    logs: [],
+    results: [],
+  };
+  jobs.set(id, job);
+
+  (async () => {
+    try {
+      const result = await discoverBrands((msg) => {
+        pushLog(job.id, msg);
+        pushEvent(job.id, { type: "progress", message: msg });
+      });
+      job.discoveredBrands = result.brands;
+      job.status = "done";
+      pushEvent(job.id, { type: "brands", brands: result.brands });
+      pushEvent(job.id, { type: "done", brands: result.brands });
+    } catch (err) {
+      const msg = (err as Error).message ?? String(err);
+      console.error("[discover-brands] Error:", err);
+      pushLog(job.id, `ERROR: ${msg}`);
+      job.status = "error";
+      job.error = msg;
+      pushEvent(job.id, { type: "done", error: msg });
+    }
+
+    const clients = sseClients.get(job.id);
+    if (clients) {
+      for (const res of clients) res.end();
+      sseClients.delete(job.id);
+    }
+  })();
+
+  res.json({ jobId: id });
+});
+
 app.get("/api/progress/:jobId", (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job) {
@@ -188,7 +231,10 @@ app.get("/api/progress/:jobId", (req, res) => {
   }
 
   if (job.status === "done") {
-    res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+    const doneEvent: Record<string, unknown> = { type: "done" };
+    if (job.discoveredBrands) doneEvent.brands = job.discoveredBrands;
+    if (job.error) doneEvent.error = job.error;
+    res.write(`data: ${JSON.stringify(doneEvent)}\n\n`);
     res.end();
     return;
   }

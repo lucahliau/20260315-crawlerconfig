@@ -1,0 +1,146 @@
+import "dotenv/config";
+import Anthropic from "@anthropic-ai/sdk";
+import fs from "node:fs";
+import path from "node:path";
+
+const DISCOVERED_BRANDS_PATH =
+  process.env.DISCOVERED_BRANDS_PATH ?? path.join(process.cwd(), "discovered-brands.json");
+
+export interface DiscoveredBrand {
+  name: string;
+  url: string;
+}
+
+interface MasterList {
+  brands: DiscoveredBrand[];
+  urls: string[];
+}
+
+function loadMasterList(): MasterList {
+  try {
+    const raw = fs.readFileSync(DISCOVERED_BRANDS_PATH, "utf-8");
+    const data = JSON.parse(raw) as MasterList;
+    return {
+      brands: Array.isArray(data.brands) ? data.brands : [],
+      urls: Array.isArray(data.urls) ? data.urls : [],
+    };
+  } catch {
+    return { brands: [], urls: [] };
+  }
+}
+
+function saveMasterList(list: MasterList): void {
+  fs.mkdirSync(path.dirname(DISCOVERED_BRANDS_PATH), { recursive: true });
+  fs.writeFileSync(DISCOVERED_BRANDS_PATH, JSON.stringify(list, null, 2));
+}
+
+function extractJsonFromResponse(text: string): { brands: DiscoveredBrand[] } | null {
+  // Try to find JSON in markdown code block first
+  const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const jsonStr = codeBlockMatch ? codeBlockMatch[1].trim() : text.trim();
+
+  try {
+    const parsed = JSON.parse(jsonStr) as { brands?: unknown };
+    if (!parsed || typeof parsed !== "object") return null;
+    const brands = parsed.brands;
+    if (!Array.isArray(brands)) return null;
+
+    const result: DiscoveredBrand[] = [];
+    for (const b of brands) {
+      if (b && typeof b === "object" && typeof b.name === "string" && typeof b.url === "string") {
+        const url = b.url.trim();
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+          result.push({ name: String(b.name).trim(), url });
+        }
+      }
+    }
+    return result.length > 0 ? { brands: result } : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeUrl(raw: string): string | null {
+  let s = raw.trim();
+  if (!s) return null;
+  s = s.replace(/^["'<]+|["'>]+$/g, "");
+  if (s.startsWith("//")) s = "https:" + s;
+  if (!/^https?:\/\//i.test(s)) s = "https://" + s;
+  try {
+    const u = new URL(s);
+    if (!u.pathname || u.pathname === "/") u.pathname = "/";
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+export async function discoverBrands(
+  onProgress: (msg: string) => void,
+): Promise<{ brands: DiscoveredBrand[] }> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey || !apiKey.trim()) {
+    throw new Error("ANTHROPIC_API_KEY is not set. Add it to your .env file.");
+  }
+
+  const master = loadMasterList();
+  const exclusionList = [...new Set([...master.urls, ...master.brands.map((b) => b.url)])];
+
+  const exclusionText =
+    exclusionList.length > 0
+      ? `EXCLUSION LIST — do NOT include any brand whose URL or name appears here:\n${exclusionList.join("\n")}\n\n`
+      : "";
+
+  const prompt = `You are a fashion researcher. Use web search to find 15-20 cool, niche clothing brands that are:
+- Men-focused or unisex
+- NOT mainstream (avoid Nike, Zara, H&M, Uniqlo, ASOS, etc.)
+- Independent, underground, or lesser-known
+- Examples of niches: streetwear boutiques, sustainable/ethical brands, vintage-inspired, avant-garde, workwear, technical apparel, Japanese/European independents
+
+${exclusionText}Search the web, then respond with ONLY valid JSON in this exact format (no other text):
+{"brands":[{"name":"Brand Name","url":"https://example.com"},...]}`;
+
+  onProgress("Searching the web for niche brands...");
+
+  const anthropic = new Anthropic({ apiKey });
+
+  const response = await anthropic.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 4096,
+    messages: [{ role: "user", content: prompt }],
+    tools: [{ type: "web_search_20260209", name: "web_search" }],
+  });
+
+  onProgress("Parsing results...");
+
+  const textBlock = response.content.find((b) => b.type === "text");
+  const text = textBlock && "text" in textBlock ? textBlock.text : "";
+
+  const parsed = extractJsonFromResponse(text);
+  if (!parsed || parsed.brands.length === 0) {
+    throw new Error("Could not parse brands from Claude response. Please try again.");
+  }
+
+  onProgress(`Found ${parsed.brands.length} brands. Saving to master list...`);
+
+  const seenUrls = new Set(master.urls);
+  const newBrands: DiscoveredBrand[] = [];
+
+  for (const b of parsed.brands) {
+    const url = normalizeUrl(b.url);
+    if (url && !seenUrls.has(url)) {
+      seenUrls.add(url);
+      newBrands.push({ name: b.name, url });
+    }
+  }
+
+  const updatedMaster: MasterList = {
+    brands: [...master.brands, ...newBrands],
+    urls: [...seenUrls],
+  };
+  saveMasterList(updatedMaster);
+
+  onProgress(`Done. Added ${newBrands.length} new brands.`);
+
+  return { brands: parsed.brands };
+}

@@ -271,11 +271,79 @@
     white-space: nowrap;
   }
   .product-urls-list a:hover { text-decoration: underline; }
+
+  .discover-section { margin-bottom: 1.25rem; }
+  .discover-progress-bar {
+    height: 6px;
+    background: var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-top: 0.5rem;
+    display: none;
+  }
+  .discover-progress-bar.active {
+    display: block;
+  }
+  .discover-progress-bar::after {
+    content: "";
+    display: block;
+    height: 100%;
+    width: 30%;
+    background: var(--accent);
+    animation: discoverIndeterminate 1.5s ease-in-out infinite;
+  }
+  @keyframes discoverIndeterminate {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+  }
+  .discover-output {
+    margin-top: 0.75rem;
+    display: none;
+  }
+  .discover-output.active { display: block; }
+  .discover-brands-list {
+    background: var(--json-bg);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.75rem;
+    max-height: 280px;
+    overflow-y: auto;
+    font-size: 0.85rem;
+    line-height: 1.6;
+    margin-top: 0.5rem;
+  }
+  .discover-brands-list a {
+    color: var(--accent);
+    text-decoration: none;
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .discover-brands-list a:hover { text-decoration: underline; }
+  .discover-brands-list .brand-name { font-weight: 500; color: var(--text); }
+  .discover-add-row { margin-top: 0.5rem; }
 </style>
 </head>
 <body>
 
 <h1>Crawler Config Generator</h1>
+
+<!-- Discover Niche Brands Section -->
+<section class="discover-section">
+  <h2>Discover Niche Brands</h2>
+  <p style="font-size: 0.9rem; color: var(--muted); margin-bottom: 0.75rem;">
+    Uses Claude with web search to find 15–20 cool niche men's/unisex clothing brands. Results are added to a master list so future searches avoid duplicates.
+  </p>
+  <button type="button" class="btn-primary" id="discoverBtn">Discover Niche Brands</button>
+  <div class="discover-progress-bar" id="discoverProgressBar"></div>
+  <div class="discover-output" id="discoverOutput">
+    <span class="discover-status" id="discoverStatus"></span>
+    <div class="discover-brands-list" id="discoverBrandsList"></div>
+    <div class="discover-add-row">
+      <button type="button" class="btn-primary btn-small" id="discoverAddToQueueBtn" style="display:none">Add to Queue</button>
+    </div>
+  </div>
+</section>
 
 <!-- Input Section -->
 <section>
@@ -423,6 +491,36 @@ function addUrl() {
   renderQueue();
 }
 
+// Parse a CSV line into cells (handles quoted fields with commas inside)
+function parseCsvLine(line) {
+  var cells = [];
+  var cur = "";
+  var inQuotes = false;
+  for (var i = 0; i < line.length; i++) {
+    var c = line[i];
+    if (c === '"') {
+      inQuotes = !inQuotes;
+    } else if ((c === "," && !inQuotes) || (c === "\t" && !inQuotes)) {
+      cells.push(cur.trim().replace(/^["']|["']$/g, ""));
+      cur = "";
+    } else {
+      cur += c;
+    }
+  }
+  cells.push(cur.trim().replace(/^["']|["']$/g, ""));
+  return cells;
+}
+
+// Check if a URL has a proper domain (hostname contains a dot)
+function hasValidDomain(urlStr) {
+  try {
+    var u = new URL(urlStr);
+    return u.hostname && u.hostname.indexOf(".") !== -1;
+  } catch (e) {
+    return false;
+  }
+}
+
 // ── CSV handler ─────────────────────────────────────────────────────────
 function handleCsv(e) {
   var file = e.target.files[0];
@@ -433,9 +531,18 @@ function handleCsv(e) {
     var lines = text.split(/\r?\n/).filter(function (l) { return l.trim(); });
     var added = 0, skipped = 0;
     for (var i = 0; i < lines.length; i++) {
-      var raw = lines[i].split(",")[0].trim().replace(/^["']|["']$/g, "");
-      var result = normalizeUrl(raw);
-      if (!result.url) { skipped++; continue; }
+      var cells = parseCsvLine(lines[i]);
+      var result = null;
+      for (var j = 0; j < cells.length; j++) {
+        var raw = cells[j];
+        if (!raw) continue;
+        var r = normalizeUrl(raw);
+        if (r.url && hasValidDomain(r.url)) {
+          result = r;
+          break;
+        }
+      }
+      if (!result || !result.url) { skipped++; continue; }
       queue.push(result.url);
       added++;
     }
@@ -513,6 +620,93 @@ function runExplore() {
       running = false;
       renderQueue();
     });
+}
+
+// ── Discover brands state ─────────────────────────────────────────────
+var lastDiscoveredBrands = [];
+var discoverRunning = false;
+
+// ── Run discover brands ────────────────────────────────────────────────
+function runDiscover() {
+  if (discoverRunning) return;
+  discoverRunning = true;
+  lastDiscoveredBrands = [];
+
+  var discoverBtn = document.getElementById("discoverBtn");
+  var progressBar = document.getElementById("discoverProgressBar");
+  var discoverOutput = document.getElementById("discoverOutput");
+  var discoverStatus = document.getElementById("discoverStatus");
+  var discoverBrandsList = document.getElementById("discoverBrandsList");
+  var addToQueueBtn = document.getElementById("discoverAddToQueueBtn");
+
+  discoverBtn.disabled = true;
+  progressBar.classList.add("active");
+  discoverOutput.classList.add("active");
+  discoverStatus.textContent = "Searching the web for niche brands...";
+  discoverStatus.className = "discover-status";
+  discoverBrandsList.innerHTML = "";
+  addToQueueBtn.style.display = "none";
+
+  fetch("/api/discover-brands", { method: "POST", headers: { "Content-Type": "application/json" } })
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      if (data.error) throw new Error(data.error);
+      var jobId = data.jobId;
+      var es = new EventSource("/api/progress/" + jobId);
+      es.onmessage = function (e) {
+        var msg = JSON.parse(e.data);
+        if (msg.type === "progress" && msg.message) {
+          discoverStatus.textContent = msg.message;
+        } else if (msg.type === "brands" && msg.brands) {
+          lastDiscoveredBrands = msg.brands;
+          discoverStatus.textContent = "Found " + msg.brands.length + " brands.";
+          discoverBrandsList.innerHTML = "";
+          for (var i = 0; i < msg.brands.length; i++) {
+            var b = msg.brands[i];
+            var div = document.createElement("div");
+            div.innerHTML = '<span class="brand-name">' + escHtml(b.name) + '</span> \u2014 <a href="' + escHtml(b.url) + '" target="_blank" rel="noopener">' + escHtml(b.url) + '</a>';
+            discoverBrandsList.appendChild(div);
+          }
+          addToQueueBtn.style.display = "";
+        } else if (msg.type === "done") {
+          es.close();
+          discoverRunning = false;
+          discoverBtn.disabled = false;
+          progressBar.classList.remove("active");
+          if (msg.error) {
+            discoverStatus.textContent = "Error: " + msg.error;
+            discoverStatus.className = "discover-status input-status error";
+          } else if (msg.brands) {
+            lastDiscoveredBrands = msg.brands;
+            discoverStatus.textContent = "Done \u2014 " + msg.brands.length + " brands found.";
+          }
+        }
+      };
+      es.onerror = function () {
+        es.close();
+        discoverRunning = false;
+        discoverBtn.disabled = false;
+        progressBar.classList.remove("active");
+        discoverStatus.textContent = "Connection lost.";
+      };
+    })
+    .catch(function (err) {
+      console.error("[runDiscover] Error:", err);
+      discoverRunning = false;
+      discoverBtn.disabled = false;
+      progressBar.classList.remove("active");
+      discoverStatus.textContent = "Error: " + err.message;
+      discoverStatus.className = "discover-status input-status error";
+    });
+}
+
+function addDiscoveredToQueue() {
+  for (var i = 0; i < lastDiscoveredBrands.length; i++) {
+    var url = lastDiscoveredBrands[i].url;
+    if (url && queue.indexOf(url) === -1) queue.push(url);
+  }
+  renderQueue();
+  showStatus("Added " + lastDiscoveredBrands.length + " URL(s) from discovery.", "success", 4000);
 }
 
 // ── Crawl & upload state per retailer ────────────────────────────────────
@@ -833,6 +1027,8 @@ function escHtml(s) {
 }
 
 // ── Attach all event listeners ──────────────────────────────────────────
+document.getElementById("discoverBtn").addEventListener("click", runDiscover);
+document.getElementById("discoverAddToQueueBtn").addEventListener("click", addDiscoveredToQueue);
 document.getElementById("addUrlBtn").addEventListener("click", addUrl);
 document.getElementById("urlInput").addEventListener("keydown", function (e) {
   if (e.key === "Enter") addUrl();
