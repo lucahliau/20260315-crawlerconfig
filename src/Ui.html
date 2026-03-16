@@ -361,6 +361,39 @@
   }
   .history-modal-list a { color: var(--accent); text-decoration: none; }
   .history-modal-list a:hover { text-decoration: underline; }
+
+  .e2e-section { margin-bottom: 1.25rem; }
+  .e2e-status {
+    margin-top: 1rem;
+    padding: 1rem;
+    background: var(--json-bg);
+    border-radius: var(--radius);
+    font-size: 0.85rem;
+    display: none;
+  }
+  .e2e-status.active { display: block; }
+  .e2e-step { font-weight: 600; margin-bottom: 0.5rem; }
+  .e2e-counts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+    color: var(--muted);
+  }
+  .e2e-counts span { font-size: 0.8rem; }
+  .e2e-progress-bar {
+    height: 8px;
+    background: var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin: 0.5rem 0;
+  }
+  .e2e-progress-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.2s ease;
+  }
+  .e2e-meta { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; }
 </style>
 </head>
 <body>
@@ -369,6 +402,29 @@
   <h1>Crawler Config Generator</h1>
   <button type="button" class="btn-secondary" id="historyBtn">History</button>
 </header>
+
+<!-- End-to-End Section -->
+<section class="e2e-section">
+  <h2>Run the whole process end-to-end</h2>
+  <p style="font-size: 0.9rem; color: var(--muted); margin-bottom: 0.75rem;">
+    Discover brands → Generate configs → Crawl product URLs → Extract &amp; upload. Saves after each brand completes.
+  </p>
+  <button type="button" class="btn-primary" id="runE2eBtn">Run End-to-End</button>
+  <div class="e2e-status" id="e2eStatus">
+    <div class="e2e-step" id="e2eStepLabel">Step 1/4: Discovering brands</div>
+    <div class="e2e-counts" id="e2eCounts">
+      <span id="e2eBrands">Brands: 0</span>
+      <span id="e2eConfigs">Configs: 0 / 0</span>
+      <span id="e2eRecommended">Recommended: 0</span>
+      <span id="e2eUrls">Product URLs: 0</span>
+      <span id="e2eUploaded">Uploaded: 0 / 0</span>
+    </div>
+    <div class="e2e-progress-bar">
+      <div class="e2e-progress-bar-fill" id="e2eProgressFill" style="width: 0%"></div>
+    </div>
+    <div class="e2e-meta" id="e2eMeta">0% complete</div>
+  </div>
+</section>
 
 <!-- Discover Niche Brands Section -->
 <section class="discover-section">
@@ -765,6 +821,106 @@ function addDiscoveredToQueue() {
   }
   renderQueue();
   showStatus("Added " + lastDiscoveredBrands.length + " URL(s) from discovery.", "success", 4000);
+}
+
+// ── End-to-end run ──────────────────────────────────────────────────────
+var e2eRunning = false;
+var e2eLastStatus = {};
+
+function updateE2eStatus(p) {
+  for (var k in p) { if (p[k] !== undefined) e2eLastStatus[k] = p[k]; }
+  var s = e2eLastStatus;
+  var stepLabels = ["", "Discovering brands", "Generating configs", "Crawling product URLs", "Extracting & uploading"];
+  var label = s.stepLabel || stepLabels[s.step] || "Complete";
+  document.getElementById("e2eStepLabel").textContent = "Step " + (s.step || 1) + "/4: " + label;
+  document.getElementById("e2eBrands").textContent = "Brands: " + (s.brandsDiscovered || 0);
+  document.getElementById("e2eConfigs").textContent = "Configs: " + (s.configsSuccessful || 0) + " / " + (s.configsTotal || 0);
+  document.getElementById("e2eRecommended").textContent = "Recommended: " + (s.configsRecommended || 0);
+  document.getElementById("e2eUrls").textContent = "Product URLs: " + (s.productUrlsCrawled || 0);
+  document.getElementById("e2eUploaded").textContent = "Uploaded: " + (s.uploadedSuccess || 0) + " / " + (s.uploadedTotal || 0);
+  document.getElementById("e2eProgressFill").style.width = (s.percentComplete || 0) + "%";
+  var meta = (s.percentComplete || 0) + "% complete";
+  if (s.etaSeconds && s.etaSeconds > 0) {
+    var mins = Math.ceil(s.etaSeconds / 60);
+    meta += " \u2014 ~" + mins + " min remaining";
+  }
+  document.getElementById("e2eMeta").textContent = meta;
+}
+
+function runE2e() {
+  if (e2eRunning) return;
+  e2eRunning = true;
+
+  var runE2eBtn = document.getElementById("runE2eBtn");
+  var e2eStatus = document.getElementById("e2eStatus");
+  var progressSection = document.getElementById("progressSection");
+  var logArea = document.getElementById("logArea");
+
+  runE2eBtn.disabled = true;
+  e2eStatus.classList.add("active");
+  progressSection.style.display = "";
+  logArea.textContent = "";
+  e2eLastStatus = {};
+
+  updateE2eStatus({
+    step: 1,
+    brandsDiscovered: 0,
+    configsTotal: 0,
+    configsSuccessful: 0,
+    configsRecommended: 0,
+    productUrlsCrawled: 0,
+    uploadedTotal: 0,
+    uploadedSuccess: 0,
+    percentComplete: 0
+  });
+
+  fetch("/api/run-e2e", { method: "POST", headers: { "Content-Type": "application/json" } })
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      if (data.error) throw new Error(data.error);
+      var jobId = data.jobId;
+      var es = new EventSource("/api/progress/" + jobId);
+      es.onmessage = function (e) {
+        var msg = JSON.parse(e.data);
+        if (msg.type === "log") {
+          logArea.textContent += msg.msg + "\n";
+          logArea.scrollTop = logArea.scrollHeight;
+        } else if (msg.type === "e2e-progress") {
+          updateE2eStatus(msg);
+        } else if (msg.type === "done") {
+          es.close();
+          e2eRunning = false;
+          runE2eBtn.disabled = false;
+          if (msg.error) {
+            updateE2eStatus({
+              step: 4,
+              percentComplete: 100
+            });
+            document.getElementById("e2eMeta").textContent = "Error: " + msg.error;
+          } else {
+            updateE2eStatus({
+              step: 4,
+              stepLabel: "Complete",
+              percentComplete: 100
+            });
+          }
+          loadConfigs();
+        }
+      };
+      es.onerror = function () {
+        es.close();
+        e2eRunning = false;
+        runE2eBtn.disabled = false;
+        document.getElementById("e2eMeta").textContent = "Connection lost.";
+        loadConfigs();
+      };
+    })
+    .catch(function (err) {
+      console.error("[runE2e] Error:", err);
+      e2eRunning = false;
+      runE2eBtn.disabled = false;
+      document.getElementById("e2eMeta").textContent = "Error: " + err.message;
+    });
 }
 
 // ── Crawl & upload state per retailer ────────────────────────────────────
@@ -1205,6 +1361,7 @@ function hideHistoryModal() {
 }
 
 // ── Attach all event listeners ──────────────────────────────────────────
+document.getElementById("runE2eBtn").addEventListener("click", runE2e);
 document.getElementById("discoverBtn").addEventListener("click", runDiscover);
 document.getElementById("discoverAddToQueueBtn").addEventListener("click", addDiscoveredToQueue);
 document.getElementById("addUrlBtn").addEventListener("click", addUrl);

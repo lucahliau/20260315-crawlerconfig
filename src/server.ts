@@ -36,6 +36,7 @@ interface Job {
   results: Record<string, unknown>[];
   error?: string;
   discoveredBrands?: DiscoveredBrand[];
+  e2eProgress?: Record<string, unknown>;
 }
 
 const jobs = new Map<string, Job>();
@@ -53,6 +54,10 @@ function pushLog(jobId: string, msg: string) {
 }
 
 function pushEvent(jobId: string, event: Record<string, unknown>) {
+  const job = jobs.get(jobId);
+  if (job && event.type === "e2e-progress") {
+    job.e2eProgress = event;
+  }
   const clients = sseClients.get(jobId);
   if (clients) {
     const data = `data: ${JSON.stringify(event)}\n\n`;
@@ -214,6 +219,373 @@ app.post("/api/discover-brands", (req, res) => {
   res.json({ jobId: id });
 });
 
+// ---------------------------------------------------------------------------
+// End-to-end orchestrator
+// ---------------------------------------------------------------------------
+
+const E2E_CONCURRENCY = parseInt(process.env.E2E_CONCURRENCY ?? "4", 10);
+
+async function runWithConcurrencyLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += limit) {
+    const chunk = items.slice(i, i + limit);
+    const chunkResults = await Promise.all(chunk.map(fn));
+    results.push(...chunkResults);
+  }
+  return results;
+}
+
+interface E2EProgress {
+  type: "e2e-progress";
+  step: 1 | 2 | 3 | 4;
+  stepLabel: string;
+  brandsDiscovered: number;
+  configsTotal: number;
+  configsSuccessful: number;
+  configsRecommended: number;
+  productUrlsTotal: number;
+  productUrlsCrawled: number;
+  uploadedTotal: number;
+  uploadedSuccess: number;
+  currentBrand?: string;
+  percentComplete: number;
+  etaSeconds?: number;
+  startedAt: string;
+}
+
+function extractRetailerFromUrl(url: string): string {
+  try {
+    const hostname = new URL(url).hostname;
+    return hostname.replace(/^www\./, "").split(".")[0];
+  } catch {
+    return "unknown";
+  }
+}
+
+async function runE2EOrchestrator(jobId: string) {
+  const startedAt = new Date().toISOString();
+  const job = jobs.get(jobId);
+  if (!job) return;
+
+  const pushProgress = (overrides: Partial<E2EProgress>) => {
+    const event: E2EProgress = {
+      type: "e2e-progress",
+      step: 1,
+      stepLabel: "Discovering brands",
+      brandsDiscovered: 0,
+      configsTotal: 0,
+      configsSuccessful: 0,
+      configsRecommended: 0,
+      productUrlsTotal: 0,
+      productUrlsCrawled: 0,
+      uploadedTotal: 0,
+      uploadedSuccess: 0,
+      percentComplete: 0,
+      startedAt,
+      ...overrides,
+    };
+    pushEvent(jobId, event as unknown as Record<string, unknown>);
+  };
+
+  try {
+    // Step 1: Discover brands
+    pushProgress({ step: 1, stepLabel: "Discovering brands", percentComplete: 5 });
+    pushLog(jobId, "\n========== Step 1: Discovering brands (Claude search) ==========\n");
+
+    const discoverResult = await discoverBrands((msg) => pushLog(jobId, msg));
+    const brands = discoverResult.brands;
+    if (!brands || brands.length === 0) {
+      throw new Error("No brands discovered.");
+    }
+
+    pushProgress({
+      step: 1,
+      stepLabel: "Discovering brands",
+      brandsDiscovered: brands.length,
+      percentComplete: 15,
+    });
+    pushLog(jobId, `Discovered ${brands.length} brands.\n`);
+
+    // Step 2: Config exploration (sequential)
+    pushProgress({
+      step: 2,
+      stepLabel: "Generating configs",
+      brandsDiscovered: brands.length,
+      configsTotal: brands.length,
+      percentComplete: 20,
+    });
+    pushLog(jobId, "\n========== Step 2: Generating configs (sequential) ==========\n");
+
+    const recommendedConfigs: { retailer: string; config: Record<string, unknown> }[] = [];
+    let configsSuccessful = 0;
+
+    for (let i = 0; i < brands.length; i++) {
+      const brand = brands[i];
+      const url = brand.url;
+      pushProgress({
+        step: 2,
+        stepLabel: "Generating configs",
+        brandsDiscovered: brands.length,
+        configsTotal: brands.length,
+        configsSuccessful,
+        configsRecommended: recommendedConfigs.length,
+        currentBrand: brand.name,
+        percentComplete: 20 + Math.floor((i / brands.length) * 35),
+      });
+
+      try {
+        const config = await exploreRetailer(url, (msg) => pushLog(jobId, msg));
+        configsSuccessful++;
+        const retailer = (config.retailer as string) ?? extractRetailerFromUrl(url);
+        const dq = config.dataQuality as Record<string, unknown> | undefined;
+        const rec = dq?.overallRecommendation as string | undefined;
+        if (rec === "recommended") {
+          recommendedConfigs.push({ retailer, config });
+        }
+        pushLog(jobId, `  Config for ${brand.name}: ${rec ?? "unknown"}\n`);
+      } catch (err) {
+        const msg = (err as Error).message ?? String(err);
+        pushLog(jobId, `  ERROR exploring ${brand.name}: ${msg}\n`);
+      }
+
+      if (i < brands.length - 1 && INTER_URL_DELAY_MS > 0) {
+        pushLog(jobId, `Waiting ${INTER_URL_DELAY_MS / 1000}s before next URL...\n`);
+        await new Promise((r) => setTimeout(r, INTER_URL_DELAY_MS));
+      }
+    }
+
+    pushProgress({
+      step: 2,
+      stepLabel: "Generating configs",
+      brandsDiscovered: brands.length,
+      configsTotal: brands.length,
+      configsSuccessful,
+      configsRecommended: recommendedConfigs.length,
+      percentComplete: 55,
+    });
+    pushLog(jobId, `Config step done: ${configsSuccessful}/${brands.length} successful, ${recommendedConfigs.length} recommended.\n`);
+
+    if (recommendedConfigs.length === 0) {
+      pushLog(jobId, "No recommended configs — skipping crawl and upload.\n");
+      job.status = "done";
+      pushProgress({
+        step: 4,
+        stepLabel: "Complete",
+        brandsDiscovered: brands.length,
+        configsTotal: brands.length,
+        configsSuccessful,
+        configsRecommended: 0,
+        percentComplete: 100,
+      });
+      pushEvent(jobId, { type: "done" });
+      const clients = sseClients.get(jobId);
+      if (clients) {
+        for (const res of clients) res.end();
+        sseClients.delete(jobId);
+      }
+      return;
+    }
+
+    // Step 3: Crawl product URLs (parallel)
+    pushProgress({
+      step: 3,
+      stepLabel: "Crawling product URLs",
+      brandsDiscovered: brands.length,
+      configsTotal: brands.length,
+      configsSuccessful,
+      configsRecommended: recommendedConfigs.length,
+      percentComplete: 60,
+    });
+    pushLog(jobId, "\n========== Step 3: Crawling product URLs (parallel) ==========\n");
+
+    const crawlResults: { retailer: string; config: Record<string, unknown>; urls: string[] }[] = [];
+    let productUrlsTotal = 0;
+
+    await runWithConcurrencyLimit(recommendedConfigs, E2E_CONCURRENCY, async ({ retailer, config }) => {
+      try {
+        const result = await crawlProductUrls(
+          config as Parameters<typeof crawlProductUrls>[0],
+          (msg) => pushLog(jobId, msg),
+        );
+        fs.mkdirSync(PRODUCT_URLS_DIR, { recursive: true });
+        fs.writeFileSync(
+          path.join(PRODUCT_URLS_DIR, `${retailer}.json`),
+          JSON.stringify(result, null, 2),
+        );
+        productUrlsTotal += result.totalUrls;
+        crawlResults.push({ retailer, config, urls: result.urls });
+        pushEvent(jobId, {
+          type: "e2e-progress",
+          step: 3,
+          stepLabel: "Crawling product URLs",
+          brandsDiscovered: brands.length,
+          configsTotal: brands.length,
+          configsSuccessful,
+          configsRecommended: recommendedConfigs.length,
+          productUrlsTotal,
+          productUrlsCrawled: crawlResults.reduce((s, r) => s + r.urls.length, 0),
+          uploadedTotal: 0,
+          uploadedSuccess: 0,
+          percentComplete: 60 + Math.floor((crawlResults.length / recommendedConfigs.length) * 20),
+          startedAt,
+        });
+        return result;
+      } catch (err) {
+        pushLog(jobId, `Crawl failed for ${retailer}: ${(err as Error).message}\n`);
+        return null;
+      }
+    });
+
+    const totalCrawled = crawlResults.reduce((s, r) => s + r.urls.length, 0);
+    pushProgress({
+      step: 3,
+      stepLabel: "Crawling product URLs",
+      brandsDiscovered: brands.length,
+      configsTotal: brands.length,
+      configsSuccessful,
+      configsRecommended: recommendedConfigs.length,
+      productUrlsTotal,
+      productUrlsCrawled: totalCrawled,
+      uploadedTotal: 0,
+      uploadedSuccess: 0,
+      percentComplete: 80,
+    });
+    pushLog(jobId, `Crawl done: ${totalCrawled} product URLs across ${crawlResults.length} brands.\n`);
+
+    // Step 4: Upload (parallel)
+    pushProgress({
+      step: 4,
+      stepLabel: "Extracting & uploading",
+      brandsDiscovered: brands.length,
+      configsTotal: brands.length,
+      configsSuccessful,
+      configsRecommended: recommendedConfigs.length,
+      productUrlsTotal,
+      productUrlsCrawled: totalCrawled,
+      uploadedTotal: crawlResults.reduce((s, r) => s + r.urls.length, 0),
+      uploadedSuccess: 0,
+      percentComplete: 82,
+    });
+    pushLog(jobId, "\n========== Step 4: Extracting & uploading (parallel) ==========\n");
+
+    const uploadState = { success: 0 };
+    const toUpload = crawlResults.filter((r) => r.urls.length > 0);
+    const totalUrlsToUpload = toUpload.reduce((s, r) => s + r.urls.length, 0);
+
+    await runWithConcurrencyLimit(toUpload, E2E_CONCURRENCY, async ({ retailer, config, urls }) => {
+      try {
+        const result = await uploadRetailer(
+          config as Parameters<typeof uploadRetailer>[0],
+          urls,
+          (msg) => pushLog(jobId, msg),
+          (progress) => {
+            pushEvent(jobId, {
+              type: "e2e-progress",
+              step: 4,
+              stepLabel: "Extracting & uploading",
+              brandsDiscovered: brands.length,
+              configsTotal: brands.length,
+              configsSuccessful,
+              configsRecommended: recommendedConfigs.length,
+              productUrlsTotal,
+              productUrlsCrawled: totalCrawled,
+              uploadedTotal: totalUrlsToUpload,
+              uploadedSuccess: uploadState.success + progress.uploaded,
+              percentComplete: totalUrlsToUpload
+                ? 82 + Math.floor(((uploadState.success + progress.uploaded) / totalUrlsToUpload) * 18)
+                : 95,
+              startedAt,
+            });
+          },
+        );
+        uploadState.success += result.uploaded;
+        pushEvent(jobId, {
+          type: "e2e-progress",
+          step: 4,
+          stepLabel: "Extracting & uploading",
+          brandsDiscovered: brands.length,
+          configsTotal: brands.length,
+          configsSuccessful,
+          configsRecommended: recommendedConfigs.length,
+          productUrlsTotal,
+          productUrlsCrawled: totalCrawled,
+          uploadedTotal: totalUrlsToUpload,
+          uploadedSuccess: uploadState.success,
+          percentComplete: 95,
+          startedAt,
+        });
+        return result;
+      } catch (err) {
+        pushLog(jobId, `Upload failed for ${retailer}: ${(err as Error).message}\n`);
+        return null;
+      }
+    });
+
+    job.status = "done";
+    pushProgress({
+      step: 4,
+      stepLabel: "Complete",
+      brandsDiscovered: brands.length,
+      configsTotal: brands.length,
+      configsSuccessful,
+      configsRecommended: recommendedConfigs.length,
+      productUrlsTotal,
+      productUrlsCrawled: totalCrawled,
+      uploadedTotal: totalUrlsToUpload,
+      uploadedSuccess: uploadState.success,
+      percentComplete: 100,
+    });
+    pushEvent(jobId, { type: "done" });
+  } catch (err) {
+    const msg = (err as Error).message ?? String(err);
+    console.error("[run-e2e] Error:", err);
+    job.status = "error";
+    job.error = msg;
+    pushLog(jobId, `ERROR: ${msg}`);
+    pushEvent(jobId, { type: "done", error: msg });
+  }
+
+  const clients = sseClients.get(jobId);
+  if (clients) {
+    for (const res of clients) res.end();
+    sseClients.delete(jobId);
+  }
+}
+
+app.post("/api/run-e2e", (_req, res) => {
+  const id = crypto.randomUUID();
+  const job: Job = {
+    id,
+    urls: [],
+    current: 0,
+    status: "running",
+    logs: [],
+    results: [],
+  };
+  jobs.set(id, job);
+
+  runE2EOrchestrator(id).catch((err) => {
+    console.error("[run-e2e] Unhandled error:", err);
+    const job = jobs.get(id);
+    if (job) {
+      job.status = "error";
+      job.error = (err as Error).message;
+      pushEvent(id, { type: "done", error: (err as Error).message });
+    }
+    const clients = sseClients.get(id);
+    if (clients) {
+      for (const res of clients) res.end();
+      sseClients.delete(id);
+    }
+  });
+
+  res.json({ jobId: id });
+});
+
 app.get("/api/progress/:jobId", (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job) {
@@ -230,6 +602,11 @@ app.get("/api/progress/:jobId", (req, res) => {
   // Replay existing logs
   for (const msg of job.logs) {
     res.write(`data: ${JSON.stringify({ type: "log", msg })}\n\n`);
+  }
+
+  // Replay last e2e-progress for late-joining clients
+  if (job.e2eProgress) {
+    res.write(`data: ${JSON.stringify(job.e2eProgress)}\n\n`);
   }
 
   if (job.status === "done") {
