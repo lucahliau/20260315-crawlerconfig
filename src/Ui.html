@@ -311,6 +311,21 @@
     display: none;
   }
   .discover-output.active { display: block; }
+  .discover-log {
+    background: var(--log-bg);
+    color: var(--log-text);
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.75rem;
+    padding: 0.5rem;
+    border-radius: var(--radius);
+    max-height: 200px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin-top: 0.5rem;
+    display: none;
+  }
+  .discover-log.active { display: block; }
   .discover-brands-list {
     background: var(--json-bg);
     border-radius: var(--radius);
@@ -436,6 +451,7 @@
   <div class="discover-progress-bar" id="discoverProgressBar"></div>
   <div class="discover-output" id="discoverOutput">
     <span class="discover-status" id="discoverStatus"></span>
+    <div class="discover-log" id="discoverLog"></div>
     <div class="discover-brands-list" id="discoverBrandsList"></div>
     <div class="discover-add-row">
       <button type="button" class="btn-primary btn-small" id="discoverAddToQueueBtn" style="display:none">Add to Queue</button>
@@ -737,10 +753,96 @@ function runExplore() {
 }
 
 // ── Discover brands state ─────────────────────────────────────────────
+var DISCOVER_JOB_KEY = "discoverJobId";
 var lastDiscoveredBrands = [];
 var discoverRunning = false;
 
-// ── Run discover brands ────────────────────────────────────────────────
+function discoverConnectToJob(jobId) {
+  discoverRunning = true;
+
+  var discoverBtn = document.getElementById("discoverBtn");
+  var progressBar = document.getElementById("discoverProgressBar");
+  var discoverOutput = document.getElementById("discoverOutput");
+  var discoverStatus = document.getElementById("discoverStatus");
+  var discoverLog = document.getElementById("discoverLog");
+  var discoverBrandsList = document.getElementById("discoverBrandsList");
+  var addToQueueBtn = document.getElementById("discoverAddToQueueBtn");
+
+  discoverBtn.disabled = true;
+  progressBar.classList.add("active");
+  discoverOutput.classList.add("active");
+  discoverLog.classList.add("active");
+  discoverStatus.textContent = "Searching the web for niche brands...";
+  discoverStatus.className = "discover-status";
+  if (!discoverLog.textContent) discoverBrandsList.innerHTML = "";
+  addToQueueBtn.style.display = "none";
+
+  var es = new EventSource("/api/progress/" + jobId);
+  es.onmessage = function (e) {
+    var msg = JSON.parse(e.data);
+    if (msg.type === "log") {
+      discoverLog.textContent += msg.msg + "\n";
+      discoverLog.scrollTop = discoverLog.scrollHeight;
+    } else if (msg.type === "progress" && msg.message) {
+      discoverStatus.textContent = msg.message;
+    } else if (msg.type === "brands" && msg.brands) {
+      lastDiscoveredBrands = msg.brands;
+      discoverStatus.textContent = "Found " + msg.brands.length + " brands.";
+      discoverBrandsList.innerHTML = "";
+      for (var i = 0; i < msg.brands.length; i++) {
+        var b = msg.brands[i];
+        var div = document.createElement("div");
+        div.innerHTML = '<span class="brand-name">' + escHtml(b.name) + '</span> \u2014 <a href="' + escHtml(b.url) + '" target="_blank" rel="noopener">' + escHtml(b.url) + '</a>';
+        discoverBrandsList.appendChild(div);
+      }
+      addToQueueBtn.style.display = "";
+    } else if (msg.type === "done") {
+      es.close();
+      discoverRunning = false;
+      discoverBtn.disabled = false;
+      progressBar.classList.remove("active");
+      try { localStorage.removeItem(DISCOVER_JOB_KEY); } catch (err) {}
+      if (msg.error) {
+        discoverStatus.textContent = "Error: " + msg.error;
+        discoverStatus.className = "discover-status input-status error";
+      } else if (msg.brands) {
+        lastDiscoveredBrands = msg.brands;
+        discoverStatus.textContent = "Done \u2014 " + msg.brands.length + " brands found.";
+      }
+    }
+  };
+  es.onerror = function () {
+    es.close();
+    discoverRunning = false;
+    discoverBtn.disabled = false;
+    progressBar.classList.remove("active");
+    discoverStatus.textContent = "Connection lost. Refresh to reconnect.";
+  };
+}
+
+function discoverTryResume() {
+  try {
+    var jobId = localStorage.getItem(DISCOVER_JOB_KEY);
+    if (!jobId) return;
+    fetch("/api/job/" + encodeURIComponent(jobId))
+      .then(function (res) {
+        if (!res.ok) {
+          localStorage.removeItem(DISCOVER_JOB_KEY);
+          return;
+        }
+        return res.json();
+      })
+      .then(function (data) {
+        if (data && data.exists) {
+          discoverConnectToJob(jobId);
+        } else {
+          localStorage.removeItem(DISCOVER_JOB_KEY);
+        }
+      })
+      .catch(function () { localStorage.removeItem(DISCOVER_JOB_KEY); });
+  } catch (err) {}
+}
+
 function runDiscover() {
   if (discoverRunning) return;
   discoverRunning = true;
@@ -749,68 +851,30 @@ function runDiscover() {
   var discoverBtn = document.getElementById("discoverBtn");
   var progressBar = document.getElementById("discoverProgressBar");
   var discoverOutput = document.getElementById("discoverOutput");
-  var discoverStatus = document.getElementById("discoverStatus");
-  var discoverBrandsList = document.getElementById("discoverBrandsList");
-  var addToQueueBtn = document.getElementById("discoverAddToQueueBtn");
-
+  var discoverLog = document.getElementById("discoverLog");
   discoverBtn.disabled = true;
   progressBar.classList.add("active");
   discoverOutput.classList.add("active");
-  discoverStatus.textContent = "Searching the web for niche brands...";
-  discoverStatus.className = "discover-status";
-  discoverBrandsList.innerHTML = "";
-  addToQueueBtn.style.display = "none";
+  discoverLog.textContent = "";
+  discoverLog.classList.add("active");
+  document.getElementById("discoverBrandsList").innerHTML = "";
+  document.getElementById("discoverAddToQueueBtn").style.display = "none";
 
   fetch("/api/discover-brands", { method: "POST", headers: { "Content-Type": "application/json" } })
     .then(function (res) { return res.json(); })
     .then(function (data) {
       if (data.error) throw new Error(data.error);
       var jobId = data.jobId;
-      var es = new EventSource("/api/progress/" + jobId);
-      es.onmessage = function (e) {
-        var msg = JSON.parse(e.data);
-        if (msg.type === "progress" && msg.message) {
-          discoverStatus.textContent = msg.message;
-        } else if (msg.type === "brands" && msg.brands) {
-          lastDiscoveredBrands = msg.brands;
-          discoverStatus.textContent = "Found " + msg.brands.length + " brands.";
-          discoverBrandsList.innerHTML = "";
-          for (var i = 0; i < msg.brands.length; i++) {
-            var b = msg.brands[i];
-            var div = document.createElement("div");
-            div.innerHTML = '<span class="brand-name">' + escHtml(b.name) + '</span> \u2014 <a href="' + escHtml(b.url) + '" target="_blank" rel="noopener">' + escHtml(b.url) + '</a>';
-            discoverBrandsList.appendChild(div);
-          }
-          addToQueueBtn.style.display = "";
-        } else if (msg.type === "done") {
-          es.close();
-          discoverRunning = false;
-          discoverBtn.disabled = false;
-          progressBar.classList.remove("active");
-          if (msg.error) {
-            discoverStatus.textContent = "Error: " + msg.error;
-            discoverStatus.className = "discover-status input-status error";
-          } else if (msg.brands) {
-            lastDiscoveredBrands = msg.brands;
-            discoverStatus.textContent = "Done \u2014 " + msg.brands.length + " brands found.";
-          }
-        }
-      };
-      es.onerror = function () {
-        es.close();
-        discoverRunning = false;
-        discoverBtn.disabled = false;
-        progressBar.classList.remove("active");
-        discoverStatus.textContent = "Connection lost.";
-      };
+      try { localStorage.setItem(DISCOVER_JOB_KEY, jobId); } catch (err) {}
+      discoverConnectToJob(jobId);
     })
     .catch(function (err) {
       console.error("[runDiscover] Error:", err);
       discoverRunning = false;
-      discoverBtn.disabled = false;
-      progressBar.classList.remove("active");
-      discoverStatus.textContent = "Error: " + err.message;
-      discoverStatus.className = "discover-status input-status error";
+      document.getElementById("discoverBtn").disabled = false;
+      document.getElementById("discoverProgressBar").classList.remove("active");
+      document.getElementById("discoverStatus").textContent = "Error: " + err.message;
+      document.getElementById("discoverStatus").className = "discover-status input-status error";
     });
 }
 
@@ -1413,6 +1477,7 @@ document.getElementById("historyModalBackdrop").addEventListener("click", hideHi
 // ── Initial load ────────────────────────────────────────────────────────
 loadConfigs();
 e2eTryResume();
+discoverTryResume();
 console.log("[init] UI ready");
 </script>
 </body>
