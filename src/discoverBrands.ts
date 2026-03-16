@@ -60,6 +60,44 @@ function extractJsonFromResponse(text: string): { brands: DiscoveredBrand[] } | 
   }
 }
 
+/**
+ * Extracts brands JSON from the API response content blocks.
+ *
+ * With web search enabled, the response contains multiple content blocks
+ * (tool_use, tool_result, text, etc.). The first text block is usually
+ * preamble like "Let me search for brands…" — the actual JSON lives in
+ * the *last* text block. We iterate from last to first and return the
+ * first successful parse. As a final fallback we concatenate every text
+ * block and try parsing that (handles the edge case where JSON is split
+ * across blocks).
+ */
+function extractBrandsFromResponse(
+  content: Anthropic.Messages.ContentBlock[],
+): { brands: DiscoveredBrand[]; rawText: string } | null {
+  const textBlocks = content
+    .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
+    .map((b) => b.text);
+
+  // Try each text block individually, starting from the last (most likely to contain JSON)
+  for (let i = textBlocks.length - 1; i >= 0; i--) {
+    const parsed = extractJsonFromResponse(textBlocks[i]);
+    if (parsed) {
+      return { brands: parsed.brands, rawText: textBlocks[i] };
+    }
+  }
+
+  // Fallback: concatenate all text blocks and try parsing (handles split JSON)
+  if (textBlocks.length > 1) {
+    const combined = textBlocks.join("\n");
+    const parsed = extractJsonFromResponse(combined);
+    if (parsed) {
+      return { brands: parsed.brands, rawText: combined };
+    }
+  }
+
+  return null;
+}
+
 function normalizeUrl(raw: string): string | null {
   let s = raw.trim();
   if (!s) return null;
@@ -155,21 +193,28 @@ Search the web, then respond with ONLY the JSON object as shown above.`;
 
   onProgress("Parsing results...");
 
-  const textBlock = response.content.find((b) => b.type === "text");
-  const text = textBlock && "text" in textBlock ? textBlock.text : "";
-  onProgress("Full Claude response:\n" + text);
+  // Log all content block types for debugging
+  const blockTypes = response.content.map((b) => b.type).join(", ");
+  onProgress(`Response contains ${response.content.length} blocks: [${blockTypes}]`);
 
-  const parsed = extractJsonFromResponse(text);
-  if (!parsed || parsed.brands.length === 0) {
+  const result = extractBrandsFromResponse(response.content);
+
+  if (!result || result.brands.length === 0) {
+    // Log what we actually received to help debug
+    const textBlocks = response.content
+      .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
+      .map((b, i) => `--- text block ${i} ---\n${b.text}`)
+      .join("\n");
+    onProgress("Failed to parse. Text blocks received:\n" + textBlocks);
     throw new Error("Could not parse brands from Claude response. Please try again.");
   }
 
-  onProgress(`Found ${parsed.brands.length} brands. Saving to master list...`);
+  onProgress(`Found ${result.brands.length} brands. Saving to master list...`);
 
   const seenUrls = new Set(master.urls);
   const newBrands: DiscoveredBrand[] = [];
 
-  for (const b of parsed.brands) {
+  for (const b of result.brands) {
     const url = normalizeUrl(b.url);
     if (url && !seenUrls.has(url)) {
       seenUrls.add(url);
@@ -185,5 +230,5 @@ Search the web, then respond with ONLY the JSON object as shown above.`;
 
   onProgress(`Done. Added ${newBrands.length} new brands.`);
 
-  return { brands: parsed.brands };
+  return { brands: result.brands };
 }
