@@ -191,6 +191,11 @@
   }
   .copied-toast.show { opacity: 1; }
 
+  .config-section-header {
+    display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;
+  }
+  .config-section-header h2 { margin: 0; }
+
   .empty-state {
     text-align: center; color: var(--muted); padding: 2rem 0; font-size: 0.9rem;
   }
@@ -373,7 +378,10 @@
 
 <!-- Results Section -->
 <section>
-  <h2>Generated Configs</h2>
+  <div class="config-section-header">
+    <h2>Generated Configs</h2>
+    <button type="button" class="btn-primary" id="crawlAllRecommendedBtn" disabled>Crawl All Recommended URLs</button>
+  </div>
   <div id="configList"><div class="empty-state">No configs generated yet.</div></div>
 </section>
 
@@ -732,12 +740,16 @@ function loadConfigs() {
 
     if (configs.length === 0) {
       container.innerHTML = '<div class="empty-state">No configs generated yet.</div>';
+      var crawlAllBtn = document.getElementById("crawlAllRecommendedBtn");
+      if (crawlAllBtn) crawlAllBtn.disabled = true;
       return;
     }
     container.innerHTML = "";
+    var hasRecommended = false;
     for (var i = 0; i < configs.length; i++) {
       var entry = configs[i];
       var rec = (entry.config && entry.config.dataQuality && entry.config.dataQuality.overallRecommendation) || "unknown";
+      if (rec === "recommended") hasRecommended = true;
       var method = (entry.config && entry.config.discovery && entry.config.discovery.method) || "unknown";
       var badgeClass = rec === "recommended" ? "badge-recommended"
         : rec === "usable" ? "badge-usable" : "badge-not-recommended";
@@ -798,14 +810,48 @@ function loadConfigs() {
         loadProductUrlsForRetailer(entry.retailer);
       }
     }
+    var crawlAllBtn = document.getElementById("crawlAllRecommendedBtn");
+    if (crawlAllBtn) crawlAllBtn.disabled = !hasRecommended;
   }).catch(function (err) {
     console.error("[loadConfigs] Error:", err);
     container.innerHTML = '<div class="empty-state">Could not load configs.</div>';
+    var crawlAllBtn = document.getElementById("crawlAllRecommendedBtn");
+    if (crawlAllBtn) crawlAllBtn.disabled = true;
   });
 }
 
+// ── Crawl all recommended retailers in parallel ────────────────────────
+function crawlAllRecommended() {
+  var entries = document.querySelectorAll(".config-entry");
+  var recommended = [];
+  for (var i = 0; i < entries.length; i++) {
+    var badge = entries[i].querySelector(".badge-recommended");
+    if (badge) {
+      var retailer = entries[i].getAttribute("data-retailer");
+      if (retailer && !crawlingRetailers[retailer]) recommended.push(retailer);
+    }
+  }
+  if (recommended.length === 0) {
+    showStatus("No recommended configs to crawl (or all already crawling).", "info", 4000);
+    return;
+  }
+  var btn = document.getElementById("crawlAllRecommendedBtn");
+  if (btn) btn.disabled = true;
+
+  var completed = 0;
+  var total = recommended.length;
+  function onOneComplete() {
+    completed++;
+    if (completed >= total && btn) btn.disabled = false;
+  }
+
+  for (var j = 0; j < recommended.length; j++) {
+    startCrawl(recommended[j], onOneComplete);
+  }
+}
+
 // ── Start crawl for a retailer ──────────────────────────────────────────
-function startCrawl(retailer) {
+function startCrawl(retailer, onComplete) {
   if (crawlingRetailers[retailer]) return;
   crawlingRetailers[retailer] = true;
 
@@ -872,6 +918,7 @@ function startCrawl(retailer) {
           setTimeout(function () {
             statusDiv.classList.remove("active");
           }, 5000);
+          if (typeof onComplete === "function") onComplete();
         }
       };
       es.onerror = function () {
@@ -880,6 +927,7 @@ function startCrawl(retailer) {
         btn.disabled = false;
         btn.textContent = "Retry Crawl";
         progressText.textContent = "Connection lost during crawl.";
+        if (typeof onComplete === "function") onComplete();
       };
     })
     .catch(function (err) {
@@ -888,6 +936,7 @@ function startCrawl(retailer) {
       btn.disabled = false;
       btn.textContent = "Retry Crawl";
       progressText.textContent = "Error: " + err.message;
+      if (typeof onComplete === "function") onComplete();
     });
 }
 
@@ -1036,6 +1085,7 @@ document.getElementById("urlInput").addEventListener("keydown", function (e) {
 document.getElementById("csvInput").addEventListener("change", handleCsv);
 document.getElementById("clearBtn").addEventListener("click", clearQueue);
 document.getElementById("runBtn").addEventListener("click", runExplore);
+document.getElementById("crawlAllRecommendedBtn").addEventListener("click", crawlAllRecommended);
 
 // ── Initial load ────────────────────────────────────────────────────────
 loadConfigs();
