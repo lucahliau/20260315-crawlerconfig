@@ -824,6 +824,7 @@ function addDiscoveredToQueue() {
 }
 
 // ── End-to-end run ──────────────────────────────────────────────────────
+var E2E_JOB_KEY = "e2eJobId";
 var e2eRunning = false;
 var e2eLastStatus = {};
 
@@ -845,6 +846,71 @@ function updateE2eStatus(p) {
     meta += " \u2014 ~" + mins + " min remaining";
   }
   document.getElementById("e2eMeta").textContent = meta;
+}
+
+function e2eConnectToJob(jobId) {
+  e2eRunning = true;
+  var runE2eBtn = document.getElementById("runE2eBtn");
+  var e2eStatus = document.getElementById("e2eStatus");
+  var progressSection = document.getElementById("progressSection");
+  var logArea = document.getElementById("logArea");
+
+  runE2eBtn.disabled = true;
+  e2eStatus.classList.add("active");
+  progressSection.style.display = "";
+  if (!logArea.textContent) e2eLastStatus = {};
+
+  var es = new EventSource("/api/progress/" + jobId);
+  es.onmessage = function (e) {
+    var msg = JSON.parse(e.data);
+    if (msg.type === "log") {
+      logArea.textContent += msg.msg + "\n";
+      logArea.scrollTop = logArea.scrollHeight;
+    } else if (msg.type === "e2e-progress") {
+      updateE2eStatus(msg);
+    } else if (msg.type === "done") {
+      es.close();
+      e2eRunning = false;
+      runE2eBtn.disabled = false;
+      try { localStorage.removeItem(E2E_JOB_KEY); } catch (err) {}
+      if (msg.error) {
+        updateE2eStatus({ step: 4, percentComplete: 100 });
+        document.getElementById("e2eMeta").textContent = "Error: " + msg.error;
+      } else {
+        updateE2eStatus({ step: 4, stepLabel: "Complete", percentComplete: 100 });
+      }
+      loadConfigs();
+    }
+  };
+  es.onerror = function () {
+    es.close();
+    e2eRunning = false;
+    runE2eBtn.disabled = false;
+    document.getElementById("e2eMeta").textContent = "Connection lost. Refresh to reconnect.";
+  };
+}
+
+function e2eTryResume() {
+  try {
+    var jobId = localStorage.getItem(E2E_JOB_KEY);
+    if (!jobId) return;
+    fetch("/api/job/" + encodeURIComponent(jobId))
+      .then(function (res) {
+        if (!res.ok) {
+          localStorage.removeItem(E2E_JOB_KEY);
+          return;
+        }
+        return res.json();
+      })
+      .then(function (data) {
+        if (data && data.exists) {
+          e2eConnectToJob(jobId);
+        } else {
+          localStorage.removeItem(E2E_JOB_KEY);
+        }
+      })
+      .catch(function () { localStorage.removeItem(E2E_JOB_KEY); });
+  } catch (err) {}
 }
 
 function runE2e() {
@@ -879,41 +945,8 @@ function runE2e() {
     .then(function (data) {
       if (data.error) throw new Error(data.error);
       var jobId = data.jobId;
-      var es = new EventSource("/api/progress/" + jobId);
-      es.onmessage = function (e) {
-        var msg = JSON.parse(e.data);
-        if (msg.type === "log") {
-          logArea.textContent += msg.msg + "\n";
-          logArea.scrollTop = logArea.scrollHeight;
-        } else if (msg.type === "e2e-progress") {
-          updateE2eStatus(msg);
-        } else if (msg.type === "done") {
-          es.close();
-          e2eRunning = false;
-          runE2eBtn.disabled = false;
-          if (msg.error) {
-            updateE2eStatus({
-              step: 4,
-              percentComplete: 100
-            });
-            document.getElementById("e2eMeta").textContent = "Error: " + msg.error;
-          } else {
-            updateE2eStatus({
-              step: 4,
-              stepLabel: "Complete",
-              percentComplete: 100
-            });
-          }
-          loadConfigs();
-        }
-      };
-      es.onerror = function () {
-        es.close();
-        e2eRunning = false;
-        runE2eBtn.disabled = false;
-        document.getElementById("e2eMeta").textContent = "Connection lost.";
-        loadConfigs();
-      };
+      try { localStorage.setItem(E2E_JOB_KEY, jobId); } catch (err) {}
+      e2eConnectToJob(jobId);
     })
     .catch(function (err) {
       console.error("[runE2e] Error:", err);
@@ -1379,6 +1412,7 @@ document.getElementById("historyModalBackdrop").addEventListener("click", hideHi
 
 // ── Initial load ────────────────────────────────────────────────────────
 loadConfigs();
+e2eTryResume();
 console.log("[init] UI ready");
 </script>
 </body>

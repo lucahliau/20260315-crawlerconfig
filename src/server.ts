@@ -586,6 +586,15 @@ app.post("/api/run-e2e", (_req, res) => {
   res.json({ jobId: id });
 });
 
+app.get("/api/job/:jobId", (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "Job not found." });
+    return;
+  }
+  res.json({ exists: true, status: job.status });
+});
+
 app.get("/api/progress/:jobId", (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job) {
