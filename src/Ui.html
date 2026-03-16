@@ -147,6 +147,11 @@
   }
   .config-header:hover { background: var(--border); }
   .config-name { font-weight: 600; flex: 1; }
+  .config-site-link {
+    color: var(--accent); text-decoration: none; font-size: 1rem;
+    opacity: 0.8; cursor: pointer;
+  }
+  .config-site-link:hover { opacity: 1; text-decoration: underline; }
   .badge {
     font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
     padding: 0.15rem 0.5rem; border-radius: 999px; letter-spacing: 0.03em;
@@ -381,6 +386,7 @@
   <div class="config-section-header">
     <h2>Generated Configs</h2>
     <button type="button" class="btn-primary" id="crawlAllRecommendedBtn" disabled>Crawl All Recommended URLs</button>
+    <button type="button" class="btn-primary upload-btn" id="uploadAllProductUrlsBtn" disabled>Upload All Product URLs</button>
   </div>
   <div id="configList"><div class="empty-state">No configs generated yet.</div></div>
 </section>
@@ -741,11 +747,14 @@ function loadConfigs() {
     if (configs.length === 0) {
       container.innerHTML = '<div class="empty-state">No configs generated yet.</div>';
       var crawlAllBtn = document.getElementById("crawlAllRecommendedBtn");
+      var uploadAllBtn = document.getElementById("uploadAllProductUrlsBtn");
       if (crawlAllBtn) crawlAllBtn.disabled = true;
+      if (uploadAllBtn) uploadAllBtn.disabled = true;
       return;
     }
     container.innerHTML = "";
     var hasRecommended = false;
+    var hasAnyUrls = false;
     for (var i = 0; i < configs.length; i++) {
       var entry = configs[i];
       var rec = (entry.config && entry.config.dataQuality && entry.config.dataQuality.overallRecommendation) || "unknown";
@@ -755,15 +764,20 @@ function loadConfigs() {
         : rec === "usable" ? "badge-usable" : "badge-not-recommended";
 
       var hasUrls = !!urlMap[entry.retailer];
+      if (hasUrls) hasAnyUrls = true;
       var urlCount = hasUrls ? urlMap[entry.retailer].totalUrls : 0;
       var crawlLabel = hasUrls ? "Re-crawl URLs" : "Crawl URLs";
+      var baseUrl = (entry.config && entry.config.baseUrl) || "";
+      var siteLink = baseUrl
+        ? '<a href="' + escHtml(baseUrl) + '" target="_blank" rel="noopener" class="config-site-link" title="Visit website">\u2197</a>'
+        : "";
 
       var div = document.createElement("div");
       div.className = "config-entry";
       div.setAttribute("data-retailer", entry.retailer);
       div.innerHTML =
         '<div class="config-header">' +
-          '<span class="config-name">' + escHtml(entry.retailer) + '</span>' +
+          '<span class="config-name">' + escHtml(entry.retailer) + '</span>' + siteLink +
           '<span class="badge ' + badgeClass + '">' + escHtml(rec) + '</span>' +
           '<span class="method-tag">' + escHtml(method) + '</span>' +
           (hasUrls ? '<span class="method-tag">' + urlCount + ' URLs</span>' : '') +
@@ -784,7 +798,7 @@ function loadConfigs() {
 
       (function (el, retailer) {
         el.querySelector(".config-header").onclick = function (e) {
-          if (e.target.classList.contains("crawl-btn") || e.target.classList.contains("upload-btn")) return;
+          if (e.target.classList.contains("crawl-btn") || e.target.classList.contains("upload-btn") || e.target.classList.contains("config-site-link")) return;
           el.querySelector(".config-body").classList.toggle("open");
         };
         el.querySelector(".copy-btn").onclick = function (e) {
@@ -811,12 +825,16 @@ function loadConfigs() {
       }
     }
     var crawlAllBtn = document.getElementById("crawlAllRecommendedBtn");
+    var uploadAllBtn = document.getElementById("uploadAllProductUrlsBtn");
     if (crawlAllBtn) crawlAllBtn.disabled = !hasRecommended;
+    if (uploadAllBtn) uploadAllBtn.disabled = !hasAnyUrls;
   }).catch(function (err) {
     console.error("[loadConfigs] Error:", err);
     container.innerHTML = '<div class="empty-state">Could not load configs.</div>';
     var crawlAllBtn = document.getElementById("crawlAllRecommendedBtn");
+    var uploadAllBtn = document.getElementById("uploadAllProductUrlsBtn");
     if (crawlAllBtn) crawlAllBtn.disabled = true;
+    if (uploadAllBtn) uploadAllBtn.disabled = true;
   });
 }
 
@@ -940,8 +958,38 @@ function startCrawl(retailer, onComplete) {
     });
 }
 
+// ── Upload all product URLs in parallel ──────────────────────────────────
+function uploadAllProductUrls() {
+  var entries = document.querySelectorAll(".config-entry");
+  var withUrls = [];
+  for (var i = 0; i < entries.length; i++) {
+    var uploadBtn = entries[i].querySelector(".upload-btn");
+    if (uploadBtn) {
+      var retailer = entries[i].getAttribute("data-retailer");
+      if (retailer && !uploadingRetailers[retailer]) withUrls.push(retailer);
+    }
+  }
+  if (withUrls.length === 0) {
+    showStatus("No configs with product URLs to upload (or all already uploading).", "info", 4000);
+    return;
+  }
+  var btn = document.getElementById("uploadAllProductUrlsBtn");
+  if (btn) btn.disabled = true;
+
+  var completed = 0;
+  var total = withUrls.length;
+  function onOneComplete() {
+    completed++;
+    if (completed >= total && btn) btn.disabled = false;
+  }
+
+  for (var j = 0; j < withUrls.length; j++) {
+    startUpload(withUrls[j], onOneComplete);
+  }
+}
+
 // ── Start upload for a retailer ──────────────────────────────────────────
-function startUpload(retailer) {
+function startUpload(retailer, onComplete) {
   if (uploadingRetailers[retailer]) return;
   uploadingRetailers[retailer] = true;
 
@@ -987,6 +1035,7 @@ function startUpload(retailer) {
           setTimeout(function () {
             statusDiv.classList.remove("active");
           }, 8000);
+          if (typeof onComplete === "function") onComplete();
         }
       };
       es.onerror = function () {
@@ -995,6 +1044,7 @@ function startUpload(retailer) {
         btn.disabled = false;
         btn.textContent = "Upload";
         progressText.textContent = "Connection lost during upload.";
+        if (typeof onComplete === "function") onComplete();
       };
     })
     .catch(function (err) {
@@ -1003,6 +1053,7 @@ function startUpload(retailer) {
       btn.disabled = false;
       btn.textContent = "Upload";
       progressText.textContent = "Error: " + err.message;
+      if (typeof onComplete === "function") onComplete();
     });
 }
 
@@ -1086,6 +1137,7 @@ document.getElementById("csvInput").addEventListener("change", handleCsv);
 document.getElementById("clearBtn").addEventListener("click", clearQueue);
 document.getElementById("runBtn").addEventListener("click", runExplore);
 document.getElementById("crawlAllRecommendedBtn").addEventListener("click", crawlAllRecommended);
+document.getElementById("uploadAllProductUrlsBtn").addEventListener("click", uploadAllProductUrls);
 
 // ── Initial load ────────────────────────────────────────────────────────
 loadConfigs();
