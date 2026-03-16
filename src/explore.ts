@@ -3,6 +3,7 @@ import { Stagehand } from "@browserbasehq/stagehand";
 import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
+import { addToMasterList } from "./discoverBrands.js";
 
 // ---------------------------------------------------------------------------
 // Logging — per-session context instead of global mutable state
@@ -2250,6 +2251,9 @@ export async function exploreRetailer(
       };
 
       writePartialConfig(configsDir, retailer, minimalConfig);
+      const masterUrl = minimalConfig.baseUrl as string | undefined;
+      const masterName = minimalConfig.retailerDisplayName as string | undefined;
+      if (masterUrl) addToMasterList(masterUrl, masterName);
       await stagehand.close();
       log(session, "Done.");
       return minimalConfig;
@@ -2416,6 +2420,9 @@ export async function exploreRetailer(
     }
 
     writePartialConfig(configsDir, retailer, finalConfig);
+    const masterUrl = finalConfig.baseUrl as string | undefined;
+    const masterName = finalConfig.retailerDisplayName as string | undefined;
+    if (masterUrl) addToMasterList(masterUrl, masterName);
 
     log(session, "\n--- Summary ---");
     log(session, `  Retailer:         ${displayName} (${retailer})`);

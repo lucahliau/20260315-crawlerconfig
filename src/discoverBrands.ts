@@ -75,6 +75,41 @@ function normalizeUrl(raw: string): string | null {
   }
 }
 
+export function addToMasterList(url: string, name?: string): void {
+  const normalized = normalizeUrl(url);
+  if (!normalized) return;
+  const master = loadMasterList();
+  const existingUrls = new Set([...master.urls, ...master.brands.map((b) => b.url)]);
+  if (existingUrls.has(normalized)) return;
+  const brand: DiscoveredBrand = { name: name ?? normalized, url: normalized };
+  const updatedMaster: MasterList = {
+    brands: [...master.brands, brand],
+    urls: [...master.urls, normalized],
+  };
+  saveMasterList(updatedMaster);
+}
+
+export function syncConfigsToMasterList(configsDir: string): void {
+  try {
+    if (!fs.existsSync(configsDir)) return;
+    const files = fs.readdirSync(configsDir).filter((f) => f.endsWith(".json"));
+    for (const filename of files) {
+      try {
+        const raw = fs.readFileSync(path.join(configsDir, filename), "utf-8");
+        const config = JSON.parse(raw) as { baseUrl?: string; retailerDisplayName?: string };
+        const baseUrl = config.baseUrl;
+        if (baseUrl && typeof baseUrl === "string") {
+          addToMasterList(baseUrl, config.retailerDisplayName);
+        }
+      } catch {
+        // Skip invalid configs
+      }
+    }
+  } catch {
+    // Configs dir may not exist
+  }
+}
+
 export async function discoverBrands(
   onProgress: (msg: string) => void,
 ): Promise<{ brands: DiscoveredBrand[] }> {

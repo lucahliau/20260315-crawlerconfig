@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 import { exploreRetailer } from "./explore.js";
 import { crawlProductUrls, type CrawlResult } from "./crawl.js";
 import { uploadRetailer, type UploadResult } from "./upload.js";
-import { discoverBrands, type DiscoveredBrand } from "./discoverBrands.js";
+import { discoverBrands, syncConfigsToMasterList, type DiscoveredBrand } from "./discoverBrands.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -517,5 +517,10 @@ app.get("/", (_req, res) => {
 // ---------------------------------------------------------------------------
 
 app.listen(PORT, () => {
+  try {
+    syncConfigsToMasterList(CONFIGS_DIR);
+  } catch (err) {
+    console.error("[startup] Failed to sync configs to master list:", err);
+  }
   console.log(`\n  Crawler Config UI running at http://localhost:${PORT}\n`);
 });
