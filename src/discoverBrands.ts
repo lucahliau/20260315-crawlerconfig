@@ -197,6 +197,13 @@ Search the web, then respond with ONLY the JSON object as shown above.`;
   const blockTypes = response.content.map((b) => b.type).join(", ");
   onProgress(`Response contains ${response.content.length} blocks: [${blockTypes}]`);
 
+  // Log full response every time for debugging
+  const allTextBlocks = response.content
+    .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
+    .map((b, i) => `--- text block ${i} ---\n${b.text}`)
+    .join("\n\n");
+  onProgress("Full Claude response:\n" + (allTextBlocks || "(no text blocks)"));
+
   const result = extractBrandsFromResponse(response.content);
 
   if (!result || result.brands.length === 0) {
