@@ -17,6 +17,8 @@ app.use(express.json());
 const PORT = parseInt(process.env.PORT ?? "3456", 10);
 const CONFIGS_DIR = process.env.CONFIGS_DIR ?? path.join(process.cwd(), "configs");
 const PRODUCT_URLS_DIR = process.env.PRODUCT_URLS_DIR ?? path.join(process.cwd(), "product-urls");
+const DISCOVERED_BRANDS_PATH =
+  process.env.DISCOVERED_BRANDS_PATH ?? path.join(process.cwd(), "discovered-brands.json");
 
 // Delay between processing consecutive URLs (helps with rate limits)
 const INTER_URL_DELAY_MS = parseInt(process.env.INTER_URL_DELAY_MS ?? "5000", 10);
@@ -245,6 +247,23 @@ app.get("/api/progress/:jobId", (req, res) => {
   req.on("close", () => {
     sseClients.get(job.id)?.delete(res);
   });
+});
+
+app.get("/api/discovered-brands", (_req, res) => {
+  try {
+    if (!fs.existsSync(DISCOVERED_BRANDS_PATH)) {
+      return res.json({ brands: [], urls: [] });
+    }
+    const raw = fs.readFileSync(DISCOVERED_BRANDS_PATH, "utf-8");
+    const data = JSON.parse(raw) as { brands?: unknown[]; urls?: unknown[] };
+    res.json({
+      brands: Array.isArray(data.brands) ? data.brands : [],
+      urls: Array.isArray(data.urls) ? data.urls : [],
+    });
+  } catch (err) {
+    console.error("[api/discovered-brands] Error:", err);
+    res.status(500).json({ error: "Failed to load discovered brands." });
+  }
 });
 
 app.get("/api/configs", (_req, res) => {

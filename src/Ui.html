@@ -332,11 +332,43 @@
   .discover-brands-list a:hover { text-decoration: underline; }
   .discover-brands-list .brand-name { font-weight: 500; color: var(--text); }
   .discover-add-row { margin-top: 0.5rem; }
+
+  .app-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 1.5rem;
+  }
+  .app-header h1 { margin: 0; }
+
+  .history-modal {
+    position: fixed; inset: 0; z-index: 100;
+    display: flex; align-items: center; justify-content: center;
+    padding: 2rem;
+  }
+  .history-modal-backdrop {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,0.5);
+  }
+  .history-modal-content {
+    position: relative; background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.25rem; max-width: 500px; width: 100%; max-height: 80vh; overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .history-modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+  .history-modal-desc { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.75rem; }
+  .history-modal-list {
+    overflow-y: auto; font-size: 0.85rem; line-height: 1.6;
+  }
+  .history-modal-list a { color: var(--accent); text-decoration: none; }
+  .history-modal-list a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 
-<h1>Crawler Config Generator</h1>
+<header class="app-header">
+  <h1>Crawler Config Generator</h1>
+  <button type="button" class="btn-secondary" id="historyBtn">History</button>
+</header>
 
 <!-- Discover Niche Brands Section -->
 <section class="discover-section">
@@ -390,6 +422,18 @@
   </div>
   <div id="configList"><div class="empty-state">No configs generated yet.</div></div>
 </section>
+
+<div class="history-modal" id="historyModal" style="display:none">
+  <div class="history-modal-backdrop" id="historyModalBackdrop"></div>
+  <div class="history-modal-content">
+    <div class="history-modal-header">
+      <h2>Discovery History</h2>
+      <button type="button" class="btn-secondary btn-small" id="historyModalClose">Close</button>
+    </div>
+    <p class="history-modal-desc">Brands and URLs excluded from Claude's discovery:</p>
+    <div class="history-modal-list" id="historyModalList"></div>
+  </div>
+</div>
 
 <div class="copied-toast" id="copiedToast">Copied to clipboard</div>
 
@@ -1126,6 +1170,40 @@ function escHtml(s) {
   return d.innerHTML;
 }
 
+// ── History modal (discovery master list) ────────────────────────────────
+function showHistoryModal() {
+  var modal = document.getElementById("historyModal");
+  var listEl = document.getElementById("historyModalList");
+  modal.style.display = "flex";
+  listEl.innerHTML = "Loading...";
+  fetch("/api/discovered-brands")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var items = [];
+      var seen = new Set();
+      for (var i = 0; i < (data.brands || []).length; i++) {
+        var b = data.brands[i];
+        if (b && b.url && !seen.has(b.url)) {
+          seen.add(b.url);
+          items.push('<div><span class="brand-name">' + escHtml(b.name || "") + '</span> \u2014 <a href="' + escHtml(b.url) + '" target="_blank" rel="noopener">' + escHtml(b.url) + '</a></div>');
+        }
+      }
+      for (var j = 0; j < (data.urls || []).length; j++) {
+        var u = data.urls[j];
+        if (u && !seen.has(u)) {
+          seen.add(u);
+          items.push('<div><a href="' + escHtml(u) + '" target="_blank" rel="noopener">' + escHtml(u) + '</a></div>');
+        }
+      }
+      listEl.innerHTML = items.length ? items.join("") : "No brands in history yet.";
+    })
+    .catch(function () { listEl.innerHTML = "Failed to load."; });
+}
+
+function hideHistoryModal() {
+  document.getElementById("historyModal").style.display = "none";
+}
+
 // ── Attach all event listeners ──────────────────────────────────────────
 document.getElementById("discoverBtn").addEventListener("click", runDiscover);
 document.getElementById("discoverAddToQueueBtn").addEventListener("click", addDiscoveredToQueue);
@@ -1138,6 +1216,9 @@ document.getElementById("clearBtn").addEventListener("click", clearQueue);
 document.getElementById("runBtn").addEventListener("click", runExplore);
 document.getElementById("crawlAllRecommendedBtn").addEventListener("click", crawlAllRecommended);
 document.getElementById("uploadAllProductUrlsBtn").addEventListener("click", uploadAllProductUrls);
+document.getElementById("historyBtn").addEventListener("click", showHistoryModal);
+document.getElementById("historyModalClose").addEventListener("click", hideHistoryModal);
+document.getElementById("historyModalBackdrop").addEventListener("click", hideHistoryModal);
 
 // ── Initial load ────────────────────────────────────────────────────────
 loadConfigs();
