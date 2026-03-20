@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { addToMasterList } from "./discoverBrands.js";
 import { writeJsonAtomic } from "./jsonFs.js";
+import { retailerSlugFromUrl } from "./retailerSlug.js";
 
 // ---------------------------------------------------------------------------
 // Logging — per-session context instead of global mutable state
@@ -54,13 +55,8 @@ function parseArgs(): { url: string } {
   return { url };
 }
 
-function extractRetailerSlug(url: string): string {
-  const hostname = new URL(url).hostname;
-  return hostname.replace(/^www\./, "").split(".")[0];
-}
-
 function extractDisplayName(url: string): string {
-  const slug = extractRetailerSlug(url);
+  const slug = retailerSlugFromUrl(url);
   return slug.charAt(0).toUpperCase() + slug.slice(1);
 }
 
@@ -2355,7 +2351,7 @@ export async function exploreRetailer(
 
   try {
     baseUrl = new URL(url).origin;
-    retailer = extractRetailerSlug(url);
+    retailer = retailerSlugFromUrl(url);
     displayName = extractDisplayName(url);
 
     log(session, `\n--- Crawler Config Generator ---`);

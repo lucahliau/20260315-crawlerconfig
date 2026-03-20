@@ -7,4 +7,5 @@ discovered-brands.json
 tmp/
 logs/
 exploration-artifacts/
+upload-status/
 .DS_Store

@@ -42,7 +42,7 @@
     color: var(--text);
     line-height: 1.5;
     padding: 2rem;
-    max-width: 900px;
+    max-width: 1100px;
     margin: 0 auto;
   }
 
@@ -197,9 +197,45 @@
   .copied-toast.show { opacity: 1; }
 
   .config-section-header {
-    display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;
   }
   .config-section-header h2 { margin: 0; }
+
+  .dashboard-toolbar {
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 0.82rem;
+  }
+  .toolbar-row {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+  }
+  .toolbar-row:last-child { margin-bottom: 0; }
+  .dashboard-toolbar label { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--text); }
+  .dashboard-toolbar input[type="search"],
+  .dashboard-toolbar select {
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card);
+    color: var(--text);
+    font-size: 0.82rem;
+    max-width: 12rem;
+  }
+  .dashboard-toolbar input[type="checkbox"] { accent-color: var(--accent); }
+  #dashboardBulkHint { font-size: 0.8rem; color: var(--muted); margin-top: 0.35rem; }
+  .status-pill {
+    font-size: 0.65rem; font-weight: 600; text-transform: uppercase;
+    padding: 0.1rem 0.4rem; border-radius: 4px; margin-left: 0.25rem;
+    background: var(--border); color: var(--muted);
+  }
+  .status-pill.done { background: #d1fae5; color: #065f46; }
+  @media (prefers-color-scheme: dark) {
+    .status-pill.done { background: #064e3b; color: #6ee7b7; }
+  }
 
   .empty-state {
     text-align: center; color: var(--muted); padding: 2rem 0; font-size: 0.9rem;
@@ -492,6 +528,43 @@
     <button type="button" class="btn-primary" id="crawlAllRecommendedBtn" disabled>Crawl All Recommended URLs</button>
     <button type="button" class="btn-primary upload-btn" id="uploadAllProductUrlsBtn" disabled>Upload All Product URLs</button>
   </div>
+  <div class="dashboard-toolbar" id="dashboardToolbar">
+    <div class="toolbar-row">
+      <label>Search <input type="search" id="dashboardSearch" placeholder="Retailer name" autocomplete="off" /></label>
+      <label>Recommendation
+        <select id="filterRecommendation">
+          <option value="all">All</option>
+          <option value="recommended">Recommended</option>
+          <option value="usable">Usable</option>
+          <option value="not recommended">Not recommended</option>
+          <option value="unknown">Unknown</option>
+        </select>
+      </label>
+      <label>Pipeline
+        <select id="filterPipeline">
+          <option value="all">All</option>
+          <option value="need_crawl">Needs crawl (recommended, no URLs)</option>
+          <option value="need_upload">Needs upload</option>
+          <option value="upload_done">Upload complete (current crawl)</option>
+        </select>
+      </label>
+      <label>Sort
+        <select id="sortDashboard">
+          <option value="rec">Recommendation</option>
+          <option value="name">Name A–Z</option>
+          <option value="crawled">Crawled date</option>
+          <option value="uploaded">Upload date</option>
+          <option value="urls">URL count</option>
+        </select>
+      </label>
+    </div>
+    <div class="toolbar-row">
+      <label title="When off, re-crawl sites that already have product URLs"><input type="checkbox" id="crawlIncludeCrawled" /> Include already crawled</label>
+      <label title="When off, skip uploads already done for this crawl snapshot"><input type="checkbox" id="uploadIncludeUploaded" /> Include already uploaded</label>
+      <label title="Skip explore when configs/&lt;slug&gt;.json exists"><input type="checkbox" id="skipExploreExisting" checked /> Skip existing configs (Run)</label>
+    </div>
+    <div id="dashboardBulkHint"></div>
+  </div>
   <div id="configList"><div class="empty-state">No configs generated yet.</div></div>
 </section>
 
@@ -707,18 +780,29 @@ function runExplore() {
   progressText.textContent = "Starting...";
 
   var urls = queue.slice();
+  var submittedCount = urls.length;
   queue.length = 0;
   renderQueue();
+
+  var skipEl = document.getElementById("skipExploreExisting");
+  var skipExisting = skipEl ? skipEl.checked : true;
 
   fetch("/api/explore", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ urls: urls }),
+    body: JSON.stringify({ urls: urls, skipExisting: skipExisting }),
   })
-    .then(function (res) { return res.json(); })
+    .then(function (res) {
+      return res.json().then(function (data) {
+        if (!res.ok) throw new Error(data.error || "Explore request failed");
+        return data;
+      });
+    })
     .then(function (data) {
       if (data.error) throw new Error(data.error);
       var jobId = data.jobId;
+      var skippedN = data.skippedCount || 0;
+      var toProcess = submittedCount - skippedN;
 
       var es = new EventSource("/api/progress/" + jobId);
       es.onmessage = function (e) {
@@ -730,10 +814,10 @@ function runExplore() {
           progressText.textContent = "Processing " + msg.current + "/" + msg.total + ": " + msg.url;
         } else if (msg.type === "done") {
           es.close();
-          progressText.textContent = "Done \u2014 " + urls.length + " URL(s) processed.";
+          progressText.textContent = "Done \u2014 " + toProcess + " URL(s) explored" + (skippedN ? " (" + skippedN + " skipped, already had config)" : "") + ".";
           running = false;
           renderQueue();
-          loadConfigs();
+          loadOverview();
         }
       };
       es.onerror = function () {
@@ -741,7 +825,7 @@ function runExplore() {
         progressText.textContent = "Connection lost.";
         running = false;
         renderQueue();
-        loadConfigs();
+        loadOverview();
       };
     })
     .catch(function (err) {
@@ -943,7 +1027,7 @@ function e2eConnectToJob(jobId) {
       } else {
         updateE2eStatus({ step: 4, stepLabel: "Complete", percentComplete: 100 });
       }
-      loadConfigs();
+      loadOverview();
     }
   };
   es.onerror = function () {
@@ -1024,140 +1108,263 @@ function runE2e() {
 var crawlingRetailers = {};
 var uploadingRetailers = {};
 var productUrlsCache = {};
+var overviewRetailers = [];
+var dashboardToolbarWired = false;
 
-// ── Load existing configs ───────────────────────────────────────────────
-function loadConfigs() {
+function recommendationRank(rec) {
+  if (rec === "recommended") return 0;
+  if (rec === "usable") return 1;
+  if (rec === "not recommended") return 2;
+  return 3;
+}
+
+function pipelineMatch(row, pipeline) {
+  if (pipeline === "all") return true;
+  var hasCrawl = row.crawl && row.crawl.totalUrls > 0;
+  var up = row.uploadMatchesCurrentCrawl;
+  if (pipeline === "need_crawl") {
+    return row.recommendation === "recommended" && !hasCrawl;
+  }
+  if (pipeline === "need_upload") {
+    return hasCrawl && !up;
+  }
+  if (pipeline === "upload_done") {
+    return hasCrawl && up;
+  }
+  return true;
+}
+
+function getFilteredSortedRetailers() {
+  var list = overviewRetailers.slice();
+  var searchEl = document.getElementById("dashboardSearch");
+  var search = (searchEl && searchEl.value || "").trim().toLowerCase();
+  var filterRecEl = document.getElementById("filterRecommendation");
+  var filterRec = filterRecEl ? filterRecEl.value : "all";
+  var pipelineEl = document.getElementById("filterPipeline");
+  var pipeline = pipelineEl ? pipelineEl.value : "all";
+
+  var out = [];
+  for (var i = 0; i < list.length; i++) {
+    var row = list[i];
+    if (filterRec !== "all" && row.recommendation !== filterRec) continue;
+    if (!pipelineMatch(row, pipeline)) continue;
+    if (search && !String(row.retailer).toLowerCase().includes(search)) continue;
+    out.push(row);
+  }
+
+  var sortEl = document.getElementById("sortDashboard");
+  var sortKey = sortEl ? sortEl.value : "rec";
+  out.sort(function (a, b) {
+    if (sortKey === "name") {
+      return String(a.retailer).localeCompare(String(b.retailer));
+    }
+    if (sortKey === "crawled") {
+      var ca = a.crawl ? new Date(a.crawl.crawledAt).getTime() : 0;
+      var cb = b.crawl ? new Date(b.crawl.crawledAt).getTime() : 0;
+      return cb - ca;
+    }
+    if (sortKey === "uploaded") {
+      var ua = a.upload ? new Date(a.upload.uploadedAt).getTime() : 0;
+      var ub = b.upload ? new Date(b.upload.uploadedAt).getTime() : 0;
+      return ub - ua;
+    }
+    if (sortKey === "urls") {
+      var na = a.crawl ? a.crawl.totalUrls : 0;
+      var nb = b.crawl ? b.crawl.totalUrls : 0;
+      return nb - na;
+    }
+    var ra = recommendationRank(a.recommendation);
+    var rb = recommendationRank(b.recommendation);
+    if (ra !== rb) return ra - rb;
+    return String(a.retailer).localeCompare(String(b.retailer));
+  });
+  return out;
+}
+
+function wireDashboardToolbar() {
+  if (dashboardToolbarWired) return;
+  dashboardToolbarWired = true;
+  var ids = ["dashboardSearch", "filterRecommendation", "filterPipeline", "sortDashboard"];
+  for (var i = 0; i < ids.length; i++) {
+    var el = document.getElementById(ids[i]);
+    if (!el) continue;
+    el.addEventListener("input", renderDashboard);
+    el.addEventListener("change", renderDashboard);
+  }
+}
+
+function renderDashboard() {
   var container = document.getElementById("configList");
+  if (!container) return;
 
-  Promise.all([
-    fetch("/api/configs").then(function (r) { return r.json(); }),
-    fetch("/api/product-urls").then(function (r) { return r.json(); }).catch(function () { return []; }),
-  ]).then(function (results) {
-    var configs = results[0];
-    var urlSummaries = results[1];
-
-    var urlMap = {};
-    for (var u = 0; u < urlSummaries.length; u++) {
-      urlMap[urlSummaries[u].retailer] = urlSummaries[u];
-    }
-
-    if (configs.length === 0) {
-      container.innerHTML = '<div class="empty-state">No configs generated yet.</div>';
-      var crawlAllBtn = document.getElementById("crawlAllRecommendedBtn");
-      var uploadAllBtn = document.getElementById("uploadAllProductUrlsBtn");
-      if (crawlAllBtn) crawlAllBtn.disabled = true;
-      if (uploadAllBtn) uploadAllBtn.disabled = true;
-      return;
-    }
-    container.innerHTML = "";
-    var hasRecommended = false;
-    var hasAnyUrls = false;
-    for (var i = 0; i < configs.length; i++) {
-      var entry = configs[i];
-      var rec = (entry.config && entry.config.dataQuality && entry.config.dataQuality.overallRecommendation) || "unknown";
-      if (rec === "recommended") hasRecommended = true;
-      var method = (entry.config && entry.config.discovery && entry.config.discovery.method) || "unknown";
-      var badgeClass = rec === "recommended" ? "badge-recommended"
-        : rec === "usable" ? "badge-usable" : "badge-not-recommended";
-
-      var hasUrls = !!urlMap[entry.retailer];
-      if (hasUrls) hasAnyUrls = true;
-      var urlCount = hasUrls ? urlMap[entry.retailer].totalUrls : 0;
-      var crawlLabel = hasUrls ? "Re-crawl URLs" : "Crawl URLs";
-      var baseUrl = (entry.config && entry.config.baseUrl) || "";
-      var siteLink = baseUrl
-        ? '<a href="' + escHtml(baseUrl) + '" target="_blank" rel="noopener" class="config-site-link" title="Visit website">\u2197</a>'
-        : "";
-
-      var div = document.createElement("div");
-      div.className = "config-entry";
-      div.setAttribute("data-retailer", entry.retailer);
-      div.innerHTML =
-        '<div class="config-header">' +
-          '<span class="config-name">' + escHtml(entry.retailer) + '</span>' + siteLink +
-          '<span class="badge ' + badgeClass + '">' + escHtml(rec) + '</span>' +
-          '<span class="method-tag">' + escHtml(method) + '</span>' +
-          (hasUrls ? '<span class="method-tag">' + urlCount + ' URLs</span>' : '') +
-          '<button class="btn-primary btn-small crawl-btn" data-retailer="' + escHtml(entry.retailer) + '">' + crawlLabel + '</button>' +
-          (hasUrls ? '<button class="btn-primary btn-small upload-btn" data-retailer="' + escHtml(entry.retailer) + '">Upload</button>' : '') +
-        '</div>' +
-        '<div class="crawl-status" data-crawl-status="' + escHtml(entry.retailer) + '">' +
-          '<span class="crawl-progress-text"></span>' +
-          '<div class="crawl-log"></div>' +
-        '</div>' +
-        '<div class="config-body">' +
-          '<div class="config-json" style="position:relative">' +
-            '<button class="btn-primary btn-small copy-btn">Copy JSON</button>' +
-            '<pre style="margin:0">' + escHtml(JSON.stringify(entry.config, null, 2)) + '</pre>' +
-          '</div>' +
-        '</div>' +
-        '<div class="product-urls-panel" data-urls-panel="' + escHtml(entry.retailer) + '"></div>';
-
-      (function (el, retailer) {
-        el.querySelector(".config-header").onclick = function (e) {
-          if (e.target.classList.contains("crawl-btn") || e.target.classList.contains("upload-btn") || e.target.classList.contains("config-site-link")) return;
-          el.querySelector(".config-body").classList.toggle("open");
-        };
-        el.querySelector(".copy-btn").onclick = function (e) {
-          e.stopPropagation();
-          copyJson(el);
-        };
-        el.querySelector(".crawl-btn").onclick = function (e) {
-          e.stopPropagation();
-          startCrawl(retailer);
-        };
-        var uploadBtn = el.querySelector(".upload-btn");
-        if (uploadBtn) {
-          uploadBtn.onclick = function (e) {
-            e.stopPropagation();
-            startUpload(retailer);
-          };
-        }
-      })(div, entry.retailer);
-
-      container.appendChild(div);
-
-      if (hasUrls) {
-        loadProductUrlsForRetailer(entry.retailer);
-      }
-    }
-    var crawlAllBtn = document.getElementById("crawlAllRecommendedBtn");
-    var uploadAllBtn = document.getElementById("uploadAllProductUrlsBtn");
-    if (crawlAllBtn) crawlAllBtn.disabled = !hasRecommended;
-    if (uploadAllBtn) uploadAllBtn.disabled = !hasAnyUrls;
-  }).catch(function (err) {
-    console.error("[loadConfigs] Error:", err);
-    container.innerHTML = '<div class="empty-state">Could not load configs.</div>';
+  if (overviewRetailers.length === 0) {
+    container.innerHTML = '<div class="empty-state">No configs generated yet.</div>';
     var crawlAllBtn = document.getElementById("crawlAllRecommendedBtn");
     var uploadAllBtn = document.getElementById("uploadAllProductUrlsBtn");
     if (crawlAllBtn) crawlAllBtn.disabled = true;
     if (uploadAllBtn) uploadAllBtn.disabled = true;
-  });
+    return;
+  }
+
+  var rows = getFilteredSortedRetailers();
+  container.innerHTML = "";
+
+  var hasRecommendedGlobal = false;
+  var hasAnyUrlsGlobal = false;
+  for (var g = 0; g < overviewRetailers.length; g++) {
+    var gr = overviewRetailers[g];
+    if (gr.recommendation === "recommended") hasRecommendedGlobal = true;
+    if (gr.crawl && gr.crawl.totalUrls > 0) hasAnyUrlsGlobal = true;
+  }
+
+  for (var i = 0; i < rows.length; i++) {
+    var entry = rows[i];
+    var cfg = entry.config;
+    var rec = entry.recommendation || "unknown";
+    var method = (cfg && cfg.discovery && cfg.discovery.method) || "unknown";
+    var badgeClass = rec === "recommended" ? "badge-recommended"
+      : rec === "usable" ? "badge-usable" : "badge-not-recommended";
+
+    var hasUrls = !!(entry.crawl && entry.crawl.totalUrls > 0);
+    var urlCount = hasUrls ? entry.crawl.totalUrls : 0;
+    var crawlLabel = hasUrls ? "Re-crawl URLs" : "Crawl URLs";
+    var baseUrl = (cfg && cfg.baseUrl) || "";
+    var siteLink = baseUrl
+      ? '<a href="' + escHtml(baseUrl) + '" target="_blank" rel="noopener" class="config-site-link" title="Visit website">\u2197</a>'
+      : "";
+
+    var uploadPill = "";
+    if (hasUrls && entry.uploadMatchesCurrentCrawl) {
+      uploadPill = '<span class="status-pill done" title="Upload done for this crawl snapshot">Uploaded</span>';
+    } else if (hasUrls && entry.upload && !entry.uploadMatchesCurrentCrawl) {
+      uploadPill = '<span class="status-pill" title="Re-crawl changed URLs; upload again">Upload stale</span>';
+    }
+
+    var div = document.createElement("div");
+    div.className = "config-entry";
+    div.setAttribute("data-retailer", entry.retailer);
+    div.innerHTML =
+      '<div class="config-header">' +
+        '<span class="config-name">' + escHtml(entry.retailer) + '</span>' + siteLink +
+        '<span class="badge ' + badgeClass + '">' + escHtml(rec) + '</span>' +
+        '<span class="method-tag">' + escHtml(method) + '</span>' +
+        (hasUrls ? '<span class="method-tag">' + urlCount + ' URLs</span>' : '') +
+        uploadPill +
+        '<button class="btn-primary btn-small crawl-btn" data-retailer="' + escHtml(entry.retailer) + '">' + crawlLabel + '</button>' +
+        (hasUrls ? '<button class="btn-primary btn-small upload-btn" data-retailer="' + escHtml(entry.retailer) + '">Upload</button>' : '') +
+      '</div>' +
+      '<div class="crawl-status" data-crawl-status="' + escHtml(entry.retailer) + '">' +
+        '<span class="crawl-progress-text"></span>' +
+        '<div class="crawl-log"></div>' +
+      '</div>' +
+      '<div class="config-body">' +
+        '<div class="config-json" style="position:relative">' +
+          '<button class="btn-primary btn-small copy-btn">Copy JSON</button>' +
+          '<pre style="margin:0">' + escHtml(JSON.stringify(cfg, null, 2)) + '</pre>' +
+        '</div>' +
+      '</div>' +
+      '<div class="product-urls-panel" data-urls-panel="' + escHtml(entry.retailer) + '"></div>';
+
+    (function (el, retailer) {
+      el.querySelector(".config-header").onclick = function (e) {
+        if (e.target.classList.contains("crawl-btn") || e.target.classList.contains("upload-btn") || e.target.classList.contains("config-site-link")) return;
+        el.querySelector(".config-body").classList.toggle("open");
+      };
+      el.querySelector(".copy-btn").onclick = function (e) {
+        e.stopPropagation();
+        copyJson(el);
+      };
+      el.querySelector(".crawl-btn").onclick = function (e) {
+        e.stopPropagation();
+        startCrawl(retailer);
+      };
+      var uploadBtn = el.querySelector(".upload-btn");
+      if (uploadBtn) {
+        uploadBtn.onclick = function (e) {
+          e.stopPropagation();
+          startUpload(retailer);
+        };
+      }
+    })(div, entry.retailer);
+
+    container.appendChild(div);
+
+    if (hasUrls) {
+      loadProductUrlsForRetailer(entry.retailer);
+    }
+  }
+
+  if (rows.length === 0) {
+    container.innerHTML = '<div class="empty-state">No retailers match the current filters.</div>';
+  }
+
+  var crawlAllBtn = document.getElementById("crawlAllRecommendedBtn");
+  var uploadAllBtn = document.getElementById("uploadAllProductUrlsBtn");
+  if (crawlAllBtn) crawlAllBtn.disabled = !hasRecommendedGlobal;
+  if (uploadAllBtn) uploadAllBtn.disabled = !hasAnyUrlsGlobal;
+
+  var hint = document.getElementById("dashboardBulkHint");
+  if (hint) {
+    hint.textContent = "Showing " + rows.length + " of " + overviewRetailers.length + " retailer(s). Bulk actions use the same filters + checkboxes below.";
+  }
+}
+
+function loadOverview() {
+  var container = document.getElementById("configList");
+  fetch("/api/retailers-overview")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      overviewRetailers = data.retailers || [];
+      wireDashboardToolbar();
+      renderDashboard();
+    })
+    .catch(function (err) {
+      console.error("[loadOverview] Error:", err);
+      container.innerHTML = '<div class="empty-state">Could not load configs.</div>';
+      var crawlAllBtn = document.getElementById("crawlAllRecommendedBtn");
+      var uploadAllBtn = document.getElementById("uploadAllProductUrlsBtn");
+      if (crawlAllBtn) crawlAllBtn.disabled = true;
+      if (uploadAllBtn) uploadAllBtn.disabled = true;
+    });
 }
 
 // ── Crawl all recommended retailers in parallel ────────────────────────
 function crawlAllRecommended() {
-  var entries = document.querySelectorAll(".config-entry");
+  var includeCrawled = document.getElementById("crawlIncludeCrawled") && document.getElementById("crawlIncludeCrawled").checked;
+  var rows = getFilteredSortedRetailers();
   var recommended = [];
-  for (var i = 0; i < entries.length; i++) {
-    var badge = entries[i].querySelector(".badge-recommended");
-    if (badge) {
-      var retailer = entries[i].getAttribute("data-retailer");
-      if (retailer && !crawlingRetailers[retailer]) recommended.push(retailer);
+  var skipped = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (r.recommendation !== "recommended") continue;
+    if (!includeCrawled && r.crawl && r.crawl.totalUrls > 0) {
+      skipped++;
+      continue;
     }
+    if (r.retailer && !crawlingRetailers[r.retailer]) recommended.push(r.retailer);
   }
   if (recommended.length === 0) {
-    showStatus("No recommended configs to crawl (or all already crawling).", "info", 4000);
+    showStatus("No recommended configs to crawl for current filters (or all already crawling). " + (skipped ? "(" + skipped + " skipped: already crawled)" : ""), "info", 5000);
     return;
   }
   var btn = document.getElementById("crawlAllRecommendedBtn");
   if (btn) btn.disabled = true;
 
+  var hint = document.getElementById("dashboardBulkHint");
+  if (hint) {
+    hint.textContent = "Crawling " + recommended.length + " retailer(s)" + (skipped ? "; skipped " + skipped + " already crawled" : "") + ".";
+  }
+
   var completed = 0;
   var total = recommended.length;
   function onOneComplete() {
     completed++;
-    if (completed >= total && btn) btn.disabled = false;
+    if (completed >= total) {
+      if (btn) btn.disabled = false;
+      if (hint) {
+        hint.textContent = "Showing " + getFilteredSortedRetailers().length + " of " + overviewRetailers.length + " retailer(s). Bulk actions use the same filters + checkboxes below.";
+      }
+    }
   }
 
   for (var j = 0; j < recommended.length; j++) {
@@ -1171,7 +1378,11 @@ function startCrawl(retailer, onComplete) {
   crawlingRetailers[retailer] = true;
 
   var entry = document.querySelector('[data-retailer="' + retailer + '"]');
-  if (!entry) return;
+  if (!entry) {
+    crawlingRetailers[retailer] = false;
+    if (typeof onComplete === "function") onComplete();
+    return;
+  }
 
   var btn = entry.querySelector(".crawl-btn");
   btn.disabled = true;
@@ -1208,26 +1419,7 @@ function startCrawl(retailer, onComplete) {
           } else {
             progressText.textContent = "Done \u2014 " + (msg.totalUrls || 0) + " product URLs found";
             btn.textContent = "Re-crawl URLs";
-            loadProductUrlsForRetailer(retailer);
-
-            var countSpans = entry.querySelectorAll(".method-tag");
-            var urlSpan = null;
-            for (var s = 0; s < countSpans.length; s++) {
-              if (/\d+ URLs/.test(countSpans[s].textContent)) {
-                urlSpan = countSpans[s];
-                break;
-              }
-            }
-            if (msg.totalUrls > 0) {
-              if (urlSpan) {
-                urlSpan.textContent = msg.totalUrls + " URLs";
-              } else {
-                var newSpan = document.createElement("span");
-                newSpan.className = "method-tag";
-                newSpan.textContent = msg.totalUrls + " URLs";
-                entry.querySelector(".config-header").insertBefore(newSpan, btn);
-              }
-            }
+            loadOverview();
           }
 
           setTimeout(function () {
@@ -1257,27 +1449,41 @@ function startCrawl(retailer, onComplete) {
 
 // ── Upload all product URLs in parallel ──────────────────────────────────
 function uploadAllProductUrls() {
-  var entries = document.querySelectorAll(".config-entry");
+  var includeUploaded = document.getElementById("uploadIncludeUploaded") && document.getElementById("uploadIncludeUploaded").checked;
+  var rows = getFilteredSortedRetailers();
   var withUrls = [];
-  for (var i = 0; i < entries.length; i++) {
-    var uploadBtn = entries[i].querySelector(".upload-btn");
-    if (uploadBtn) {
-      var retailer = entries[i].getAttribute("data-retailer");
-      if (retailer && !uploadingRetailers[retailer]) withUrls.push(retailer);
+  var skipped = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r.crawl || !r.crawl.totalUrls) continue;
+    if (!includeUploaded && r.uploadMatchesCurrentCrawl) {
+      skipped++;
+      continue;
     }
+    if (r.retailer && !uploadingRetailers[r.retailer]) withUrls.push(r.retailer);
   }
   if (withUrls.length === 0) {
-    showStatus("No configs with product URLs to upload (or all already uploading).", "info", 4000);
+    showStatus("No retailers need upload for current filters (or all already uploading). " + (skipped ? "(" + skipped + " skipped: already uploaded for this crawl)" : ""), "info", 5000);
     return;
   }
   var btn = document.getElementById("uploadAllProductUrlsBtn");
   if (btn) btn.disabled = true;
 
+  var hint = document.getElementById("dashboardBulkHint");
+  if (hint) {
+    hint.textContent = "Uploading " + withUrls.length + " retailer(s)" + (skipped ? "; skipped " + skipped + " already done" : "") + ".";
+  }
+
   var completed = 0;
   var total = withUrls.length;
   function onOneComplete() {
     completed++;
-    if (completed >= total && btn) btn.disabled = false;
+    if (completed >= total) {
+      if (btn) btn.disabled = false;
+      if (hint) {
+        hint.textContent = "Showing " + getFilteredSortedRetailers().length + " of " + overviewRetailers.length + " retailer(s). Bulk actions use the same filters + checkboxes below.";
+      }
+    }
   }
 
   for (var j = 0; j < withUrls.length; j++) {
@@ -1291,7 +1497,11 @@ function startUpload(retailer, onComplete) {
   uploadingRetailers[retailer] = true;
 
   var entry = document.querySelector('[data-retailer="' + retailer + '"]');
-  if (!entry) return;
+  if (!entry) {
+    uploadingRetailers[retailer] = false;
+    if (typeof onComplete === "function") onComplete();
+    return;
+  }
 
   var btn = entry.querySelector(".upload-btn");
   btn.disabled = true;
@@ -1327,6 +1537,7 @@ function startUpload(retailer, onComplete) {
             progressText.textContent = "Upload failed: " + msg.error;
           } else {
             progressText.textContent = "Done \u2014 " + (msg.uploaded || 0) + " uploaded, " + (msg.skipped || 0) + " skipped, " + (msg.failed || 0) + " failed";
+            loadOverview();
           }
 
           setTimeout(function () {
@@ -1475,7 +1686,7 @@ document.getElementById("historyModalClose").addEventListener("click", hideHisto
 document.getElementById("historyModalBackdrop").addEventListener("click", hideHistoryModal);
 
 // ── Initial load ────────────────────────────────────────────────────────
-loadConfigs();
+loadOverview();
 e2eTryResume();
 discoverTryResume();
 console.log("[init] UI ready");

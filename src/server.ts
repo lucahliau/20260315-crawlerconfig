@@ -9,6 +9,7 @@ import { crawlProductUrls, type CrawlResult } from "./crawl.js";
 import { uploadRetailer, type UploadResult } from "./upload.js";
 import { discoverBrands, syncConfigsToMasterList, type DiscoveredBrand } from "./discoverBrands.js";
 import { writeJsonAtomic } from "./jsonFs.js";
+import { retailerSlugFromUrl } from "./retailerSlug.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -18,6 +19,7 @@ app.use(express.json());
 const PORT = parseInt(process.env.PORT ?? "3456", 10);
 const CONFIGS_DIR = process.env.CONFIGS_DIR ?? path.join(process.cwd(), "configs");
 const PRODUCT_URLS_DIR = process.env.PRODUCT_URLS_DIR ?? path.join(process.cwd(), "product-urls");
+const UPLOAD_STATUS_DIR = process.env.UPLOAD_STATUS_DIR ?? path.join(process.cwd(), "upload-status");
 const DISCOVERED_BRANDS_PATH =
   process.env.DISCOVERED_BRANDS_PATH ?? path.join(process.cwd(), "discovered-brands.json");
 const JOB_LOGS_DIR = process.env.JOB_LOGS_DIR ?? path.join(process.cwd(), "logs");
@@ -92,7 +94,13 @@ function pushEvent(jobId: string, event: Record<string, unknown>) {
   }
 }
 
-async function processJob(job: Job) {
+async function processJob(job: Job, skippedUrls?: string[]) {
+  if (skippedUrls && skippedUrls.length > 0) {
+    pushLog(
+      job.id,
+      `Skipped ${skippedUrls.length} URL(s) with existing configs:\n${skippedUrls.join("\n")}\n`,
+    );
+  }
   for (let i = 0; i < job.urls.length; i++) {
     // Add a cooldown between URLs to avoid stacking rate limit usage
     if (i > 0 && INTER_URL_DELAY_MS > 0) {
@@ -162,7 +170,7 @@ function cleanUrl(raw: string): string | null {
 }
 
 app.post("/api/explore", (req, res) => {
-  const { urls } = req.body as { urls?: string[] };
+  const { urls, skipExisting } = req.body as { urls?: string[]; skipExisting?: boolean };
   if (!urls || !Array.isArray(urls) || urls.length === 0) {
     res.status(400).json({ error: "Provide a non-empty urls array." });
     return;
@@ -185,10 +193,33 @@ app.post("/api/explore", (req, res) => {
     return;
   }
 
+  const shouldSkipExisting = skipExisting !== false;
+  fs.mkdirSync(CONFIGS_DIR, { recursive: true });
+  const skippedUrls: string[] = [];
+  const toExplore: string[] = [];
+  for (const url of cleanedUrls) {
+    if (shouldSkipExisting) {
+      const slug = retailerSlugFromUrl(url);
+      if (fs.existsSync(path.join(CONFIGS_DIR, `${slug}.json`))) {
+        skippedUrls.push(url);
+        continue;
+      }
+    }
+    toExplore.push(url);
+  }
+
+  if (toExplore.length === 0) {
+    res.status(400).json({
+      error: "All URLs already have config files. Clear skip or remove configs to re-explore.",
+      skippedUrls,
+    });
+    return;
+  }
+
   const id = crypto.randomUUID();
   const job: Job = {
     id,
-    urls: cleanedUrls,
+    urls: toExplore,
     current: 0,
     status: "running",
     logs: [],
@@ -196,13 +227,13 @@ app.post("/api/explore", (req, res) => {
   };
   jobs.set(id, job);
 
-  processJob(job).catch((err) => {
+  processJob(job, skippedUrls.length > 0 ? skippedUrls : undefined).catch((err) => {
     job.status = "error";
     job.error = (err as Error).message;
     console.error(`[processJob job=${job.id}] Error:`, err);
   });
 
-  res.json({ jobId: id });
+  res.json({ jobId: id, skippedUrls, skippedCount: skippedUrls.length });
 });
 
 app.post("/api/discover-brands", (req, res) => {
@@ -689,6 +720,81 @@ app.get("/api/discovered-brands", (_req, res) => {
   }
 });
 
+app.get("/api/retailers-overview", (_req, res) => {
+  try {
+    fs.mkdirSync(CONFIGS_DIR, { recursive: true });
+    const files = fs.readdirSync(CONFIGS_DIR).filter((f) => f.endsWith(".json"));
+
+    const retailers = files.map((filename) => {
+      const fromFile = filename.replace(/\.json$/, "");
+      const raw = fs.readFileSync(path.join(CONFIGS_DIR, filename), "utf-8");
+      let config: Record<string, unknown> | null = null;
+      try {
+        config = JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+      const retailer = (typeof config.retailer === "string" ? config.retailer : null) ?? fromFile;
+      const dq = config.dataQuality as { overallRecommendation?: string } | undefined;
+      const recommendation = dq?.overallRecommendation ?? "unknown";
+
+      let crawl: { totalUrls: number; crawledAt: string; method: string } | null = null;
+      const puPath = path.join(PRODUCT_URLS_DIR, `${retailer}.json`);
+      if (fs.existsSync(puPath)) {
+        try {
+          const pu = JSON.parse(fs.readFileSync(puPath, "utf-8")) as CrawlResult;
+          crawl = {
+            totalUrls: pu.totalUrls,
+            crawledAt: pu.crawledAt,
+            method: pu.method,
+          };
+        } catch {
+          // ignore
+        }
+      }
+
+      let upload: {
+        retailer: string;
+        uploadedAt: string;
+        uploaded: number;
+        skipped: number;
+        failed: number;
+        total: number;
+        crawlSourceCrawledAt: string;
+      } | null = null;
+      const upPath = path.join(UPLOAD_STATUS_DIR, `${retailer}.json`);
+      if (fs.existsSync(upPath)) {
+        try {
+          upload = JSON.parse(fs.readFileSync(upPath, "utf-8"));
+        } catch {
+          // ignore
+        }
+      }
+
+      const uploadMatchesCurrentCrawl = !!(
+        crawl &&
+        upload &&
+        upload.crawlSourceCrawledAt === crawl.crawledAt
+      );
+
+      return {
+        retailer,
+        filename,
+        config,
+        recommendation,
+        crawl,
+        upload,
+        uploadMatchesCurrentCrawl,
+      };
+    }).filter((x): x is NonNullable<typeof x> => x != null);
+
+    res.json({ retailers });
+  } catch (err) {
+    console.error("[api/retailers-overview] Error:", err);
+    res.status(500).json({ error: "Failed to load retailers overview." });
+  }
+});
+
 app.get("/api/configs", (_req, res) => {
   try {
     fs.mkdirSync(CONFIGS_DIR, { recursive: true });
@@ -898,6 +1004,17 @@ app.post("/api/upload/:retailer", (req, res) => {
 
       job.results.push(result as unknown as Record<string, unknown>);
       job.status = "done";
+
+      writeJsonAtomic(path.join(UPLOAD_STATUS_DIR, `${retailer}.json`), {
+        retailer,
+        uploadedAt: result.uploadedAt,
+        uploaded: result.uploaded,
+        skipped: result.skipped,
+        failed: result.failed,
+        total: result.total,
+        crawlSourceCrawledAt: urlsData.crawledAt,
+      });
+
       pushEvent(job.id, {
         type: "done",
         uploaded: result.uploaded,
