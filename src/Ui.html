@@ -384,6 +384,39 @@
   .discover-brands-list .brand-name { font-weight: 500; color: var(--text); }
   .discover-add-row { margin-top: 0.5rem; }
 
+  .claude-response-panel {
+    margin-top: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.35rem 0.5rem;
+    background: var(--json-bg);
+    font-size: 0.8rem;
+  }
+  .claude-response-panel summary {
+    cursor: pointer;
+    font-weight: 500;
+    color: var(--text);
+    user-select: none;
+  }
+  .claude-response-panel summary:hover { color: var(--accent); }
+  .claude-response-pre {
+    margin: 0.5rem 0 0;
+    padding: 0.5rem;
+    max-height: 320px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.72rem;
+    line-height: 1.45;
+    background: var(--log-bg);
+    color: var(--log-text);
+    border-radius: calc(var(--radius) - 2px);
+  }
+  .e2e-section .claude-response-panel {
+    margin-top: 0.75rem;
+  }
+
   .app-header {
     display: flex; align-items: center; justify-content: space-between;
     margin-bottom: 0.75rem;
@@ -508,6 +541,10 @@
       <div class="e2e-progress-bar-fill" id="e2eProgressFill" style="width: 0%"></div>
     </div>
     <div class="e2e-meta" id="e2eMeta">0% complete</div>
+    <details class="claude-response-panel" id="e2eClaudePanel" hidden>
+      <summary>Claude response (15–20 brand search)</summary>
+      <pre class="claude-response-pre" id="e2eClaudePre"></pre>
+    </details>
   </div>
 </section>
 
@@ -521,6 +558,10 @@
   <div class="discover-progress-bar" id="discoverProgressBar"></div>
   <div class="discover-output" id="discoverOutput">
     <span class="discover-status" id="discoverStatus"></span>
+    <details class="claude-response-panel" id="discoverClaudePanel" hidden>
+      <summary>Claude response (15–20 brand search)</summary>
+      <pre class="claude-response-pre" id="discoverClaudePre"></pre>
+    </details>
     <div class="discover-log" id="discoverLog"></div>
     <div class="discover-brands-list" id="discoverBrandsList"></div>
     <div class="discover-add-row">
@@ -876,6 +917,15 @@ var DISCOVER_JOB_KEY = "discoverJobId";
 var lastDiscoveredBrands = [];
 var discoverRunning = false;
 
+/** prefix: "discover" | "e2e" — element ids {prefix}ClaudePanel / {prefix}ClaudePre */
+function fillClaudeDiscoverPanel(prefix, body) {
+  var pre = document.getElementById(prefix + "ClaudePre");
+  var panel = document.getElementById(prefix + "ClaudePanel");
+  var text = typeof body === "string" ? body : "";
+  if (pre) pre.textContent = text;
+  if (panel) panel.hidden = !text;
+}
+
 function discoverConnectToJob(jobId) {
   discoverRunning = true;
 
@@ -902,6 +952,8 @@ function discoverConnectToJob(jobId) {
     if (msg.type === "log") {
       discoverLog.textContent += msg.msg + "\n";
       discoverLog.scrollTop = discoverLog.scrollHeight;
+    } else if (msg.type === "claude-response" && msg.phase === "discover" && msg.body != null) {
+      fillClaudeDiscoverPanel("discover", msg.body);
     } else if (msg.type === "progress" && msg.message) {
       discoverStatus.textContent = msg.message;
     } else if (msg.type === "brands" && msg.brands) {
@@ -977,6 +1029,7 @@ function runDiscover() {
   discoverOutput.classList.add("active");
   discoverLog.textContent = "";
   discoverLog.classList.add("active");
+  fillClaudeDiscoverPanel("discover", "");
   document.getElementById("discoverBrandsList").innerHTML = "";
   document.getElementById("discoverAddToQueueBtn").style.display = "none";
 
@@ -1050,6 +1103,8 @@ function e2eConnectToJob(jobId) {
     if (msg.type === "log") {
       logArea.textContent += msg.msg + "\n";
       logArea.scrollTop = logArea.scrollHeight;
+    } else if (msg.type === "claude-response" && msg.phase === "discover" && msg.body != null) {
+      fillClaudeDiscoverPanel("e2e", msg.body);
     } else if (msg.type === "e2e-progress") {
       updateE2eStatus(msg);
     } else if (msg.type === "done") {
@@ -1111,6 +1166,7 @@ function runE2e() {
   e2eStatus.classList.add("active");
   progressSection.style.display = "";
   logArea.textContent = "";
+  fillClaudeDiscoverPanel("e2e", "");
   e2eLastStatus = {};
 
   updateE2eStatus({

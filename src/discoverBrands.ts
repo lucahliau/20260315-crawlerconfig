@@ -172,6 +172,8 @@ export function syncConfigsToMasterList(configsDir: string): void {
 
 export async function discoverBrands(
   onProgress: (msg: string) => void,
+  /** Fired once with the concatenated Claude text blocks (for SSE / collapsible UI). */
+  onClaudeResponse?: (fullText: string) => void,
 ): Promise<{ brands: DiscoveredBrand[]; usage: Usage; estimatedUsd: number }> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey || !apiKey.trim()) {
@@ -224,7 +226,9 @@ Search the web, then respond with ONLY the JSON object as shown above.`;
     .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
     .map((b, i) => `--- text block ${i} ---\n${b.text}`)
     .join("\n\n");
-  onProgress("Full Claude response:\n" + (allTextBlocks || "(no text blocks)"));
+  const responseForUi = allTextBlocks || "(no text blocks)";
+  onClaudeResponse?.(responseForUi);
+  onProgress("Claude response received (" + response.content.filter((b) => b.type === "text").length + " text block(s)). Expand the panel below to read the full message.");
 
   const result = extractBrandsFromResponse(response.content);
 

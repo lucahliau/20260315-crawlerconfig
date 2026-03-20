@@ -43,6 +43,8 @@ interface Job {
   error?: string;
   discoveredBrands?: DiscoveredBrand[];
   e2eProgress?: Record<string, unknown>;
+  /** Latest niche-brand discovery Claude text (for SSE replay). */
+  claudeDiscoverResponse?: string;
 }
 
 const jobs = new Map<string, Job>();
@@ -91,6 +93,21 @@ function pushEvent(jobId: string, event: Record<string, unknown>) {
   const clients = sseClients.get(jobId);
   if (clients) {
     const data = `data: ${JSON.stringify(event)}\n\n`;
+    for (const res of clients) res.write(data);
+  }
+}
+
+/** Full Claude text from niche-brand discovery — stored for SSE replay + collapsible UI. */
+function pushClaudeDiscoverResponse(jobId: string, body: string) {
+  const job = jobs.get(jobId);
+  if (job) {
+    job.claudeDiscoverResponse = body;
+  }
+  appendJobNdjson(jobId, { type: "claude-response", phase: "discover", body });
+  const payload = { type: "claude-response" as const, phase: "discover" as const, body };
+  const clients = sseClients.get(jobId);
+  if (clients) {
+    const data = `data: ${JSON.stringify(payload)}\n\n`;
     for (const res of clients) res.write(data);
   }
 }
@@ -258,10 +275,13 @@ app.post("/api/discover-brands", (req, res) => {
 
   (async () => {
     try {
-      const result = await discoverBrands((msg) => {
-        pushLog(job.id, msg);
-        pushEvent(job.id, { type: "progress", message: msg });
-      });
+      const result = await discoverBrands(
+        (msg) => {
+          pushLog(job.id, msg);
+          pushEvent(job.id, { type: "progress", message: msg });
+        },
+        (text) => pushClaudeDiscoverResponse(job.id, text),
+      );
       recordDiscoverUsage({
         estimatedUsd: result.estimatedUsd,
         inputTokens: result.usage.input_tokens,
@@ -370,7 +390,10 @@ async function runE2EOrchestrator(jobId: string) {
     pushProgress({ step: 1, stepLabel: "Discovering brands", percentComplete: 5 });
     pushLog(jobId, "\n========== Step 1: Discovering brands (Claude search) ==========\n");
 
-    const discoverResult = await discoverBrands((msg) => pushLog(jobId, msg));
+    const discoverResult = await discoverBrands(
+      (msg) => pushLog(jobId, msg),
+      (text) => pushClaudeDiscoverResponse(jobId, text),
+    );
     recordDiscoverUsage({
       estimatedUsd: discoverResult.estimatedUsd,
       inputTokens: discoverResult.usage.input_tokens,
@@ -713,6 +736,16 @@ app.get("/api/progress/:jobId", (req, res) => {
   // Replay last e2e-progress for late-joining clients
   if (job.e2eProgress) {
     res.write(`data: ${JSON.stringify(job.e2eProgress)}\n\n`);
+  }
+
+  if (job.claudeDiscoverResponse) {
+    res.write(
+      `data: ${JSON.stringify({
+        type: "claude-response",
+        phase: "discover",
+        body: job.claudeDiscoverResponse,
+      })}\n\n`,
+    );
   }
 
   if (job.status === "done") {
