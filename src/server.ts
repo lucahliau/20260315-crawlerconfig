@@ -8,6 +8,7 @@ import { exploreRetailer } from "./explore.js";
 import { crawlProductUrls, type CrawlResult } from "./crawl.js";
 import { uploadRetailer, type UploadResult } from "./upload.js";
 import { discoverBrands, syncConfigsToMasterList, type DiscoveredBrand } from "./discoverBrands.js";
+import { writeJsonAtomic } from "./jsonFs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -19,6 +20,8 @@ const CONFIGS_DIR = process.env.CONFIGS_DIR ?? path.join(process.cwd(), "configs
 const PRODUCT_URLS_DIR = process.env.PRODUCT_URLS_DIR ?? path.join(process.cwd(), "product-urls");
 const DISCOVERED_BRANDS_PATH =
   process.env.DISCOVERED_BRANDS_PATH ?? path.join(process.cwd(), "discovered-brands.json");
+const JOB_LOGS_DIR = process.env.JOB_LOGS_DIR ?? path.join(process.cwd(), "logs");
+const JOB_LOG_MAX_LINES = parseInt(process.env.JOB_LOG_MAX_LINES ?? "5000", 10);
 
 // Delay between processing consecutive URLs (helps with rate limits)
 const INTER_URL_DELAY_MS = parseInt(process.env.INTER_URL_DELAY_MS ?? "5000", 10);
@@ -42,13 +45,37 @@ interface Job {
 const jobs = new Map<string, Job>();
 const sseClients = new Map<string, Set<express.Response>>();
 
-function pushLog(jobId: string, msg: string) {
+function appendJobNdjson(jobId: string, payload: Record<string, unknown>) {
+  try {
+    fs.mkdirSync(JOB_LOGS_DIR, { recursive: true });
+    fs.appendFileSync(
+      path.join(JOB_LOGS_DIR, `${jobId}.ndjson`),
+      JSON.stringify({ t: new Date().toISOString(), ...payload }) + "\n",
+      "utf-8",
+    );
+  } catch {
+    // ignore disk errors
+  }
+}
+
+/** @param err Optional error — stack is appended to the log line and NDJSON record */
+function pushLog(jobId: string, msg: string, err?: Error) {
+  let full = msg;
+  if (err) {
+    full += err.stack ? `\n${err.stack}` : `\n${String(err)}`;
+  }
   const job = jobs.get(jobId);
-  if (job) job.logs.push(msg);
+  if (job) {
+    job.logs.push(full);
+    if (job.logs.length > JOB_LOG_MAX_LINES) {
+      job.logs.splice(0, job.logs.length - JOB_LOG_MAX_LINES);
+    }
+  }
+  appendJobNdjson(jobId, { type: "log", msg: full });
 
   const clients = sseClients.get(jobId);
   if (clients) {
-    const data = `data: ${JSON.stringify({ type: "log", msg })}\n\n`;
+    const data = `data: ${JSON.stringify({ type: "log", msg: full })}\n\n`;
     for (const res of clients) res.write(data);
   }
 }
@@ -87,9 +114,9 @@ async function processJob(job: Job) {
       const config = await exploreRetailer(url, (msg) => pushLog(job.id, msg));
       job.results.push(config);
     } catch (err) {
-      const msg = (err as Error).message ?? String(err);
-      console.error(`[processJob] Error processing ${url}:`, err);
-      pushLog(job.id, `ERROR processing ${url}: ${msg}`);
+      const e = err instanceof Error ? err : new Error(String(err));
+      console.error(`[processJob job=${job.id}] Error processing ${url}:`, err);
+      pushLog(job.id, `ERROR processing ${url}: ${e.message}`, e);
     }
   }
 
@@ -172,7 +199,7 @@ app.post("/api/explore", (req, res) => {
   processJob(job).catch((err) => {
     job.status = "error";
     job.error = (err as Error).message;
-    console.error("[processJob] Error:", err);
+    console.error(`[processJob job=${job.id}] Error:`, err);
   });
 
   res.json({ jobId: id });
@@ -201,12 +228,12 @@ app.post("/api/discover-brands", (req, res) => {
       pushEvent(job.id, { type: "brands", brands: result.brands });
       pushEvent(job.id, { type: "done", brands: result.brands });
     } catch (err) {
-      const msg = (err as Error).message ?? String(err);
-      console.error("[discover-brands] Error:", err);
-      pushLog(job.id, `ERROR: ${msg}`);
+      const e = err instanceof Error ? err : new Error(String(err));
+      console.error(`[discover-brands job=${job.id}] Error:`, err);
+      pushLog(job.id, `ERROR: ${e.message}`, e);
       job.status = "error";
-      job.error = msg;
-      pushEvent(job.id, { type: "done", error: msg });
+      job.error = e.message;
+      pushEvent(job.id, { type: "done", error: e.message });
     }
 
     const clients = sseClients.get(job.id);
@@ -251,6 +278,8 @@ interface E2EProgress {
   productUrlsCrawled: number;
   uploadedTotal: number;
   uploadedSuccess: number;
+  retailersUploadComplete?: number;
+  retailersUploadTotal?: number;
   currentBrand?: string;
   percentComplete: number;
   etaSeconds?: number;
@@ -348,8 +377,8 @@ async function runE2EOrchestrator(jobId: string) {
         }
         pushLog(jobId, `  Config for ${brand.name}: ${rec ?? "unknown"}\n`);
       } catch (err) {
-        const msg = (err as Error).message ?? String(err);
-        pushLog(jobId, `  ERROR exploring ${brand.name}: ${msg}\n`);
+        const e = err instanceof Error ? err : new Error(String(err));
+        pushLog(jobId, `  ERROR exploring ${brand.name}: ${e.message}\n`, e);
       }
 
       if (i < brands.length - 1 && INTER_URL_DELAY_MS > 0) {
@@ -412,10 +441,7 @@ async function runE2EOrchestrator(jobId: string) {
           (msg) => pushLog(jobId, msg),
         );
         fs.mkdirSync(PRODUCT_URLS_DIR, { recursive: true });
-        fs.writeFileSync(
-          path.join(PRODUCT_URLS_DIR, `${retailer}.json`),
-          JSON.stringify(result, null, 2),
-        );
+        writeJsonAtomic(path.join(PRODUCT_URLS_DIR, `${retailer}.json`), result);
         productUrlsTotal += result.totalUrls;
         crawlResults.push({ retailer, config, urls: result.urls });
         pushEvent(jobId, {
@@ -435,7 +461,8 @@ async function runE2EOrchestrator(jobId: string) {
         });
         return result;
       } catch (err) {
-        pushLog(jobId, `Crawl failed for ${retailer}: ${(err as Error).message}\n`);
+        const e = err instanceof Error ? err : new Error(String(err));
+        pushLog(jobId, `Crawl failed for ${retailer}: ${e.message}\n`, e);
         return null;
       }
     });
@@ -472,9 +499,10 @@ async function runE2EOrchestrator(jobId: string) {
     });
     pushLog(jobId, "\n========== Step 4: Extracting & uploading (parallel) ==========\n");
 
-    const uploadState = { success: 0 };
+    const uploadState = { success: 0, retailersDone: 0 };
     const toUpload = crawlResults.filter((r) => r.urls.length > 0);
     const totalUrlsToUpload = toUpload.reduce((s, r) => s + r.urls.length, 0);
+    const nUpload = toUpload.length;
 
     await runWithConcurrencyLimit(toUpload, E2E_CONCURRENCY, async ({ retailer, config, urls }) => {
       try {
@@ -482,27 +510,9 @@ async function runE2EOrchestrator(jobId: string) {
           config as Parameters<typeof uploadRetailer>[0],
           urls,
           (msg) => pushLog(jobId, msg),
-          (progress) => {
-            pushEvent(jobId, {
-              type: "e2e-progress",
-              step: 4,
-              stepLabel: "Extracting & uploading",
-              brandsDiscovered: brands.length,
-              configsTotal: brands.length,
-              configsSuccessful,
-              configsRecommended: recommendedConfigs.length,
-              productUrlsTotal,
-              productUrlsCrawled: totalCrawled,
-              uploadedTotal: totalUrlsToUpload,
-              uploadedSuccess: uploadState.success + progress.uploaded,
-              percentComplete: totalUrlsToUpload
-                ? 82 + Math.floor(((uploadState.success + progress.uploaded) / totalUrlsToUpload) * 18)
-                : 95,
-              startedAt,
-            });
-          },
         );
         uploadState.success += result.uploaded;
+        uploadState.retailersDone += 1;
         pushEvent(jobId, {
           type: "e2e-progress",
           step: 4,
@@ -515,12 +525,39 @@ async function runE2EOrchestrator(jobId: string) {
           productUrlsCrawled: totalCrawled,
           uploadedTotal: totalUrlsToUpload,
           uploadedSuccess: uploadState.success,
-          percentComplete: 95,
+          retailersUploadComplete: uploadState.retailersDone,
+          retailersUploadTotal: nUpload,
+          percentComplete:
+            totalUrlsToUpload > 0
+              ? 82 + Math.floor((uploadState.success / totalUrlsToUpload) * 18)
+              : 95,
           startedAt,
         });
         return result;
       } catch (err) {
-        pushLog(jobId, `Upload failed for ${retailer}: ${(err as Error).message}\n`);
+        const e = err instanceof Error ? err : new Error(String(err));
+        uploadState.retailersDone += 1;
+        pushLog(jobId, `Upload failed for ${retailer}: ${e.message}\n`, e);
+        pushEvent(jobId, {
+          type: "e2e-progress",
+          step: 4,
+          stepLabel: "Extracting & uploading",
+          brandsDiscovered: brands.length,
+          configsTotal: brands.length,
+          configsSuccessful,
+          configsRecommended: recommendedConfigs.length,
+          productUrlsTotal,
+          productUrlsCrawled: totalCrawled,
+          uploadedTotal: totalUrlsToUpload,
+          uploadedSuccess: uploadState.success,
+          retailersUploadComplete: uploadState.retailersDone,
+          retailersUploadTotal: nUpload,
+          percentComplete:
+            totalUrlsToUpload > 0
+              ? 82 + Math.floor((uploadState.success / totalUrlsToUpload) * 18)
+              : 95,
+          startedAt,
+        });
         return null;
       }
     });
@@ -541,12 +578,12 @@ async function runE2EOrchestrator(jobId: string) {
     });
     pushEvent(jobId, { type: "done" });
   } catch (err) {
-    const msg = (err as Error).message ?? String(err);
-    console.error("[run-e2e] Error:", err);
+    const e = err instanceof Error ? err : new Error(String(err));
+    console.error(`[run-e2e job=${jobId}] Error:`, err);
     job.status = "error";
-    job.error = msg;
-    pushLog(jobId, `ERROR: ${msg}`);
-    pushEvent(jobId, { type: "done", error: msg });
+    job.error = e.message;
+    pushLog(jobId, `ERROR: ${e.message}`, e);
+    pushEvent(jobId, { type: "done", error: e.message });
   }
 
   const clients = sseClients.get(jobId);
@@ -569,7 +606,7 @@ app.post("/api/run-e2e", (_req, res) => {
   jobs.set(id, job);
 
   runE2EOrchestrator(id).catch((err) => {
-    console.error("[run-e2e] Unhandled error:", err);
+    console.error(`[run-e2e job=${id}] Unhandled error:`, err);
     const job = jobs.get(id);
     if (job) {
       job.status = "error";
@@ -726,21 +763,18 @@ app.post("/api/crawl/:retailer", (req, res) => {
       );
 
       fs.mkdirSync(PRODUCT_URLS_DIR, { recursive: true });
-      fs.writeFileSync(
-        path.join(PRODUCT_URLS_DIR, `${retailer}.json`),
-        JSON.stringify(result, null, 2),
-      );
+      writeJsonAtomic(path.join(PRODUCT_URLS_DIR, `${retailer}.json`), result);
 
       job.results.push(result as unknown as Record<string, unknown>);
       job.status = "done";
       pushEvent(job.id, { type: "done", totalUrls: result.totalUrls });
     } catch (err) {
-      const msg = (err as Error).message ?? String(err);
-      console.error(`[crawl] Error crawling ${retailer}:`, err);
-      pushLog(job.id, `ERROR: ${msg}`);
+      const e = err instanceof Error ? err : new Error(String(err));
+      console.error(`[crawl job=${job.id}] Error crawling ${retailer}:`, err);
+      pushLog(job.id, `ERROR: ${e.message}`, e);
       job.status = "error";
-      job.error = msg;
-      pushEvent(job.id, { type: "done", error: msg });
+      job.error = e.message;
+      pushEvent(job.id, { type: "done", error: e.message });
     }
 
     const clients = sseClients.get(job.id);
@@ -872,12 +906,12 @@ app.post("/api/upload/:retailer", (req, res) => {
         total: result.total,
       });
     } catch (err) {
-      const msg = (err as Error).message ?? String(err);
-      console.error(`[upload] Error uploading ${retailer}:`, err);
-      pushLog(job.id, `ERROR: ${msg}`);
+      const e = err instanceof Error ? err : new Error(String(err));
+      console.error(`[upload job=${job.id}] Error uploading ${retailer}:`, err);
+      pushLog(job.id, `ERROR: ${e.message}`, e);
       job.status = "error";
-      job.error = msg;
-      pushEvent(job.id, { type: "done", error: msg });
+      job.error = e.message;
+      pushEvent(job.id, { type: "done", error: e.message });
     }
 
     const clients = sseClients.get(job.id);

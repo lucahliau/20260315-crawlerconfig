@@ -5,4 +5,6 @@ configs/*.json
 product-urls/*.json
 discovered-brands.json
 tmp/
+logs/
+exploration-artifacts/
 .DS_Store

@@ -1,5 +1,7 @@
+import path from "node:path";
 import { Stagehand } from "@browserbasehq/stagehand";
 import type { Config } from "./schemas/config.js";
+import { writeJsonAtomic } from "./jsonFs.js";
 
 const USER_AGENT =
   "CrawlerConfigBot/1.0 (product-url-discovery; +https://github.com/example/crawler-config)";
@@ -481,6 +483,36 @@ export interface CrawlResult {
   urls: string[];
 }
 
+/** Periodic atomic writes to `product-urls/<retailer>.partial.json` (env: CRAWL_CHECKPOINT_EVERY_N, CRAWL_CHECKPOINT_EVERY_MS). */
+function crawlCheckpointWriter(config: Config, urls: Set<string>): () => void {
+  const everyN = parseInt(process.env.CRAWL_CHECKPOINT_EVERY_N ?? "0", 10);
+  const everyMs = parseInt(process.env.CRAWL_CHECKPOINT_EVERY_MS ?? "0", 10);
+  const dir = process.env.PRODUCT_URLS_DIR ?? path.join(process.cwd(), "product-urls");
+  let lastWrittenCount = 0;
+  let lastWriteTime = Date.now();
+
+  return () => {
+    if (everyN <= 0 && everyMs <= 0) return;
+    const n = urls.size;
+    if (n === 0) return;
+    const now = Date.now();
+    const byN = everyN > 0 && n - lastWrittenCount >= everyN;
+    const byMs = everyMs > 0 && now - lastWriteTime >= everyMs && n > lastWrittenCount;
+    if (!byN && !byMs) return;
+    lastWrittenCount = n;
+    lastWriteTime = now;
+    const partial: CrawlResult = {
+      retailer: config.retailer,
+      crawledAt: new Date().toISOString(),
+      method: config.discovery.method,
+      totalUrls: n,
+      urls: Array.from(urls).sort(),
+    };
+    writeJsonAtomic(path.join(dir, `${config.retailer}.partial.json`), partial);
+    log(`  [checkpoint] ${n} URLs → product-urls/${config.retailer}.partial.json`);
+  };
+}
+
 export async function crawlProductUrls(
   config: Config,
   onLog?: (msg: string) => void,
@@ -489,7 +521,11 @@ export async function crawlProductUrls(
   if (onLog) _logFn = onLog;
 
   const urls = new Set<string>();
-  const progressCb = onProgress ?? (() => {});
+  const runCheckpoint = crawlCheckpointWriter(config, urls);
+  const progressCb = (count: number) => {
+    (onProgress ?? (() => {}))(count);
+    runCheckpoint();
+  };
 
   log(`\nStarting product URL crawl for ${config.retailerDisplayName}`);
   log(`Discovery method: ${config.discovery.method}`);

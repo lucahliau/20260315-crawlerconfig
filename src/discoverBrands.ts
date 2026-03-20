@@ -2,6 +2,7 @@ import "dotenv/config";
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import path from "node:path";
+import { writeJsonAtomic } from "./jsonFs.js";
 
 const DISCOVERED_BRANDS_PATH =
   process.env.DISCOVERED_BRANDS_PATH ?? path.join(process.cwd(), "discovered-brands.json");
@@ -30,8 +31,25 @@ function loadMasterList(): MasterList {
 }
 
 function saveMasterList(list: MasterList): void {
-  fs.mkdirSync(path.dirname(DISCOVERED_BRANDS_PATH), { recursive: true });
-  fs.writeFileSync(DISCOVERED_BRANDS_PATH, JSON.stringify(list, null, 2));
+  writeJsonAtomic(DISCOVERED_BRANDS_PATH, list);
+}
+
+const masterQueue: Array<() => void> = [];
+let masterQueueFlushing = false;
+
+/** Serialize read–modify–write so concurrent add/save calls don't interleave. */
+function enqueueMaster(fn: () => void): void {
+  masterQueue.push(fn);
+  if (masterQueueFlushing) return;
+  masterQueueFlushing = true;
+  try {
+    while (masterQueue.length > 0) {
+      const f = masterQueue.shift()!;
+      f();
+    }
+  } finally {
+    masterQueueFlushing = false;
+  }
 }
 
 function extractJsonFromResponse(text: string): { brands: DiscoveredBrand[] } | null {
@@ -114,17 +132,19 @@ function normalizeUrl(raw: string): string | null {
 }
 
 export function addToMasterList(url: string, name?: string): void {
-  const normalized = normalizeUrl(url);
-  if (!normalized) return;
-  const master = loadMasterList();
-  const existingUrls = new Set([...master.urls, ...master.brands.map((b) => b.url)]);
-  if (existingUrls.has(normalized)) return;
-  const brand: DiscoveredBrand = { name: name ?? normalized, url: normalized };
-  const updatedMaster: MasterList = {
-    brands: [...master.brands, brand],
-    urls: [...master.urls, normalized],
-  };
-  saveMasterList(updatedMaster);
+  enqueueMaster(() => {
+    const normalized = normalizeUrl(url);
+    if (!normalized) return;
+    const master = loadMasterList();
+    const existingUrls = new Set([...master.urls, ...master.brands.map((b) => b.url)]);
+    if (existingUrls.has(normalized)) return;
+    const brand: DiscoveredBrand = { name: name ?? normalized, url: normalized };
+    const updatedMaster: MasterList = {
+      brands: [...master.brands, brand],
+      urls: [...master.urls, normalized],
+    };
+    saveMasterList(updatedMaster);
+  });
 }
 
 export function syncConfigsToMasterList(configsDir: string): void {
@@ -233,7 +253,7 @@ Search the web, then respond with ONLY the JSON object as shown above.`;
     brands: [...master.brands, ...newBrands],
     urls: [...seenUrls],
   };
-  saveMasterList(updatedMaster);
+  enqueueMaster(() => saveMasterList(updatedMaster));
 
   onProgress(`Done. Added ${newBrands.length} new brands.`);
 

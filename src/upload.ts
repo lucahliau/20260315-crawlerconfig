@@ -25,6 +25,13 @@ const IMAGE_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 3;
 const BACKOFF_BASE_MS = 2000;
 
+const UPLOAD_NAV_TIMEOUT_MS = parseInt(process.env.UPLOAD_NAV_TIMEOUT_MS ?? String(FETCH_TIMEOUT_MS), 10);
+const UPLOAD_BROWSER_REFRESH_EVERY_N = parseInt(process.env.UPLOAD_BROWSER_REFRESH_EVERY_N ?? "0", 10);
+const UPLOAD_BROWSER_REFRESH_AFTER_CONSECUTIVE_FAILURES = parseInt(
+  process.env.UPLOAD_BROWSER_REFRESH_AFTER_CONSECUTIVE_FAILURES ?? "4",
+  10,
+);
+
 const CATEGORY_MAP: Record<string, string[]> = {
   tops: ["t-shirt", "tee", "shirt", "tank", "polo", "camisole", "hoodie", "long sleeve", "blouse", "henley", "crew", "sweater", "pullover", "sweatshirt", "knit", "jersey"],
   bottoms: ["jeans", "trousers", "chinos", "joggers", "skirt", "shorts", "pants", "leggings", "culottes"],
@@ -835,6 +842,24 @@ function validateItem(item: ClothingItemInput): string[] {
 // Main orchestrator
 // ---------------------------------------------------------------------------
 
+async function createUploadStagehand(): Promise<Stagehand> {
+  const sh = new Stagehand({
+    env: (process.env.STAGEHAND_ENV as "LOCAL" | "BROWSERBASE") || "LOCAL",
+    localBrowserLaunchOptions: { headless: true },
+  });
+  await sh.init();
+  return sh;
+}
+
+async function closeUploadStagehand(sh: Stagehand | null): Promise<void> {
+  if (!sh) return;
+  try {
+    await sh.close();
+  } catch {
+    // ignore
+  }
+}
+
 export async function uploadRetailer(
   config: Config,
   urls: string[],
@@ -879,13 +904,12 @@ export async function uploadRetailer(
     // Initialize browser if needed
     if (needsBrowser) {
       log("  Initializing headless browser...");
-      stagehand = new Stagehand({
-        env: (process.env.STAGEHAND_ENV as "LOCAL" | "BROWSERBASE") || "LOCAL",
-        localBrowserLaunchOptions: { headless: true },
-      });
-      await stagehand.init();
+      stagehand = await createUploadStagehand();
       log("  Browser ready");
     }
+
+    let consecutiveFailures = 0;
+    let successesSinceBrowserRefresh = 0;
 
     for (let i = 0; i < urls.length; i++) {
       const url = urls[i];
@@ -895,65 +919,111 @@ export async function uploadRetailer(
 
       log(`\n  [${i + 1}/${urls.length}] ${url}`);
 
-      try {
-        // Fetch page HTML
-        let html: string;
-        if (stagehand) {
-          const page = stagehand.context.pages()[0];
-          await page.goto(url, { waitUntil: "domcontentloaded" });
-          html = await page.evaluate(() => document.documentElement.outerHTML);
-        } else {
-          const res = await fetchWithRetry(url);
-          if (!res.ok) {
-            log(`    HTTP ${res.status} — skipping`);
-            progress.failed++;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          // Fetch page HTML
+          let html: string;
+          if (stagehand) {
+            const page = stagehand.context.pages()[0];
+            await page.goto(url, {
+              waitUntil: "domcontentloaded",
+              timeoutMs: UPLOAD_NAV_TIMEOUT_MS,
+            });
+            html = await page.evaluate(() => document.documentElement.outerHTML);
+          } else {
+            const res = await fetchWithRetry(url);
+            if (!res.ok) {
+              log(`    HTTP ${res.status} — skipping`);
+              progress.failed++;
+              consecutiveFailures++;
+              onProgress?.(progress);
+              break;
+            }
+            html = await res.text();
+          }
+
+          // Extract product data (all 4 layers)
+          const item = extractProductData(html, url, config);
+
+          // Validate required fields
+          const missingFields = validateItem(item);
+          if (missingFields.length > 0) {
+            log(`    SKIPPED: missing required fields: ${missingFields.join(", ")}`);
+            progress.skipped++;
+            consecutiveFailures = 0;
             onProgress?.(progress);
+            break;
+          }
+
+          // Upload images to R2
+          const externalId = item.externalId ?? extractSlugFromUrl(url);
+          const r2Images: string[] = [];
+          const allImages = item.images.length > 0 ? item.images : (item.imageUrl ? [item.imageUrl] : []);
+
+          for (let imgIdx = 0; imgIdx < allImages.length; imgIdx++) {
+            const r2Url = await uploadImageToR2(allImages[imgIdx], config.retailer, externalId, imgIdx);
+            r2Images.push(r2Url);
+          }
+
+          if (r2Images.length > 0) {
+            item.imageUrl = r2Images[0];
+            item.images = r2Images;
+          }
+
+          // Ensure externalId is set for upsert
+          item.externalId = externalId;
+
+          // Upsert into database
+          await upsertClothingItem(item, pool);
+
+          log(`    OK: "${item.name}" | ${item.category}/${item.subcategory ?? "?"} | $${item.price} | ${r2Images.length} images`);
+          progress.uploaded++;
+          consecutiveFailures = 0;
+          successesSinceBrowserRefresh++;
+
+          if (
+            needsBrowser &&
+            stagehand &&
+            UPLOAD_BROWSER_REFRESH_EVERY_N > 0 &&
+            successesSinceBrowserRefresh >= UPLOAD_BROWSER_REFRESH_EVERY_N
+          ) {
+            log(
+              `    Browser session recycled (reason: proactive after ${successesSinceBrowserRefresh} successful uploads)`,
+            );
+            await closeUploadStagehand(stagehand);
+            stagehand = await createUploadStagehand();
+            successesSinceBrowserRefresh = 0;
+          }
+
+          onProgress?.(progress);
+          break;
+        } catch (err) {
+          const e = err instanceof Error ? err : new Error(String(err));
+          log(`    FAILED: ${e.message}`);
+          if (e.stack) log(`    ${e.stack.split("\n").slice(0, 4).join("\n    ")}`);
+          consecutiveFailures++;
+
+          if (
+            needsBrowser &&
+            stagehand &&
+            UPLOAD_BROWSER_REFRESH_AFTER_CONSECUTIVE_FAILURES > 0 &&
+            consecutiveFailures >= UPLOAD_BROWSER_REFRESH_AFTER_CONSECUTIVE_FAILURES &&
+            attempt === 0
+          ) {
+            log(
+              `    Browser session recycled (reason: consecutive_failures=${consecutiveFailures}) — retrying URL once`,
+            );
+            await closeUploadStagehand(stagehand);
+            stagehand = await createUploadStagehand();
+            consecutiveFailures = 0;
             continue;
           }
-          html = await res.text();
-        }
 
-        // Extract product data (all 4 layers)
-        const item = extractProductData(html, url, config);
-
-        // Validate required fields
-        const missingFields = validateItem(item);
-        if (missingFields.length > 0) {
-          log(`    SKIPPED: missing required fields: ${missingFields.join(", ")}`);
-          progress.skipped++;
+          progress.failed++;
           onProgress?.(progress);
-          continue;
+          break;
         }
-
-        // Upload images to R2
-        const externalId = item.externalId ?? extractSlugFromUrl(url);
-        const r2Images: string[] = [];
-        const allImages = item.images.length > 0 ? item.images : (item.imageUrl ? [item.imageUrl] : []);
-
-        for (let imgIdx = 0; imgIdx < allImages.length; imgIdx++) {
-          const r2Url = await uploadImageToR2(allImages[imgIdx], config.retailer, externalId, imgIdx);
-          r2Images.push(r2Url);
-        }
-
-        if (r2Images.length > 0) {
-          item.imageUrl = r2Images[0];
-          item.images = r2Images;
-        }
-
-        // Ensure externalId is set for upsert
-        item.externalId = externalId;
-
-        // Upsert into database
-        await upsertClothingItem(item, pool);
-
-        log(`    OK: "${item.name}" | ${item.category}/${item.subcategory ?? "?"} | $${item.price} | ${r2Images.length} images`);
-        progress.uploaded++;
-      } catch (err) {
-        log(`    FAILED: ${(err as Error).message}`);
-        progress.failed++;
       }
-
-      onProgress?.(progress);
     }
   } finally {
     await pool.end();

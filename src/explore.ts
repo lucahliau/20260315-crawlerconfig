@@ -4,6 +4,7 @@ import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
 import { addToMasterList } from "./discoverBrands.js";
+import { writeJsonAtomic } from "./jsonFs.js";
 
 // ---------------------------------------------------------------------------
 // Logging — per-session context instead of global mutable state
@@ -255,7 +256,22 @@ function writePartialConfig(
   partialData: Record<string, unknown>,
 ): void {
   const outPath = path.join(configsDir, `${retailer}.json`);
-  fs.writeFileSync(outPath, JSON.stringify(partialData, null, 2) + "\n");
+  writeJsonAtomic(outPath, partialData);
+}
+
+function explorationArtifactsPath(retailer: string): string {
+  const dir =
+    process.env.EXPLORATION_ARTIFACTS_DIR ?? path.join(process.cwd(), "exploration-artifacts");
+  return path.join(dir, `${retailer}.json`);
+}
+
+function writeExplorationArtifacts(retailer: string, artifact: Record<string, unknown>): void {
+  const outPath = explorationArtifactsPath(retailer);
+  writeJsonAtomic(outPath, {
+    retailer,
+    updatedAt: new Date().toISOString(),
+    ...artifact,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2151,6 +2167,167 @@ function runVerificationChecklist(ctx: VerificationContext, session: SessionCont
   log(session, "-----------------------------\n");
 }
 
+function buildCheckpointConfigSitemap(
+  retailer: string,
+  displayName: string,
+  baseUrl: string,
+  sitemapResult: SitemapResult,
+  blocksHeadless: boolean,
+): Record<string, unknown> {
+  return {
+    retailer,
+    retailerDisplayName: displayName,
+    baseUrl,
+    discovery: {
+      method: "sitemap",
+      sitemap: {
+        url: sitemapResult.sitemapUrl,
+        productUrlPattern: sitemapResult.productUrlPattern,
+      },
+    },
+    requestConfig: {
+      requiresJsRendering: true,
+      delayBetweenRequestsMs: 2000,
+      blocksHeadlessBrowsers: blocksHeadless,
+      notes: "Partial checkpoint after sitemap (Phase 1); Phase 3+ not yet complete.",
+    },
+    dataQuality: {
+      jsonLdCompleteness: "unknown",
+      estimatedProductCount: 0,
+      sampleProductUrls: sitemapResult.sampleProductUrls,
+      missingFields: [],
+      overallRecommendation: "usable",
+    },
+    explorationCheckpoint: { phase: "post_sitemap", at: new Date().toISOString() },
+  };
+}
+
+function buildCheckpointConfigCategory(
+  retailer: string,
+  displayName: string,
+  baseUrl: string,
+  categoryResult: CategoryResult,
+  blocksHeadless: boolean,
+): Record<string, unknown> {
+  const discovery: Record<string, unknown> = { method: categoryResult.method };
+  if (categoryResult.method === "categoryPagination" && categoryResult.paginationConfig) {
+    discovery.categoryPagination = {
+      startUrls: categoryResult.startUrls,
+      ...categoryResult.paginationConfig,
+    };
+  } else if (categoryResult.method === "infiniteScroll" && categoryResult.scrollConfig) {
+    discovery.infiniteScroll = {
+      startUrls: categoryResult.startUrls,
+      ...categoryResult.scrollConfig,
+    };
+  }
+  return {
+    retailer,
+    retailerDisplayName: displayName,
+    baseUrl,
+    discovery,
+    productLinkExtraction: categoryResult.productLinkExtraction,
+    requestConfig: {
+      requiresJsRendering: true,
+      delayBetweenRequestsMs: 2000,
+      blocksHeadlessBrowsers: blocksHeadless,
+      notes: "Partial checkpoint after category/pagination discovery; Phase 3+ not yet complete.",
+    },
+    dataQuality: {
+      jsonLdCompleteness: "unknown",
+      estimatedProductCount: categoryResult.estimatedProductCount,
+      sampleProductUrls: [],
+      missingFields: [],
+      overallRecommendation: "usable",
+    },
+    explorationCheckpoint: { phase: "post_category", at: new Date().toISOString() },
+  };
+}
+
+function writeDegradedExploration(
+  configsDir: string,
+  retailer: string,
+  displayName: string,
+  baseUrl: string,
+  err: unknown,
+  partial: {
+    sitemapResult: SitemapResult | null;
+    categoryResult: CategoryResult | null;
+    blocksHeadlessBrowsers: boolean;
+    productPageResult: ProductPageResult | null;
+  },
+): void {
+  const message = err instanceof Error ? err.message : String(err);
+  const degraded: Record<string, unknown> = {
+    retailer,
+    retailerDisplayName: displayName,
+    baseUrl,
+    error: { message, at: new Date().toISOString() },
+    requestConfig: {
+      requiresJsRendering: partial.productPageResult?.requiresJsRendering ?? true,
+      delayBetweenRequestsMs: 2000,
+      blocksHeadlessBrowsers: partial.blocksHeadlessBrowsers,
+      notes: "Best-effort save after exploration error.",
+    },
+  };
+
+  if (partial.sitemapResult) {
+    degraded.discovery = {
+      method: "sitemap",
+      sitemap: {
+        url: partial.sitemapResult.sitemapUrl,
+        productUrlPattern: partial.sitemapResult.productUrlPattern,
+      },
+    };
+  } else if (partial.categoryResult) {
+    const cr = partial.categoryResult;
+    const discovery: Record<string, unknown> = { method: cr.method };
+    if (cr.method === "categoryPagination" && cr.paginationConfig) {
+      discovery.categoryPagination = { startUrls: cr.startUrls, ...cr.paginationConfig };
+    } else if (cr.method === "infiniteScroll" && cr.scrollConfig) {
+      discovery.infiniteScroll = { startUrls: cr.startUrls, ...cr.scrollConfig };
+    }
+    degraded.discovery = discovery;
+    degraded.productLinkExtraction = cr.productLinkExtraction;
+  }
+
+  if (partial.productPageResult) {
+    const p = partial.productPageResult;
+    degraded.productPage = {
+      hasJsonLd: p.hasJsonLd,
+      jsonLdNotes: p.jsonLdNotes,
+      hasOpenGraph: p.hasOpenGraph,
+      additionalImageSelector: p.additionalImageSelector,
+      genderInUrl: p.genderInUrl,
+      categoryInUrl: p.categoryInUrl,
+    };
+    degraded.dataQuality = {
+      jsonLdCompleteness: p.jsonLdCompleteness,
+      estimatedProductCount: partial.categoryResult?.estimatedProductCount ?? 0,
+      sampleProductUrls: p.sampleProductUrls,
+      missingFields: p.missingFields,
+      overallRecommendation: "usable",
+    };
+  } else {
+    degraded.dataQuality = {
+      jsonLdCompleteness: "unknown",
+      estimatedProductCount: partial.categoryResult?.estimatedProductCount ?? 0,
+      sampleProductUrls: partial.sitemapResult?.sampleProductUrls ?? [],
+      missingFields: [],
+      overallRecommendation: "usable",
+    };
+  }
+
+  writePartialConfig(configsDir, retailer, degraded);
+  writeExplorationArtifacts(retailer, {
+    phase: "error_recovery",
+    error: message,
+    sitemapSampleProductUrls: partial.sitemapResult?.sampleProductUrls,
+    categoryStartUrls: partial.categoryResult?.startUrls,
+    productPageSampleUrls: partial.productPageResult?.sampleProductUrls,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Exported exploration function — callable from both CLI and server
 // ---------------------------------------------------------------------------
@@ -2166,10 +2343,20 @@ export async function exploreRetailer(
     session.abortController.abort();
   }, OVERALL_TIMEOUT_MS);
 
+  let baseUrl = "";
+  let retailer = "";
+  let displayName = "";
+  let configsDir = "";
+  let stagehand: Stagehand | null = null;
+  let sitemapResult: SitemapResult | null = null;
+  let categoryResult: CategoryResult | null = null;
+  let productPageResult: ProductPageResult | null = null;
+  let blocksHeadlessBrowsers = false;
+
   try {
-    const baseUrl = new URL(url).origin;
-    const retailer = extractRetailerSlug(url);
-    const displayName = extractDisplayName(url);
+    baseUrl = new URL(url).origin;
+    retailer = extractRetailerSlug(url);
+    displayName = extractDisplayName(url);
 
     log(session, `\n--- Crawler Config Generator ---`);
     log(session, `URL:      ${url}`);
@@ -2177,12 +2364,12 @@ export async function exploreRetailer(
     log(session, `Retailer: ${retailer} (${displayName})`);
     log(session, "");
 
-    const configsDir = process.env.CONFIGS_DIR ?? path.join(process.cwd(), "configs");
+    configsDir = process.env.CONFIGS_DIR ?? path.join(process.cwd(), "configs");
     fs.mkdirSync(configsDir, { recursive: true });
 
     log(session, "Initializing Stagehand (LOCAL, headed browser)...");
 
-    const stagehand = new Stagehand({
+    stagehand = new Stagehand({
       env: (process.env.STAGEHAND_ENV as "LOCAL" | "BROWSERBASE") || "LOCAL",
       localBrowserLaunchOptions: {
         headless: false,
@@ -2198,16 +2385,32 @@ export async function exploreRetailer(
     log(session, "Stagehand initialized.\n");
 
     const page = stagehand.context.pages()[0];
-    let blocksHeadlessBrowsers = false;
 
     // Check for abort before each phase
     if (session.abortController.signal.aborted) {
       throw new Error("Exploration timed out.");
     }
 
-    const sitemapResult = await checkSitemap(baseUrl, page, stagehand, session);
+    sitemapResult = await checkSitemap(baseUrl, page, stagehand, session);
 
-    let categoryResult: CategoryResult | null = null;
+    if (sitemapResult) {
+      const partial = buildCheckpointConfigSitemap(
+        retailer,
+        displayName,
+        baseUrl,
+        sitemapResult,
+        blocksHeadlessBrowsers,
+      );
+      writePartialConfig(configsDir, retailer, partial);
+      if (baseUrl) addToMasterList(baseUrl, displayName);
+      writeExplorationArtifacts(retailer, {
+        phase: "post_sitemap",
+        sitemapUrl: sitemapResult.sitemapUrl,
+        productUrlPattern: sitemapResult.productUrlPattern,
+        sampleProductUrls: sitemapResult.sampleProductUrls,
+      });
+      log(session, "Checkpoint saved (post-sitemap).\n");
+    }
 
     if (!sitemapResult) {
       if (session.abortController.signal.aborted) {
@@ -2229,6 +2432,25 @@ export async function exploreRetailer(
           log(session, "  Category exploration failed:", message);
         }
       }
+    }
+
+    if (!sitemapResult && categoryResult) {
+      const partial = buildCheckpointConfigCategory(
+        retailer,
+        displayName,
+        baseUrl,
+        categoryResult,
+        blocksHeadlessBrowsers,
+      );
+      writePartialConfig(configsDir, retailer, partial);
+      if (baseUrl) addToMasterList(baseUrl, displayName);
+      writeExplorationArtifacts(retailer, {
+        phase: "post_category",
+        startUrls: categoryResult.startUrls,
+        productLinkExtraction: categoryResult.productLinkExtraction,
+        estimatedProductCount: categoryResult.estimatedProductCount,
+      });
+      log(session, "Checkpoint saved (post-category).\n");
     }
 
     if (!sitemapResult && !categoryResult) {
@@ -2254,7 +2476,7 @@ export async function exploreRetailer(
       const masterUrl = minimalConfig.baseUrl as string | undefined;
       const masterName = minimalConfig.retailerDisplayName as string | undefined;
       if (masterUrl) addToMasterList(masterUrl, masterName);
-      await stagehand.close();
+      if (stagehand) await stagehand.close();
       log(session, "Done.");
       return minimalConfig;
     }
@@ -2277,8 +2499,6 @@ export async function exploreRetailer(
       );
       productUrlsForAnalysis = extracted.slice(0, 5);
     }
-
-    let productPageResult: ProductPageResult | null = null;
 
     if (productUrlsForAnalysis.length > 0) {
       if (session.abortController.signal.aborted) {
@@ -2433,10 +2653,35 @@ export async function exploreRetailer(
     log(session, `  Output:           configs/${retailer}.json`);
     log(session, "----------------\n");
 
-    await stagehand.close();
+    if (stagehand) await stagehand.close();
     log(session, "Done.");
 
     return finalConfig;
+  } catch (err) {
+    if (retailer && configsDir) {
+      try {
+        writeDegradedExploration(configsDir, retailer, displayName, baseUrl, err, {
+          sitemapResult,
+          categoryResult,
+          blocksHeadlessBrowsers,
+          productPageResult,
+        });
+        log(session, "Wrote degraded config and exploration artifacts after error.");
+      } catch {
+        // ignore secondary write failures
+      }
+    }
+    if (stagehand) {
+      try {
+        await stagehand.close();
+      } catch {
+        // ignore close errors
+      }
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    log(session, `Exploration failed: ${msg}`);
+    if (err instanceof Error && err.stack) log(session, err.stack);
+    throw err;
   } finally {
     clearTimeout(timeoutHandle);
   }
