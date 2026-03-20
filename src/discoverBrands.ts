@@ -3,6 +3,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import path from "node:path";
 import { writeJsonAtomic } from "./jsonFs.js";
+import { estimateUsdFromMessageUsage } from "./pricing.js";
+import type { Usage } from "@anthropic-ai/sdk/resources/messages/messages.js";
 
 const DISCOVERED_BRANDS_PATH =
   process.env.DISCOVERED_BRANDS_PATH ?? path.join(process.cwd(), "discovered-brands.json");
@@ -170,7 +172,7 @@ export function syncConfigsToMasterList(configsDir: string): void {
 
 export async function discoverBrands(
   onProgress: (msg: string) => void,
-): Promise<{ brands: DiscoveredBrand[] }> {
+): Promise<{ brands: DiscoveredBrand[]; usage: Usage; estimatedUsd: number }> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey || !apiKey.trim()) {
     throw new Error("ANTHROPIC_API_KEY is not set. Add it to your .env file.");
@@ -257,5 +259,8 @@ Search the web, then respond with ONLY the JSON object as shown above.`;
 
   onProgress(`Done. Added ${newBrands.length} new brands.`);
 
-  return { brands: result.brands };
+  const estimatedUsd = estimateUsdFromMessageUsage(response.usage);
+  onProgress(`Estimated API cost (this run): ~$${estimatedUsd.toFixed(4)}`);
+
+  return { brands: result.brands, usage: response.usage, estimatedUsd };
 }

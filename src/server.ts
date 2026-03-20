@@ -10,6 +10,7 @@ import { uploadRetailer, type UploadResult } from "./upload.js";
 import { discoverBrands, syncConfigsToMasterList, type DiscoveredBrand } from "./discoverBrands.js";
 import { writeJsonAtomic } from "./jsonFs.js";
 import { retailerSlugFromUrl } from "./retailerSlug.js";
+import { recordDiscoverUsage, recordExploreUsage, getCostMetrics } from "./usageLedger.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -119,7 +120,14 @@ async function processJob(job: Job, skippedUrls?: string[]) {
     pushLog(job.id, `\n========== Processing ${i + 1}/${job.urls.length}: ${url} ==========\n`);
 
     try {
-      const config = await exploreRetailer(url, (msg) => pushLog(job.id, msg));
+      const { config, metrics, estimatedUsd } = await exploreRetailer(url, (msg) => pushLog(job.id, msg));
+      recordExploreUsage({
+        retailer: (config.retailer as string) ?? retailerSlugFromUrl(url),
+        estimatedUsd,
+        promptTokens: metrics?.totalPromptTokens ?? 0,
+        completionTokens: metrics?.totalCompletionTokens ?? 0,
+        inferenceTimeMs: metrics?.totalInferenceTimeMs ?? 0,
+      });
       job.results.push(config);
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
@@ -254,6 +262,12 @@ app.post("/api/discover-brands", (req, res) => {
         pushLog(job.id, msg);
         pushEvent(job.id, { type: "progress", message: msg });
       });
+      recordDiscoverUsage({
+        estimatedUsd: result.estimatedUsd,
+        inputTokens: result.usage.input_tokens,
+        outputTokens: result.usage.output_tokens,
+        webSearchRequests: result.usage.server_tool_use?.web_search_requests ?? 0,
+      });
       job.discoveredBrands = result.brands;
       job.status = "done";
       pushEvent(job.id, { type: "brands", brands: result.brands });
@@ -357,6 +371,13 @@ async function runE2EOrchestrator(jobId: string) {
     pushLog(jobId, "\n========== Step 1: Discovering brands (Claude search) ==========\n");
 
     const discoverResult = await discoverBrands((msg) => pushLog(jobId, msg));
+    recordDiscoverUsage({
+      estimatedUsd: discoverResult.estimatedUsd,
+      inputTokens: discoverResult.usage.input_tokens,
+      outputTokens: discoverResult.usage.output_tokens,
+      webSearchRequests: discoverResult.usage.server_tool_use?.web_search_requests ?? 0,
+      e2eJobId: jobId,
+    });
     const brands = discoverResult.brands;
     if (!brands || brands.length === 0) {
       throw new Error("No brands discovered.");
@@ -398,7 +419,15 @@ async function runE2EOrchestrator(jobId: string) {
       });
 
       try {
-        const config = await exploreRetailer(url, (msg) => pushLog(jobId, msg));
+        const { config, metrics, estimatedUsd } = await exploreRetailer(url, (msg) => pushLog(jobId, msg));
+        recordExploreUsage({
+          retailer: (config.retailer as string) ?? extractRetailerFromUrl(url),
+          estimatedUsd,
+          promptTokens: metrics?.totalPromptTokens ?? 0,
+          completionTokens: metrics?.totalCompletionTokens ?? 0,
+          inferenceTimeMs: metrics?.totalInferenceTimeMs ?? 0,
+          e2eJobId: jobId,
+        });
         configsSuccessful++;
         const retailer = (config.retailer as string) ?? extractRetailerFromUrl(url);
         const dq = config.dataQuality as Record<string, unknown> | undefined;
@@ -701,6 +730,15 @@ app.get("/api/progress/:jobId", (req, res) => {
   req.on("close", () => {
     sseClients.get(job.id)?.delete(res);
   });
+});
+
+app.get("/api/cost-metrics", (_req, res) => {
+  try {
+    res.json(getCostMetrics());
+  } catch (err) {
+    console.error("[api/cost-metrics] Error:", err);
+    res.status(500).json({ error: "Failed to load cost metrics." });
+  }
 });
 
 app.get("/api/discovered-brands", (_req, res) => {

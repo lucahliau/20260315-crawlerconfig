@@ -1,11 +1,35 @@
 import "dotenv/config";
-import { Stagehand } from "@browserbasehq/stagehand";
+import { Stagehand, type StagehandMetrics } from "@browserbasehq/stagehand";
 import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
 import { addToMasterList } from "./discoverBrands.js";
 import { writeJsonAtomic } from "./jsonFs.js";
 import { retailerSlugFromUrl } from "./retailerSlug.js";
+import { estimateUsdFromStagehandMetrics } from "./pricing.js";
+
+export interface ExploreRetailerResult {
+  config: Record<string, unknown>;
+  metrics: StagehandMetrics | null;
+  /** Rough USD from Stagehand token totals (same model as `model` option). */
+  estimatedUsd: number;
+}
+
+async function shutdownStagehand(stagehand: Stagehand | null): Promise<StagehandMetrics | null> {
+  if (!stagehand) return null;
+  try {
+    const m = await stagehand.metrics;
+    await stagehand.close();
+    return m;
+  } catch {
+    try {
+      await stagehand.close();
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Logging — per-session context instead of global mutable state
@@ -2331,7 +2355,7 @@ function writeDegradedExploration(
 export async function exploreRetailer(
   url: string,
   onLog?: (msg: string) => void,
-): Promise<Record<string, unknown>> {
+): Promise<ExploreRetailerResult> {
   const session = createSession(onLog);
 
   // Overall timeout to prevent hanging forever
@@ -2472,9 +2496,12 @@ export async function exploreRetailer(
       const masterUrl = minimalConfig.baseUrl as string | undefined;
       const masterName = minimalConfig.retailerDisplayName as string | undefined;
       if (masterUrl) addToMasterList(masterUrl, masterName);
-      if (stagehand) await stagehand.close();
+      const metrics = await shutdownStagehand(stagehand);
+      stagehand = null;
       log(session, "Done.");
-      return minimalConfig;
+      const estimatedUsd = metrics ? estimateUsdFromStagehandMetrics(metrics) : 0;
+      log(session, `Estimated Stagehand cost (this run): ~$${estimatedUsd.toFixed(4)}`);
+      return { config: minimalConfig, metrics, estimatedUsd };
     }
 
     if (session.abortController.signal.aborted) {
@@ -2649,10 +2676,13 @@ export async function exploreRetailer(
     log(session, `  Output:           configs/${retailer}.json`);
     log(session, "----------------\n");
 
-    if (stagehand) await stagehand.close();
+    const metrics = await shutdownStagehand(stagehand);
+    stagehand = null;
     log(session, "Done.");
+    const estimatedUsd = metrics ? estimateUsdFromStagehandMetrics(metrics) : 0;
+    log(session, `Estimated Stagehand cost (this run): ~$${estimatedUsd.toFixed(4)}`);
 
-    return finalConfig;
+    return { config: finalConfig, metrics, estimatedUsd };
   } catch (err) {
     if (retailer && configsDir) {
       try {
@@ -2667,13 +2697,8 @@ export async function exploreRetailer(
         // ignore secondary write failures
       }
     }
-    if (stagehand) {
-      try {
-        await stagehand.close();
-      } catch {
-        // ignore close errors
-      }
-    }
+    await shutdownStagehand(stagehand);
+    stagehand = null;
     const msg = err instanceof Error ? err.message : String(err);
     log(session, `Exploration failed: ${msg}`);
     if (err instanceof Error && err.stack) log(session, err.stack);
@@ -2689,7 +2714,8 @@ export async function exploreRetailer(
 
 async function main() {
   const { url } = parseArgs();
-  await exploreRetailer(url, console.log);
+  const { estimatedUsd } = await exploreRetailer(url, console.log);
+  console.log(`Estimated cost (this run): ~$${estimatedUsd.toFixed(4)}`);
 }
 
 const isCLI = process.argv[1]?.includes("explore");

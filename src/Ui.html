@@ -386,9 +386,34 @@
 
   .app-header {
     display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 1.5rem;
+    margin-bottom: 0.75rem;
   }
   .app-header h1 { margin: 0; }
+
+  .cost-strip {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 1.25rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .cost-strip-inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.75rem 1.25rem;
+    row-gap: 0.35rem;
+  }
+  .cost-strip .cost-item { white-space: nowrap; }
+  .cost-strip .cost-item strong { color: var(--text); font-weight: 600; }
+  .cost-strip-note {
+    width: 100%;
+    font-size: 0.72rem;
+    opacity: 0.9;
+    margin-top: 0.25rem;
+  }
 
   .history-modal {
     position: fixed; inset: 0; z-index: 100;
@@ -453,6 +478,15 @@
   <h1>Crawler Config Generator</h1>
   <button type="button" class="btn-secondary" id="historyBtn">History</button>
 </header>
+
+<div class="cost-strip" id="costStrip" aria-label="Usage cost estimates">
+  <div class="cost-strip-inner" id="costStripInner">
+    <span class="cost-item">Loading usage…</span>
+  </div>
+  <div class="cost-strip-note">
+    Estimates from measured token usage in this app (Claude Messages API + Stagehand). Not official Anthropic invoices.
+  </div>
+</div>
 
 <!-- End-to-End Section -->
 <section class="e2e-section">
@@ -818,6 +852,7 @@ function runExplore() {
           running = false;
           renderQueue();
           loadOverview();
+          refreshCostMetrics();
         }
       };
       es.onerror = function () {
@@ -893,6 +928,7 @@ function discoverConnectToJob(jobId) {
         lastDiscoveredBrands = msg.brands;
         discoverStatus.textContent = "Done \u2014 " + msg.brands.length + " brands found.";
       }
+      refreshCostMetrics();
     }
   };
   es.onerror = function () {
@@ -1028,6 +1064,7 @@ function e2eConnectToJob(jobId) {
         updateE2eStatus({ step: 4, stepLabel: "Complete", percentComplete: 100 });
       }
       loadOverview();
+      refreshCostMetrics();
     }
   };
   es.onerror = function () {
@@ -1307,6 +1344,32 @@ function renderDashboard() {
   if (hint) {
     hint.textContent = "Showing " + rows.length + " of " + overviewRetailers.length + " retailer(s). Bulk actions use the same filters + checkboxes below.";
   }
+}
+
+function fmtUsd(x) {
+  if (x == null || typeof x !== "number" || isNaN(x)) return "—";
+  return "$" + x.toFixed(4);
+}
+
+function refreshCostMetrics() {
+  var inner = document.getElementById("costStripInner");
+  if (!inner) return;
+  fetch("/api/cost-metrics")
+    .then(function (r) {
+      if (!r.ok) throw new Error("bad status");
+      return r.json();
+    })
+    .then(function (m) {
+      var parts = [];
+      parts.push('<span class="cost-item">Total tracked: <strong>' + fmtUsd(m.totalEstimatedUsd) + "</strong></span>");
+      parts.push('<span class="cost-item">Avg niche-brand search: <strong>' + fmtUsd(m.avgDiscoverUsd) + "</strong> <span>(" + (m.counts && m.counts.discover != null ? m.counts.discover : 0) + " runs)</span></span>");
+      parts.push('<span class="cost-item">Avg config crawl: <strong>' + fmtUsd(m.avgExploreUsd) + "</strong> <span>(" + (m.counts && m.counts.explore != null ? m.counts.explore : 0) + " runs)</span></span>");
+      parts.push('<span class="cost-item">Avg end-to-end: <strong>' + fmtUsd(m.avgE2eUsd) + "</strong> <span>(" + (m.counts && m.counts.e2e != null ? m.counts.e2e : 0) + " runs)</span></span>");
+      inner.innerHTML = parts.join("");
+    })
+    .catch(function () {
+      inner.innerHTML = '<span class="cost-item">Could not load usage metrics.</span>';
+    });
 }
 
 function loadOverview() {
@@ -1686,6 +1749,8 @@ document.getElementById("historyModalClose").addEventListener("click", hideHisto
 document.getElementById("historyModalBackdrop").addEventListener("click", hideHistoryModal);
 
 // ── Initial load ────────────────────────────────────────────────────────
+refreshCostMetrics();
+setInterval(refreshCostMetrics, 60000);
 loadOverview();
 e2eTryResume();
 discoverTryResume();

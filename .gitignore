@@ -4,6 +4,7 @@ dist/
 configs/*.json
 product-urls/*.json
 discovered-brands.json
+usage-ledger.json
 tmp/
 logs/
 exploration-artifacts/
