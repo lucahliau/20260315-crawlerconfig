@@ -9,6 +9,17 @@ import type { Usage } from "@anthropic-ai/sdk/resources/messages/messages.js";
 const DISCOVERED_BRANDS_PATH =
   process.env.DISCOVERED_BRANDS_PATH ?? path.join(process.cwd(), "discovered-brands.json");
 
+/** Default 30m — web search turns can exceed the SDK default (~10m) and trigger APIConnectionTimeoutError. */
+const DEFAULT_ANTHROPIC_TIMEOUT_MS = 30 * 60 * 1000;
+
+function anthropicTimeoutMs(): number {
+  const raw = process.env.ANTHROPIC_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_ANTHROPIC_TIMEOUT_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_ANTHROPIC_TIMEOUT_MS;
+  return Math.floor(n);
+}
+
 export interface DiscoveredBrand {
   name: string;
   url: string;
@@ -206,7 +217,7 @@ Search the web, then respond with ONLY the JSON object as shown above.`;
 
   onProgress("Searching the web for niche brands...");
 
-  const anthropic = new Anthropic({ apiKey });
+  const anthropic = new Anthropic({ apiKey, timeout: anthropicTimeoutMs() });
 
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-6",
