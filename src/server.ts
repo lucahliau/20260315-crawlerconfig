@@ -797,10 +797,22 @@ app.get("/api/discovered-brands", (_req, res) => {
       return res.json({ brands: [], urls: [] });
     }
     const raw = fs.readFileSync(DISCOVERED_BRANDS_PATH, "utf-8");
-    const data = JSON.parse(raw) as { brands?: unknown[]; urls?: unknown[] };
+    const data = JSON.parse(raw) as { brands?: unknown[]; urls?: unknown[]; history?: unknown[] };
+    const historyRaw = data.history;
+    const history = Array.isArray(historyRaw)
+      ? historyRaw.filter(
+          (h): h is { at: string; count: number } =>
+            !!h &&
+            typeof h === "object" &&
+            typeof (h as { at?: string }).at === "string" &&
+            typeof (h as { count?: number }).count === "number" &&
+            Number.isFinite((h as { count: number }).count),
+        )
+      : [];
     res.json({
       brands: Array.isArray(data.brands) ? data.brands : [],
       urls: Array.isArray(data.urls) ? data.urls : [],
+      history,
     });
   } catch (err) {
     console.error("[api/discovered-brands] Error:", err);

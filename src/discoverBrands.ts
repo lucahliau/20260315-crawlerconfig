@@ -25,21 +25,40 @@ export interface DiscoveredBrand {
   url: string;
 }
 
+/** Appended when a discovery run finishes (see `discoverBrands`). */
+export interface DiscoveryCountSnapshot {
+  at: string;
+  count: number;
+}
+
 interface MasterList {
   brands: DiscoveredBrand[];
   urls: string[];
+  history?: DiscoveryCountSnapshot[];
 }
 
 function loadMasterList(): MasterList {
   try {
     const raw = fs.readFileSync(DISCOVERED_BRANDS_PATH, "utf-8");
     const data = JSON.parse(raw) as MasterList;
+    const historyRaw = (data as { history?: unknown }).history;
+    const history: DiscoveryCountSnapshot[] = Array.isArray(historyRaw)
+      ? historyRaw.filter(
+          (h): h is DiscoveryCountSnapshot =>
+            !!h &&
+            typeof h === "object" &&
+            typeof (h as DiscoveryCountSnapshot).at === "string" &&
+            typeof (h as DiscoveryCountSnapshot).count === "number" &&
+            Number.isFinite((h as DiscoveryCountSnapshot).count),
+        )
+      : [];
     return {
       brands: Array.isArray(data.brands) ? data.brands : [],
       urls: Array.isArray(data.urls) ? data.urls : [],
+      history,
     };
   } catch {
-    return { brands: [], urls: [] };
+    return { brands: [], urls: [], history: [] };
   }
 }
 
@@ -155,6 +174,7 @@ export function addToMasterList(url: string, name?: string): void {
     const updatedMaster: MasterList = {
       brands: [...master.brands, brand],
       urls: [...master.urls, normalized],
+      history: master.history ?? [],
     };
     saveMasterList(updatedMaster);
   });
@@ -281,9 +301,12 @@ Search the web, verify each candidate is primarily a clothing company, then resp
     }
   }
 
+  const newTotal = master.brands.length + newBrands.length;
+  const priorHistory = master.history ?? [];
   const updatedMaster: MasterList = {
     brands: [...master.brands, ...newBrands],
     urls: [...seenUrls],
+    history: [...priorHistory, { at: new Date().toISOString(), count: newTotal }],
   };
   enqueueMaster(() => saveMasterList(updatedMaster));
 

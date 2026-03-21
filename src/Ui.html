@@ -464,9 +464,39 @@
     display: flex; flex-direction: column;
   }
   .history-modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+  .history-modal-summary {
+    font-size: 0.95rem;
+    margin-bottom: 0.75rem;
+    padding: 0.6rem 0.75rem;
+    background: var(--json-bg);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+  }
+  .history-modal-summary strong { color: var(--text); font-weight: 600; }
+  .history-snapshots {
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-bottom: 0.75rem;
+    max-height: 140px;
+    overflow-y: auto;
+    line-height: 1.5;
+  }
+  .history-snapshots-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.35rem;
+    color: var(--muted);
+  }
+  .history-snapshot-row { padding: 0.15rem 0; border-bottom: 1px solid var(--border); }
+  .history-snapshot-row:last-child { border-bottom: none; }
+  .history-snapshot-delta { font-weight: 600; color: var(--accent); }
+  .history-snapshot-delta.flat { color: var(--muted); font-weight: 500; }
   .history-modal-desc { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.75rem; }
   .history-modal-list {
     overflow-y: auto; font-size: 0.85rem; line-height: 1.6;
+    flex: 1;
+    min-height: 0;
   }
   .history-modal-list a { color: var(--accent); text-decoration: none; }
   .history-modal-list a:hover { text-decoration: underline; }
@@ -650,6 +680,8 @@
       <h2>Discovery History</h2>
       <button type="button" class="btn-secondary btn-small" id="historyModalClose">Close</button>
     </div>
+    <div class="history-modal-summary" id="historyModalSummary">Loading…</div>
+    <div class="history-snapshots" id="historySnapshots" style="display:none"></div>
     <p class="history-modal-desc">Brands and URLs excluded from Claude's discovery:</p>
     <div class="history-modal-list" id="historyModalList"></div>
   </div>
@@ -1772,8 +1804,13 @@ function escHtml(s) {
 function showHistoryModal() {
   var modal = document.getElementById("historyModal");
   var listEl = document.getElementById("historyModalList");
+  var summaryEl = document.getElementById("historyModalSummary");
+  var snapsEl = document.getElementById("historySnapshots");
   modal.style.display = "flex";
   listEl.innerHTML = "Loading...";
+  summaryEl.textContent = "Loading…";
+  snapsEl.style.display = "none";
+  snapsEl.innerHTML = "";
   fetch("/api/discovered-brands")
     .then(function (r) { return r.json(); })
     .then(function (data) {
@@ -1793,9 +1830,52 @@ function showHistoryModal() {
           items.push('<div><a href="' + escHtml(u) + '" target="_blank" rel="noopener">' + escHtml(u) + '</a></div>');
         }
       }
+      var total = seen.size;
+      summaryEl.innerHTML =
+        "<strong>" + total + "</strong> retailer" + (total === 1 ? "" : "s") +
+        " in the exclusion list (unique URLs).";
+
+      var hist = data.history || [];
+      if (hist.length > 0) {
+        var sorted = hist.slice().sort(function (a, b) {
+          return new Date(b.at).getTime() - new Date(a.at).getTime();
+        });
+        var snapParts = ['<div class="history-snapshots-title">After each discovery run</div>'];
+        for (var k = 0; k < sorted.length; k++) {
+          var row = sorted[k];
+          var older = sorted[k + 1];
+          var delta = older != null ? row.count - older.count : null;
+          var deltaStr = "";
+          if (delta === null) {
+            deltaStr = '<span class="history-snapshot-delta flat">(first logged)</span>';
+          } else if (delta > 0) {
+            deltaStr = '<span class="history-snapshot-delta">+\u2009' + delta + "</span>";
+          } else if (delta < 0) {
+            deltaStr = '<span class="history-snapshot-delta flat">' + delta + "</span>";
+          } else {
+            deltaStr = '<span class="history-snapshot-delta flat">no change</span>';
+          }
+          var when = row.at ? new Date(row.at).toLocaleString() : "";
+          snapParts.push(
+            '<div class="history-snapshot-row">' +
+              escHtml(when) +
+              " \u2014 <strong>" +
+              row.count +
+              "</strong> " +
+              deltaStr +
+              "</div>"
+          );
+        }
+        snapsEl.innerHTML = snapParts.join("");
+        snapsEl.style.display = "block";
+      }
+
       listEl.innerHTML = items.length ? items.join("") : "No brands in history yet.";
     })
-    .catch(function () { listEl.innerHTML = "Failed to load."; });
+    .catch(function () {
+      listEl.innerHTML = "Failed to load.";
+      summaryEl.textContent = "Failed to load.";
+    });
 }
 
 function hideHistoryModal() {
