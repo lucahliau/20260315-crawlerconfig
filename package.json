@@ -6,7 +6,8 @@
   "scripts": {
     "start": "tsx src/server.ts",
     "explore": "tsx src/explore.ts",
-    "ui": "tsx src/server.ts"
+    "ui": "tsx src/server.ts",
+    "verify-fx": "tsx scripts/verify-fx.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

@@ -33,6 +33,64 @@ function effectiveDelay(config: Config): number {
   return Math.max(config.requestConfig.delayBetweenRequestsMs, MIN_DELAY_MS);
 }
 
+/**
+ * Heuristic filter: drop product URLs that are very unlikely to be apparel
+ * (gift cards, art/prints, home & outdoor non-wearables, etc.).
+ * Applied to every URL before it enters the crawl result set.
+ */
+export function isExcludedNonClothingProductUrl(rawUrl: string): boolean {
+  let pathQuery: string;
+  try {
+    const u = new URL(rawUrl);
+    pathQuery = `${u.pathname}${u.search}`.toLowerCase();
+  } catch {
+    return true;
+  }
+
+  const patterns: RegExp[] = [
+    // Gift / prepaid / digital non-goods
+    /gift[-_\s]?card/,
+    /gift[-_\s]?cert/,
+    /gift[-_\s]?voucher/,
+    /\bgiftcards?\b/,
+    /e[-_\s]?gift/,
+    /\begift\b/,
+    /(prepaid|store)[-_\s]?card/,
+    // Art / wall decor (not apparel) — avoid broad "print/canvas" (hits screen-print tees, canvas sneakers)
+    /\/art(\/|$|-)/,
+    /fine[-_\s]?art/,
+    /wall[-_\s]?art/,
+    /\/prints(\/|$)/,
+    /\/posters(\/|$)/,
+    /art[-_\s]?(print|poster|work)/,
+    /canvas[-_\s]?(print|wall|art)/,
+    // Home / lifestyle non-apparel
+    /homeware/,
+    /home[-_\s]?decor/,
+    /furniture/,
+    /kitchenware/,
+    /tableware/,
+    /bedding/,
+    /candle/,
+    // Outdoor & camping gear (tent pegs, etc.) — not clothing SKUs
+    /tent[-_\s]?peg/,
+    /camping[-_\s]?(gear|equipment)/,
+    /sleeping[-_\s]?bag/,
+    /camp[-_\s]?chair/,
+    /cooler\b/,
+    /\bstove\b/,
+    /\blantern\b/,
+    // Misc non-apparel
+    /(^|\/)(books?|music)(\/|$)/,
+    /\bvinyl\b/,
+    /electronics/,
+    /subscription[-_\s]?box/,
+    /digital[-_\s]?(download|product)/,
+  ];
+
+  return patterns.some((re) => re.test(pathQuery));
+}
+
 async function fetchWithRetry(
   url: string,
   opts: RequestInit = {},
@@ -111,6 +169,7 @@ async function crawlSitemap(
   config: Config,
   urls: Set<string>,
   onProgress: (count: number) => void,
+  addUrl: (u: string) => void,
 ): Promise<void> {
   if (config.discovery.method !== "sitemap") return;
 
@@ -142,7 +201,7 @@ async function crawlSitemap(
         const subXml = await subRes.text();
         const locs = extractLocsFromXml(subXml);
         for (const loc of locs) {
-          if (pattern.test(loc)) urls.add(loc);
+          if (pattern.test(loc)) addUrl(loc);
         }
         log(`    Extracted ${locs.length} URLs, ${urls.size} product URLs so far`);
         onProgress(urls.size);
@@ -153,7 +212,7 @@ async function crawlSitemap(
   } else {
     const locs = extractLocsFromXml(xml);
     for (const loc of locs) {
-      if (pattern.test(loc)) urls.add(loc);
+      if (pattern.test(loc)) addUrl(loc);
     }
     log(`  Extracted ${locs.length} URLs, ${urls.size} match product pattern`);
     onProgress(urls.size);
@@ -168,6 +227,7 @@ async function crawlCategoryPagination(
   config: Config,
   urls: Set<string>,
   onProgress: (count: number) => void,
+  addUrl: (u: string) => void,
 ): Promise<void> {
   if (config.discovery.method !== "categoryPagination") return;
 
@@ -225,7 +285,7 @@ async function crawlCategoryPagination(
 
           const before = urls.size;
           for (const link of links) {
-            if (pattern.test(link)) urls.add(link);
+            if (pattern.test(link)) addUrl(link);
           }
           log(`    Found ${links.length} links, ${urls.size - before} new product URLs`);
           onProgress(urls.size);
@@ -273,7 +333,7 @@ async function crawlCategoryPagination(
                 continue;
               }
             }
-            if (pattern.test(href)) urls.add(href);
+            if (pattern.test(href)) addUrl(href);
           }
           log(`    ${urls.size - before} new product URLs (${urls.size} total)`);
           onProgress(urls.size);
@@ -304,6 +364,7 @@ async function crawlInfiniteScroll(
   config: Config,
   urls: Set<string>,
   onProgress: (count: number) => void,
+  addUrl: (u: string) => void,
 ): Promise<void> {
   if (config.discovery.method !== "infiniteScroll") return;
 
@@ -354,7 +415,7 @@ async function crawlInfiniteScroll(
 
         const before = urls.size;
         for (const link of links) {
-          if (pattern.test(link)) urls.add(link);
+          if (pattern.test(link)) addUrl(link);
         }
         log(`    Scroll ${scroll + 1}/${maxScrolls}: ${urls.size - before} new URLs (${urls.size} total)`);
         onProgress(urls.size);
@@ -378,6 +439,7 @@ async function crawlApi(
   config: Config,
   urls: Set<string>,
   onProgress: (count: number) => void,
+  addUrl: (u: string) => void,
 ): Promise<void> {
   if (config.discovery.method !== "api") return;
 
@@ -437,7 +499,7 @@ async function crawlApi(
           productUrl = productUrl.replace(/\{[^}]+\}/, String(item));
         }
         try {
-          urls.add(new URL(productUrl, config.baseUrl).toString());
+          addUrl(new URL(productUrl, config.baseUrl).toString());
         } catch { /* skip */ }
       }
       log(`    ${urls.size - before} new product URLs (${urls.size} total)`);
@@ -521,6 +583,14 @@ export async function crawlProductUrls(
   if (onLog) _logFn = onLog;
 
   const urls = new Set<string>();
+  let excludedNonClothing = 0;
+  const addUrl = (u: string) => {
+    if (isExcludedNonClothingProductUrl(u)) {
+      excludedNonClothing++;
+      return;
+    }
+    urls.add(u);
+  };
   const runCheckpoint = crawlCheckpointWriter(config, urls);
   const progressCb = (count: number) => {
     (onProgress ?? (() => {}))(count);
@@ -547,16 +617,16 @@ export async function crawlProductUrls(
   try {
     switch (config.discovery.method) {
       case "sitemap":
-        await crawlSitemap(config, urls, progressCb);
+        await crawlSitemap(config, urls, progressCb, addUrl);
         break;
       case "categoryPagination":
-        await crawlCategoryPagination(config, urls, progressCb);
+        await crawlCategoryPagination(config, urls, progressCb, addUrl);
         break;
       case "infiniteScroll":
-        await crawlInfiniteScroll(config, urls, progressCb);
+        await crawlInfiniteScroll(config, urls, progressCb, addUrl);
         break;
       case "api":
-        await crawlApi(config, urls, progressCb);
+        await crawlApi(config, urls, progressCb, addUrl);
         break;
     }
   } catch (err) {
@@ -572,6 +642,11 @@ export async function crawlProductUrls(
   };
 
   log(`\nCrawl complete: ${result.totalUrls} product URLs found`);
+  if (excludedNonClothing > 0) {
+    log(
+      `  Excluded ${excludedNonClothing} URLs that look like non-clothing (e.g. gift cards, art, home & outdoor gear).`,
+    );
+  }
 
   // Reset log function
   _logFn = console.log;

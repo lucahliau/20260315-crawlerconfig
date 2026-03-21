@@ -26,6 +26,9 @@ const DISCOVERED_BRANDS_PATH =
 const JOB_LOGS_DIR = process.env.JOB_LOGS_DIR ?? path.join(process.cwd(), "logs");
 const JOB_LOG_MAX_LINES = parseInt(process.env.JOB_LOG_MAX_LINES ?? "5000", 10);
 
+/** SSE comment pings so proxies and browsers do not treat the stream as idle (0 = disabled). */
+const SSE_HEARTBEAT_MS = parseInt(process.env.SSE_HEARTBEAT_MS ?? "20000", 10);
+
 // Delay between processing consecutive URLs (helps with rate limits)
 const INTER_URL_DELAY_MS = parseInt(process.env.INTER_URL_DELAY_MS ?? "5000", 10);
 
@@ -49,6 +52,37 @@ interface Job {
 
 const jobs = new Map<string, Job>();
 const sseClients = new Map<string, Set<express.Response>>();
+const sseHeartbeatIntervals = new Map<express.Response, ReturnType<typeof setInterval>>();
+
+function registerSseHeartbeat(res: express.Response) {
+  if (SSE_HEARTBEAT_MS <= 0) return;
+  const id = setInterval(() => {
+    try {
+      res.write(`: ping\n\n`);
+    } catch {
+      clearSseHeartbeat(res);
+    }
+  }, SSE_HEARTBEAT_MS);
+  sseHeartbeatIntervals.set(res, id);
+}
+
+function clearSseHeartbeat(res: express.Response) {
+  const id = sseHeartbeatIntervals.get(res);
+  if (id !== undefined) {
+    clearInterval(id);
+    sseHeartbeatIntervals.delete(res);
+  }
+}
+
+function closeAllSseClients(jobId: string) {
+  const clients = sseClients.get(jobId);
+  if (!clients) return;
+  for (const res of clients) {
+    clearSseHeartbeat(res);
+    res.end();
+  }
+  sseClients.delete(jobId);
+}
 
 function appendJobNdjson(jobId: string, payload: Record<string, unknown>) {
   try {
@@ -156,11 +190,7 @@ async function processJob(job: Job, skippedUrls?: string[]) {
   job.status = "done";
   pushEvent(job.id, { type: "done" });
 
-  const clients = sseClients.get(job.id);
-  if (clients) {
-    for (const res of clients) res.end();
-    sseClients.delete(job.id);
-  }
+  closeAllSseClients(job.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -301,11 +331,7 @@ app.post("/api/discover-brands", (req, res) => {
       pushEvent(job.id, { type: "done", error: e.message });
     }
 
-    const clients = sseClients.get(job.id);
-    if (clients) {
-      for (const res of clients) res.end();
-      sseClients.delete(job.id);
-    }
+    closeAllSseClients(job.id);
   })();
 
   res.json({ jobId: id });
@@ -494,11 +520,7 @@ async function runE2EOrchestrator(jobId: string) {
         percentComplete: 100,
       });
       pushEvent(jobId, { type: "done" });
-      const clients = sseClients.get(jobId);
-      if (clients) {
-        for (const res of clients) res.end();
-        sseClients.delete(jobId);
-      }
+      closeAllSseClients(jobId);
       return;
     }
 
@@ -669,11 +691,7 @@ async function runE2EOrchestrator(jobId: string) {
     pushEvent(jobId, { type: "done", error: e.message });
   }
 
-  const clients = sseClients.get(jobId);
-  if (clients) {
-    for (const res of clients) res.end();
-    sseClients.delete(jobId);
-  }
+  closeAllSseClients(jobId);
 }
 
 app.post("/api/run-e2e", (_req, res) => {
@@ -696,11 +714,7 @@ app.post("/api/run-e2e", (_req, res) => {
       job.error = (err as Error).message;
       pushEvent(id, { type: "done", error: (err as Error).message });
     }
-    const clients = sseClients.get(id);
-    if (clients) {
-      for (const res of clients) res.end();
-      sseClients.delete(id);
-    }
+    closeAllSseClients(id);
   });
 
   res.json({ jobId: id });
@@ -760,8 +774,11 @@ app.get("/api/progress/:jobId", (req, res) => {
   if (!sseClients.has(job.id)) sseClients.set(job.id, new Set());
   sseClients.get(job.id)!.add(res);
 
+  registerSseHeartbeat(res);
   req.on("close", () => {
+    clearSseHeartbeat(res);
     sseClients.get(job.id)?.delete(res);
+    console.log(`[sse] progress connection closed job=${job.id}`);
   });
 });
 
@@ -954,11 +971,7 @@ app.post("/api/crawl/:retailer", (req, res) => {
       pushEvent(job.id, { type: "done", error: e.message });
     }
 
-    const clients = sseClients.get(job.id);
-    if (clients) {
-      for (const res of clients) res.end();
-      sseClients.delete(job.id);
-    }
+    closeAllSseClients(job.id);
   })();
 
   res.json({ jobId: id });
@@ -1102,11 +1115,7 @@ app.post("/api/upload/:retailer", (req, res) => {
       pushEvent(job.id, { type: "done", error: e.message });
     }
 
-    const clients = sseClients.get(job.id);
-    if (clients) {
-      for (const res of clients) res.end();
-      sseClients.delete(job.id);
-    }
+    closeAllSseClients(job.id);
   })();
 
   res.json({ jobId: id });

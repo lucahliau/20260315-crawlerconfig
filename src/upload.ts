@@ -2,6 +2,12 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { Pool } from "pg";
 import { Stagehand } from "@browserbasehq/stagehand";
 import type { Config } from "./schemas/config.js";
+import {
+  convertToUsd,
+  inferCurrencyFromHostname,
+  resolveCurrencyForUsd,
+  roundUsdPrice,
+} from "./currencyToUsd.js";
 
 // ---------------------------------------------------------------------------
 // Logging — same swappable pattern as explore.ts / crawl.ts
@@ -248,7 +254,10 @@ function extractFromJsonLd(product: Record<string, unknown>): Partial<ClothingIt
     if (firstWithPrice) {
       const p = parseFloat(String(firstWithPrice.price));
       if (!isNaN(p)) result.price = p;
-      result.currency = String(firstWithPrice.priceCurrency ?? "USD");
+      const pc = firstWithPrice.priceCurrency;
+      if (pc != null && String(pc).trim() !== "") {
+        result.currency = String(pc).trim();
+      }
     }
     // Fall back to lowPrice/highPrice
     if (result.price == null && product.offers && typeof product.offers === "object" && !Array.isArray(product.offers)) {
@@ -256,7 +265,10 @@ function extractFromJsonLd(product: Record<string, unknown>): Partial<ClothingIt
       const lowPrice = parseFloat(String(aggOffer.lowPrice ?? ""));
       if (!isNaN(lowPrice)) {
         result.price = lowPrice;
-        result.currency = String(aggOffer.priceCurrency ?? "USD");
+        const pc = aggOffer.priceCurrency;
+        if (pc != null && String(pc).trim() !== "") {
+          result.currency = String(pc).trim();
+        }
       }
     }
 
@@ -629,7 +641,7 @@ function extractProductData(html: string, url: string, config: Config): Clothing
     category: null,
     subcategory: null,
     price: null,
-    currency: "USD",
+    currency: "",
     imageUrl: null,
     images: [],
     colors: [],
@@ -668,12 +680,21 @@ function extractProductData(html: string, url: string, config: Config): Clothing
   // Layer 4: Config-driven inference
   inferFromConfig(result, url, config, html);
 
+  // Currency: if still missing after all layers, infer from hostname or USD
+  finalizeCurrencyHint(result, url);
+
   // Set imageUrl from first image
   if (!result.imageUrl && result.images.length > 0) {
     result.imageUrl = result.images[0];
   }
 
   return result;
+}
+
+function finalizeCurrencyHint(result: ClothingItemInput, url: string): void {
+  if (!result.currency?.trim()) {
+    result.currency = inferCurrencyFromHostname(url) ?? "USD";
+  }
 }
 
 function mergeInto(target: ClothingItemInput, source: Partial<ClothingItemInput>, onlyMissing = false): void {
@@ -758,6 +779,48 @@ function extensionFromContentType(ct: string): string {
   if (ct.includes("gif")) return "gif";
   if (ct.includes("avif")) return "avif";
   return "jpg";
+}
+
+// ---------------------------------------------------------------------------
+// USD normalization (before DB)
+// ---------------------------------------------------------------------------
+
+function normalizeItemPriceToUsd(item: ClothingItemInput, sourceUrl: string): void {
+  if (item.price == null) return;
+
+  const originalPrice = item.price;
+  const rawCurrency = item.currency;
+  const { iso, notes } = resolveCurrencyForUsd(sourceUrl, originalPrice, rawCurrency);
+  const { usd, unknownCurrency } = convertToUsd(originalPrice, iso);
+  const rounded = roundUsdPrice(usd);
+
+  if (iso !== "USD" || notes.length > 0) {
+    log(
+      `    FX: ${originalPrice} ${iso} → ~$${rounded} USD${notes.length ? ` (${notes.join("; ")})` : ""}`,
+    );
+  } else if (unknownCurrency) {
+    log(`    FX: no rate for "${iso}" — leaving nominal amount as USD`);
+  }
+
+  item.price = rounded;
+  item.currency = "USD";
+
+  const shouldAddMeta = iso !== "USD" || notes.length > 0 || unknownCurrency;
+  if (shouldAddMeta) {
+    const prev =
+      item.metadata && typeof item.metadata === "object" && !Array.isArray(item.metadata)
+        ? { ...(item.metadata as Record<string, unknown>) }
+        : {};
+    const fxParts = [...notes];
+    if (unknownCurrency) fxParts.push(`no USD rate for ${iso}; amount stored as nominal USD`);
+    const fxNote = fxParts.filter(Boolean).join("; ");
+    item.metadata = {
+      ...prev,
+      originalPrice,
+      originalCurrency: iso,
+      ...(fxNote ? { fxNote } : {}),
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -972,6 +1035,8 @@ export async function uploadRetailer(
 
           // Ensure externalId is set for upsert
           item.externalId = externalId;
+
+          normalizeItemPriceToUsd(item, url);
 
           // Upsert into database
           await upsertClothingItem(item, pool);

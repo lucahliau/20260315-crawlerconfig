@@ -199,7 +199,21 @@ export async function discoverBrands(
       ? `EXCLUSION LIST — do NOT include any brand whose URL or name appears here:\n${exclusionList.join("\n")}\n\n`
       : "";
 
-  const prompt = `You are a fashion researcher. Use web search to find 15-20 cool, niche clothing brands that are:
+  const prompt = `You are a fashion researcher. Use web search to find 15-20 cool, niche CLOTHING and APPAREL brands.
+
+STRICT DEFINITION — what counts as a valid result:
+- The brand's PRIMARY business must be selling wearable apparel: tops, bottoms, outerwear, dresses, tailoring, knitwear, denim, activewear, technical/outdoor CLOTHING (jackets, pants, baselayers), footwear sold as fashion or apparel, hats/headwear, and fashion bags/backpacks when sold by a clothing label.
+- The brand must be a clothing/apparel company first. It is NOT enough that they sell a few T-shirts alongside other product lines.
+
+STRICT EXCLUSIONS — do NOT include brands that are mainly any of the following (even if they also sell some apparel):
+- Outdoor/camping/equipment retailers (tents, tent pegs, sleeping bags as gear, climbing hardware, general camp supplies)
+- Art, prints, posters, wall decor, framing, or "gallery" shops
+- Gift cards, e-gifts, vouchers, or digital-only gift products as a primary offering
+- Home goods, furniture, kitchenware, bedding-only, candles, general lifestyle objects
+- General merchandise, bookstores, music, electronics, beauty-only, or sporting goods stores where apparel is not the core business
+- Marketplaces or department stores (unless you can point to a single in-house apparel label as the brand)
+
+STYLE PREFERENCES (among valid clothing brands only):
 - Men-focused or unisex
 - NOT mainstream (avoid Nike, Zara, H&M, Uniqlo, ASOS, etc.)
 - Independent, underground, or lesser-known
@@ -207,13 +221,14 @@ export async function discoverBrands(
 
 ${exclusionText}REQUIREMENTS:
 - Return EXACTLY 15-20 brands (fewer is not acceptable)
-- Each brand must have a valid homepage URL (https preferred)
+- Every brand must satisfy the STRICT DEFINITION above; exclude anything that fails the STRICT EXCLUSIONS
+- Each brand must have a valid homepage URL (https preferred) for a clothing/apparel brand
 - Respond with ONLY a single JSON object—no markdown, no code blocks, no explanation before or after
 
 Output format (copy this structure exactly):
 {"brands":[{"name":"Brand Name","url":"https://example.com"},{"name":"Another Brand","url":"https://another.com"},...]}
 
-Search the web, then respond with ONLY the JSON object as shown above.`;
+Search the web, verify each candidate is primarily a clothing company, then respond with ONLY the JSON object as shown above.`;
 
   onProgress("Searching the web for niche brands...");
 

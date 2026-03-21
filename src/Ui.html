@@ -1566,7 +1566,9 @@ function startCrawl(retailer, onComplete) {
     });
 }
 
-// ── Upload all product URLs in parallel ──────────────────────────────────
+// ── Upload all product URLs (limited concurrency — avoids too many SSE connections per host) ──
+var BULK_UPLOAD_CONCURRENCY = 3;
+
 function uploadAllProductUrls() {
   var includeUploaded = document.getElementById("uploadIncludeUploaded") && document.getElementById("uploadIncludeUploaded").checked;
   var rows = getFilteredSortedRetailers();
@@ -1590,13 +1592,15 @@ function uploadAllProductUrls() {
 
   var hint = document.getElementById("dashboardBulkHint");
   if (hint) {
-    hint.textContent = "Uploading " + withUrls.length + " retailer(s)" + (skipped ? "; skipped " + skipped + " already done" : "") + ".";
+    hint.textContent = "Uploading " + withUrls.length + " retailer(s)" + (skipped ? "; skipped " + skipped + " already done" : "") + " (up to " + BULK_UPLOAD_CONCURRENCY + " at a time).";
   }
 
   var completed = 0;
   var total = withUrls.length;
-  function onOneComplete() {
-    completed++;
+  var idx = 0;
+  var active = 0;
+
+  function maybeFinishBulk() {
     if (completed >= total) {
       if (btn) btn.disabled = false;
       if (hint) {
@@ -1605,9 +1609,20 @@ function uploadAllProductUrls() {
     }
   }
 
-  for (var j = 0; j < withUrls.length; j++) {
-    startUpload(withUrls[j], onOneComplete);
+  function scheduleNext() {
+    while (active < BULK_UPLOAD_CONCURRENCY && idx < withUrls.length) {
+      active++;
+      var retailer = withUrls[idx++];
+      startUpload(retailer, function () {
+        active--;
+        completed++;
+        maybeFinishBulk();
+        scheduleNext();
+      });
+    }
   }
+
+  scheduleNext();
 }
 
 // ── Start upload for a retailer ──────────────────────────────────────────
