@@ -7,7 +7,13 @@ import crypto from "node:crypto";
 import { exploreRetailer } from "./explore.js";
 import { crawlProductUrls, type CrawlResult } from "./crawl.js";
 import { uploadRetailer, type UploadResult } from "./upload.js";
-import { discoverBrands, syncConfigsToMasterList, type DiscoveredBrand } from "./discoverBrands.js";
+import {
+  discoverBrands,
+  normalizeDiscoverCategory,
+  syncConfigsToMasterList,
+  type DiscoveredBrand,
+  type DiscoverBrandsOptions,
+} from "./discoverBrands.js";
 import { writeJsonAtomic } from "./jsonFs.js";
 import { retailerSlugFromUrl } from "./retailerSlug.js";
 import { recordDiscoverUsage, recordExploreUsage, getCostMetrics } from "./usageLedger.js";
@@ -46,8 +52,8 @@ interface Job {
   error?: string;
   discoveredBrands?: DiscoveredBrand[];
   e2eProgress?: Record<string, unknown>;
-  /** Latest niche-brand discovery Claude text (for SSE replay). */
-  claudeDiscoverResponse?: string;
+  /** Latest niche-brand discovery model text (for SSE replay). */
+  discoverModelResponse?: string;
 }
 
 const jobs = new Map<string, Job>();
@@ -131,14 +137,14 @@ function pushEvent(jobId: string, event: Record<string, unknown>) {
   }
 }
 
-/** Full Claude text from niche-brand discovery — stored for SSE replay + collapsible UI. */
-function pushClaudeDiscoverResponse(jobId: string, body: string) {
+/** Full model text from niche-brand discovery — stored for SSE replay + collapsible UI. */
+function pushDiscoverModelResponse(jobId: string, body: string) {
   const job = jobs.get(jobId);
   if (job) {
-    job.claudeDiscoverResponse = body;
+    job.discoverModelResponse = body;
   }
-  appendJobNdjson(jobId, { type: "claude-response", phase: "discover", body });
-  const payload = { type: "claude-response" as const, phase: "discover" as const, body };
+  appendJobNdjson(jobId, { type: "model-response", phase: "discover", body });
+  const payload = { type: "model-response" as const, phase: "discover" as const, body };
   const clients = sseClients.get(jobId);
   if (clients) {
     const data = `data: ${JSON.stringify(payload)}\n\n`;
@@ -293,6 +299,9 @@ app.post("/api/explore", (req, res) => {
 
 app.post("/api/discover-brands", (req, res) => {
   const id = crypto.randomUUID();
+  const cat = normalizeDiscoverCategory(req.body?.category);
+  const discoverOptions: DiscoverBrandsOptions | undefined =
+    cat !== undefined ? { category: cat } : undefined;
   const job: Job = {
     id,
     urls: [],
@@ -310,13 +319,14 @@ app.post("/api/discover-brands", (req, res) => {
           pushLog(job.id, msg);
           pushEvent(job.id, { type: "progress", message: msg });
         },
-        (text) => pushClaudeDiscoverResponse(job.id, text),
+        (text) => pushDiscoverModelResponse(job.id, text),
+        discoverOptions,
       );
       recordDiscoverUsage({
         estimatedUsd: result.estimatedUsd,
         inputTokens: result.usage.input_tokens,
         outputTokens: result.usage.output_tokens,
-        webSearchRequests: result.usage.server_tool_use?.web_search_requests ?? 0,
+        webSearchRequests: result.usage.web_search_requests,
       });
       job.discoveredBrands = result.brands;
       job.status = "done";
@@ -386,7 +396,7 @@ function extractRetailerFromUrl(url: string): string {
   }
 }
 
-async function runE2EOrchestrator(jobId: string) {
+async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrandsOptions) {
   const startedAt = new Date().toISOString();
   const job = jobs.get(jobId);
   if (!job) return;
@@ -414,17 +424,18 @@ async function runE2EOrchestrator(jobId: string) {
   try {
     // Step 1: Discover brands
     pushProgress({ step: 1, stepLabel: "Discovering brands", percentComplete: 5 });
-    pushLog(jobId, "\n========== Step 1: Discovering brands (Claude search) ==========\n");
+    pushLog(jobId, "\n========== Step 1: Discovering brands (Gemini + Google Search) ==========\n");
 
     const discoverResult = await discoverBrands(
       (msg) => pushLog(jobId, msg),
-      (text) => pushClaudeDiscoverResponse(jobId, text),
+      (text) => pushDiscoverModelResponse(jobId, text),
+      discoverOptions,
     );
     recordDiscoverUsage({
       estimatedUsd: discoverResult.estimatedUsd,
       inputTokens: discoverResult.usage.input_tokens,
       outputTokens: discoverResult.usage.output_tokens,
-      webSearchRequests: discoverResult.usage.server_tool_use?.web_search_requests ?? 0,
+      webSearchRequests: discoverResult.usage.web_search_requests,
       e2eJobId: jobId,
     });
     const brands = discoverResult.brands;
@@ -694,8 +705,11 @@ async function runE2EOrchestrator(jobId: string) {
   closeAllSseClients(jobId);
 }
 
-app.post("/api/run-e2e", (_req, res) => {
+app.post("/api/run-e2e", (req, res) => {
   const id = crypto.randomUUID();
+  const cat = normalizeDiscoverCategory(req.body?.category);
+  const discoverOptions: DiscoverBrandsOptions | undefined =
+    cat !== undefined ? { category: cat } : undefined;
   const job: Job = {
     id,
     urls: [],
@@ -706,7 +720,7 @@ app.post("/api/run-e2e", (_req, res) => {
   };
   jobs.set(id, job);
 
-  runE2EOrchestrator(id).catch((err) => {
+  runE2EOrchestrator(id, discoverOptions).catch((err) => {
     console.error(`[run-e2e job=${id}] Unhandled error:`, err);
     const job = jobs.get(id);
     if (job) {
@@ -752,12 +766,12 @@ app.get("/api/progress/:jobId", (req, res) => {
     res.write(`data: ${JSON.stringify(job.e2eProgress)}\n\n`);
   }
 
-  if (job.claudeDiscoverResponse) {
+  if (job.discoverModelResponse) {
     res.write(
       `data: ${JSON.stringify({
-        type: "claude-response",
+        type: "model-response",
         phase: "discover",
-        body: job.claudeDiscoverResponse,
+        body: job.discoverModelResponse,
       })}\n\n`,
     );
   }

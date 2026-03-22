@@ -1,22 +1,29 @@
 import "dotenv/config";
-import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenAI } from "@google/genai";
 import fs from "node:fs";
 import path from "node:path";
 import { writeJsonAtomic } from "./jsonFs.js";
-import { estimateUsdFromMessageUsage } from "./pricing.js";
-import type { Usage } from "@anthropic-ai/sdk/resources/messages/messages.js";
+import { estimateUsdFromDiscoverUsage, type DiscoverApiUsage } from "./pricing.js";
 
 const DISCOVERED_BRANDS_PATH =
   process.env.DISCOVERED_BRANDS_PATH ?? path.join(process.cwd(), "discovered-brands.json");
 
-/** Default 30m — web search turns can exceed the SDK default (~10m) and trigger APIConnectionTimeoutError. */
-const DEFAULT_ANTHROPIC_TIMEOUT_MS = 30 * 60 * 1000;
+/** Default model for niche-brand discovery (Gemini API id, not Stagehand `google/...` form). */
+const DEFAULT_GEMINI_DISCOVER_MODEL = "gemini-2.5-flash";
 
-function anthropicTimeoutMs(): number {
-  const raw = process.env.ANTHROPIC_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === "") return DEFAULT_ANTHROPIC_TIMEOUT_MS;
+function discoverModelId(): string {
+  const m = process.env.GEMINI_DISCOVER_MODEL?.trim();
+  return m && m.length > 0 ? m : DEFAULT_GEMINI_DISCOVER_MODEL;
+}
+
+/** Default 30m — grounding + search can exceed client defaults. */
+const DEFAULT_DISCOVER_TIMEOUT_MS = 30 * 60 * 1000;
+
+function discoverTimeoutMs(): number {
+  const raw = process.env.DISCOVER_TIMEOUT_MS ?? process.env.GEMINI_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_DISCOVER_TIMEOUT_MS;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return DEFAULT_ANTHROPIC_TIMEOUT_MS;
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_DISCOVER_TIMEOUT_MS;
   return Math.floor(n);
 }
 
@@ -85,7 +92,6 @@ function enqueueMaster(fn: () => void): void {
 }
 
 function extractJsonFromResponse(text: string): { brands: DiscoveredBrand[] } | null {
-  // Try to find JSON in markdown code block first
   const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   const jsonStr = codeBlockMatch ? codeBlockMatch[1].trim() : text.trim();
 
@@ -110,41 +116,9 @@ function extractJsonFromResponse(text: string): { brands: DiscoveredBrand[] } | 
   }
 }
 
-/**
- * Extracts brands JSON from the API response content blocks.
- *
- * With web search enabled, the response contains multiple content blocks
- * (tool_use, tool_result, text, etc.). The first text block is usually
- * preamble like "Let me search for brands…" — the actual JSON lives in
- * the *last* text block. We iterate from last to first and return the
- * first successful parse. As a final fallback we concatenate every text
- * block and try parsing that (handles the edge case where JSON is split
- * across blocks).
- */
-function extractBrandsFromResponse(
-  content: Anthropic.Messages.ContentBlock[],
-): { brands: DiscoveredBrand[]; rawText: string } | null {
-  const textBlocks = content
-    .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
-    .map((b) => b.text);
-
-  // Try each text block individually, starting from the last (most likely to contain JSON)
-  for (let i = textBlocks.length - 1; i >= 0; i--) {
-    const parsed = extractJsonFromResponse(textBlocks[i]);
-    if (parsed) {
-      return { brands: parsed.brands, rawText: textBlocks[i] };
-    }
-  }
-
-  // Fallback: concatenate all text blocks and try parsing (handles split JSON)
-  if (textBlocks.length > 1) {
-    const combined = textBlocks.join("\n");
-    const parsed = extractJsonFromResponse(combined);
-    if (parsed) {
-      return { brands: parsed.brands, rawText: combined };
-    }
-  }
-
+function extractBrandsFromText(text: string): { brands: DiscoveredBrand[]; rawText: string } | null {
+  const parsed = extractJsonFromResponse(text);
+  if (parsed) return { brands: parsed.brands, rawText: text };
   return null;
 }
 
@@ -201,14 +175,45 @@ export function syncConfigsToMasterList(configsDir: string): void {
   }
 }
 
+const MAX_DISCOVER_CATEGORY_LEN = 500;
+
+/** Trim, cap length; returns undefined if empty or not a non-empty string. */
+export function normalizeDiscoverCategory(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string") return undefined;
+  const t = raw.trim();
+  if (!t) return undefined;
+  return t.length > MAX_DISCOVER_CATEGORY_LEN ? t.slice(0, MAX_DISCOVER_CATEGORY_LEN) : t;
+}
+
+export interface DiscoverBrandsOptions {
+  /** Optional theme, region, or niche to prioritize in web search (e.g. "San Diego surf brands"). */
+  category?: string;
+}
+
+function buildDiscoverUsage(args: {
+  promptTokenCount: number;
+  candidatesTokenCount: number;
+  webSearchRequests: number;
+}): DiscoverApiUsage {
+  return {
+    input_tokens: args.promptTokenCount,
+    output_tokens: args.candidatesTokenCount,
+    web_search_requests: args.webSearchRequests,
+  };
+}
+
 export async function discoverBrands(
   onProgress: (msg: string) => void,
-  /** Fired once with the concatenated Claude text blocks (for SSE / collapsible UI). */
-  onClaudeResponse?: (fullText: string) => void,
-): Promise<{ brands: DiscoveredBrand[]; usage: Usage; estimatedUsd: number }> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  /** Fired once with full model text (for SSE / collapsible UI). */
+  onModelResponse?: (fullText: string) => void,
+  options?: DiscoverBrandsOptions,
+): Promise<{ brands: DiscoveredBrand[]; usage: DiscoverApiUsage; estimatedUsd: number }> {
+  const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey || !apiKey.trim()) {
-    throw new Error("ANTHROPIC_API_KEY is not set. Add it to your .env file.");
+    throw new Error(
+      "GOOGLE_GENERATIVE_AI_API_KEY is not set. Add it to your .env file (Google AI Studio).",
+    );
   }
 
   const master = loadMasterList();
@@ -219,9 +224,20 @@ export async function discoverBrands(
       ? `EXCLUSION LIST — do NOT include any brand whose URL or name appears here:\n${exclusionList.join("\n")}\n\n`
       : "";
 
+  const category = normalizeDiscoverCategory(options?.category);
+  const categoryBlock =
+    category !== undefined
+      ? `USER-SPECIFIED SEARCH FOCUS (prioritize this theme, region, or niche in your web search):
+"${category}"
+
+Still apply every rule below: only brands that pass the STRICT DEFINITION, exclude everything in STRICT EXCLUSIONS and the exclusion list, and return 15-20 results in the required JSON format when possible.
+
+`
+      : "";
+
   const prompt = `You are a fashion researcher. Use web search to find 15-20 cool, niche CLOTHING and APPAREL brands.
 
-STRICT DEFINITION — what counts as a valid result:
+${categoryBlock}STRICT DEFINITION — what counts as a valid result:
 - The brand's PRIMARY business must be selling wearable apparel: tops, bottoms, outerwear, dresses, tailoring, knitwear, denim, activewear, technical/outdoor CLOTHING (jackets, pants, baselayers), footwear sold as fashion or apparel, hats/headwear, and fashion bags/backpacks when sold by a clothing label.
 - The brand must be a clothing/apparel company first. It is NOT enough that they sell a few T-shirts alongside other product lines.
 
@@ -252,40 +268,46 @@ Search the web, verify each candidate is primarily a clothing company, then resp
 
   onProgress("Searching the web for niche brands...");
 
-  const anthropic = new Anthropic({ apiKey, timeout: anthropicTimeoutMs() });
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: { timeout: discoverTimeoutMs() },
+  });
 
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 4096,
-    messages: [{ role: "user", content: prompt }],
-    tools: [{ type: "web_search_20260209", name: "web_search" }],
+  // Google Search grounding: https://ai.google.dev/gemini-api/docs/google-search
+  const response = await ai.models.generateContent({
+    model: discoverModelId(),
+    contents: prompt,
+    config: {
+      tools: [{ googleSearch: {} }],
+      maxOutputTokens: 4096,
+    },
   });
 
   onProgress("Parsing results...");
 
-  // Log all content block types for debugging
-  const blockTypes = response.content.map((b) => b.type).join(", ");
-  onProgress(`Response contains ${response.content.length} blocks: [${blockTypes}]`);
+  const text = response.text;
+  const responseForUi = text ?? "(no text)";
+  onModelResponse?.(responseForUi);
 
-  // Log full response every time for debugging
-  const allTextBlocks = response.content
-    .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
-    .map((b, i) => `--- text block ${i} ---\n${b.text}`)
-    .join("\n\n");
-  const responseForUi = allTextBlocks || "(no text blocks)";
-  onClaudeResponse?.(responseForUi);
-  onProgress("Claude response received (" + response.content.filter((b) => b.type === "text").length + " text block(s)). Expand the panel below to read the full message.");
+  const um = response.usageMetadata;
+  const promptTokenCount = um?.promptTokenCount ?? 0;
+  const candidatesTokenCount = um?.candidatesTokenCount ?? 0;
 
-  const result = extractBrandsFromResponse(response.content);
+  const gm = response.candidates?.[0]?.groundingMetadata;
+  let webSearchRequests = gm?.webSearchQueries?.length ?? 0;
+  if (webSearchRequests === 0 && (gm?.groundingChunks?.length ?? 0) > 0) {
+    webSearchRequests = 1;
+  }
+
+  onProgress(
+    `Model response received (${text ? "text" : "empty"}). Expand the panel below to read the full message.`,
+  );
+
+  const result = text ? extractBrandsFromText(text) : null;
 
   if (!result || result.brands.length === 0) {
-    // Log what we actually received to help debug
-    const textBlocks = response.content
-      .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
-      .map((b, i) => `--- text block ${i} ---\n${b.text}`)
-      .join("\n");
-    onProgress("Failed to parse. Text blocks received:\n" + textBlocks);
-    throw new Error("Could not parse brands from Claude response. Please try again.");
+    onProgress("Failed to parse. Text received:\n" + responseForUi);
+    throw new Error("Could not parse brands from model response. Please try again.");
   }
 
   onProgress(`Found ${result.brands.length} brands. Saving to master list...`);
@@ -312,8 +334,13 @@ Search the web, verify each candidate is primarily a clothing company, then resp
 
   onProgress(`Done. Added ${newBrands.length} new brands.`);
 
-  const estimatedUsd = estimateUsdFromMessageUsage(response.usage);
+  const usage = buildDiscoverUsage({
+    promptTokenCount,
+    candidatesTokenCount,
+    webSearchRequests,
+  });
+  const estimatedUsd = estimateUsdFromDiscoverUsage(usage);
   onProgress(`Estimated API cost (this run): ~$${estimatedUsd.toFixed(4)}`);
 
-  return { brands: result.brands, usage: response.usage, estimatedUsd };
+  return { brands: result.brands, usage, estimatedUsd };
 }

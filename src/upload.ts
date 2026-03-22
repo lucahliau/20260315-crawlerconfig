@@ -1,6 +1,7 @@
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { Pool } from "pg";
 import { Stagehand } from "@browserbasehq/stagehand";
+import { getStagehandModel } from "./stagehandModel.js";
 import type { Config } from "./schemas/config.js";
 import {
   convertToUsd,
@@ -908,6 +909,7 @@ function validateItem(item: ClothingItemInput): string[] {
 async function createUploadStagehand(): Promise<Stagehand> {
   const sh = new Stagehand({
     env: (process.env.STAGEHAND_ENV as "LOCAL" | "BROWSERBASE") || "LOCAL",
+    model: getStagehandModel(),
     localBrowserLaunchOptions: { headless: true },
   });
   await sh.init();

@@ -318,6 +318,17 @@
   }
   .product-urls-list a:hover { text-decoration: underline; }
 
+  .brand-search-focus-section label[for="brandSearchCategory"] {
+    display: block;
+    font-size: 0.9rem;
+    margin-bottom: 0.35rem;
+  }
+  .brand-search-focus-section .brand-search-focus-hint {
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-top: 0.35rem;
+  }
+
   .discover-section { margin-bottom: 1.25rem; }
   .discover-progress-bar {
     height: 6px;
@@ -384,7 +395,7 @@
   .discover-brands-list .brand-name { font-weight: 500; color: var(--text); }
   .discover-add-row { margin-top: 0.5rem; }
 
-  .claude-response-panel {
+  .model-response-panel {
     margin-top: 0.5rem;
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -392,14 +403,14 @@
     background: var(--json-bg);
     font-size: 0.8rem;
   }
-  .claude-response-panel summary {
+  .model-response-panel summary {
     cursor: pointer;
     font-weight: 500;
     color: var(--text);
     user-select: none;
   }
-  .claude-response-panel summary:hover { color: var(--accent); }
-  .claude-response-pre {
+  .model-response-panel summary:hover { color: var(--accent); }
+  .model-response-pre {
     margin: 0.5rem 0 0;
     padding: 0.5rem;
     max-height: 320px;
@@ -413,7 +424,7 @@
     color: var(--log-text);
     border-radius: calc(var(--radius) - 2px);
   }
-  .e2e-section .claude-response-panel {
+  .e2e-section .model-response-panel {
     margin-top: 0.75rem;
   }
 
@@ -547,9 +558,23 @@
     <span class="cost-item">Loading usage…</span>
   </div>
   <div class="cost-strip-note">
-    Estimates from measured token usage in this app (Claude Messages API + Stagehand). Not official Anthropic invoices.
+    Estimates from measured token usage in this app (Gemini API + Stagehand). Not official Google invoices.
   </div>
 </div>
+
+<section class="brand-search-focus-section">
+  <h2>Brand search focus</h2>
+  <p style="font-size: 0.9rem; color: var(--muted); margin-bottom: 0.5rem;">
+    Optional theme, region, or niche for the 15–20 brand web search.
+  </p>
+  <label for="brandSearchCategory">Optional search category or focus</label>
+  <div class="input-row">
+    <input type="text" id="brandSearchCategory" placeholder="e.g. San Diego surf brands" autocomplete="off" />
+  </div>
+  <p class="brand-search-focus-hint">
+    Applies to <strong>Run End-to-End</strong> (step 1) and <strong>Discover Niche Brands</strong>.
+  </p>
+</section>
 
 <!-- End-to-End Section -->
 <section class="e2e-section">
@@ -571,9 +596,9 @@
       <div class="e2e-progress-bar-fill" id="e2eProgressFill" style="width: 0%"></div>
     </div>
     <div class="e2e-meta" id="e2eMeta">0% complete</div>
-    <details class="claude-response-panel" id="e2eClaudePanel" hidden>
-      <summary>Claude response (15–20 brand search)</summary>
-      <pre class="claude-response-pre" id="e2eClaudePre"></pre>
+    <details class="model-response-panel" id="e2eModelPanel" hidden>
+      <summary>Model response (15–20 brand search)</summary>
+      <pre class="model-response-pre" id="e2eModelPre"></pre>
     </details>
   </div>
 </section>
@@ -582,15 +607,15 @@
 <section class="discover-section">
   <h2>Discover Niche Brands</h2>
   <p style="font-size: 0.9rem; color: var(--muted); margin-bottom: 0.75rem;">
-    Uses Claude with web search to find 15–20 cool niche men's/unisex clothing brands. Results are added to a master list so future searches avoid duplicates.
+    Uses Gemini with Google Search to find 15–20 cool niche men's/unisex clothing brands. Results are added to a master list so future searches avoid duplicates.
   </p>
   <button type="button" class="btn-primary" id="discoverBtn">Discover Niche Brands</button>
   <div class="discover-progress-bar" id="discoverProgressBar"></div>
   <div class="discover-output" id="discoverOutput">
     <span class="discover-status" id="discoverStatus"></span>
-    <details class="claude-response-panel" id="discoverClaudePanel" hidden>
-      <summary>Claude response (15–20 brand search)</summary>
-      <pre class="claude-response-pre" id="discoverClaudePre"></pre>
+    <details class="model-response-panel" id="discoverModelPanel" hidden>
+      <summary>Model response (15–20 brand search)</summary>
+      <pre class="model-response-pre" id="discoverModelPre"></pre>
     </details>
     <div class="discover-log" id="discoverLog"></div>
     <div class="discover-brands-list" id="discoverBrandsList"></div>
@@ -682,7 +707,7 @@
     </div>
     <div class="history-modal-summary" id="historyModalSummary">Loading…</div>
     <div class="history-snapshots" id="historySnapshots" style="display:none"></div>
-    <p class="history-modal-desc">Brands and URLs excluded from Claude's discovery:</p>
+    <p class="history-modal-desc">Brands and URLs excluded from niche brand discovery:</p>
     <div class="history-modal-list" id="historyModalList"></div>
   </div>
 </div>
@@ -949,10 +974,10 @@ var DISCOVER_JOB_KEY = "discoverJobId";
 var lastDiscoveredBrands = [];
 var discoverRunning = false;
 
-/** prefix: "discover" | "e2e" — element ids {prefix}ClaudePanel / {prefix}ClaudePre */
-function fillClaudeDiscoverPanel(prefix, body) {
-  var pre = document.getElementById(prefix + "ClaudePre");
-  var panel = document.getElementById(prefix + "ClaudePanel");
+/** prefix: "discover" | "e2e" — element ids {prefix}ModelPanel / {prefix}ModelPre */
+function fillDiscoverModelPanel(prefix, body) {
+  var pre = document.getElementById(prefix + "ModelPre");
+  var panel = document.getElementById(prefix + "ModelPanel");
   var text = typeof body === "string" ? body : "";
   if (pre) pre.textContent = text;
   if (panel) panel.hidden = !text;
@@ -984,8 +1009,8 @@ function discoverConnectToJob(jobId) {
     if (msg.type === "log") {
       discoverLog.textContent += msg.msg + "\n";
       discoverLog.scrollTop = discoverLog.scrollHeight;
-    } else if (msg.type === "claude-response" && msg.phase === "discover" && msg.body != null) {
-      fillClaudeDiscoverPanel("discover", msg.body);
+    } else if (msg.type === "model-response" && msg.phase === "discover" && msg.body != null) {
+      fillDiscoverModelPanel("discover", msg.body);
     } else if (msg.type === "progress" && msg.message) {
       discoverStatus.textContent = msg.message;
     } else if (msg.type === "brands" && msg.brands) {
@@ -1061,11 +1086,20 @@ function runDiscover() {
   discoverOutput.classList.add("active");
   discoverLog.textContent = "";
   discoverLog.classList.add("active");
-  fillClaudeDiscoverPanel("discover", "");
+  fillDiscoverModelPanel("discover", "");
   document.getElementById("discoverBrandsList").innerHTML = "";
   document.getElementById("discoverAddToQueueBtn").style.display = "none";
 
-  fetch("/api/discover-brands", { method: "POST", headers: { "Content-Type": "application/json" } })
+  var discoverBody = {};
+  var catRaw = document.getElementById("brandSearchCategory");
+  var catVal = catRaw && catRaw.value ? String(catRaw.value).trim() : "";
+  if (catVal) discoverBody.category = catVal;
+
+  fetch("/api/discover-brands", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(discoverBody),
+  })
     .then(function (res) { return res.json(); })
     .then(function (data) {
       if (data.error) throw new Error(data.error);
@@ -1135,8 +1169,8 @@ function e2eConnectToJob(jobId) {
     if (msg.type === "log") {
       logArea.textContent += msg.msg + "\n";
       logArea.scrollTop = logArea.scrollHeight;
-    } else if (msg.type === "claude-response" && msg.phase === "discover" && msg.body != null) {
-      fillClaudeDiscoverPanel("e2e", msg.body);
+    } else if (msg.type === "model-response" && msg.phase === "discover" && msg.body != null) {
+      fillDiscoverModelPanel("e2e", msg.body);
     } else if (msg.type === "e2e-progress") {
       updateE2eStatus(msg);
     } else if (msg.type === "done") {
@@ -1198,7 +1232,7 @@ function runE2e() {
   e2eStatus.classList.add("active");
   progressSection.style.display = "";
   logArea.textContent = "";
-  fillClaudeDiscoverPanel("e2e", "");
+  fillDiscoverModelPanel("e2e", "");
   e2eLastStatus = {};
 
   updateE2eStatus({
@@ -1213,7 +1247,16 @@ function runE2e() {
     percentComplete: 0
   });
 
-  fetch("/api/run-e2e", { method: "POST", headers: { "Content-Type": "application/json" } })
+  var e2eBody = {};
+  var catEl = document.getElementById("brandSearchCategory");
+  var e2eCat = catEl && catEl.value ? String(catEl.value).trim() : "";
+  if (e2eCat) e2eBody.category = e2eCat;
+
+  fetch("/api/run-e2e", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(e2eBody),
+  })
     .then(function (res) { return res.json(); })
     .then(function (data) {
       if (data.error) throw new Error(data.error);

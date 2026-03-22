@@ -10,9 +10,9 @@
     "verify-fx": "tsx scripts/verify-fx.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.78.0",
     "@aws-sdk/client-s3": "^3.1009.0",
     "@browserbasehq/stagehand": "^3.1.0",
+    "@google/genai": "^1.46.0",
     "dotenv": "^16.4.5",
     "express": "^5.1.0",
     "pg": "^8.20.0",

@@ -7,6 +7,7 @@ import { addToMasterList } from "./discoverBrands.js";
 import { writeJsonAtomic } from "./jsonFs.js";
 import { retailerSlugFromUrl } from "./retailerSlug.js";
 import { estimateUsdFromStagehandMetrics } from "./pricing.js";
+import { getStagehandModel } from "./stagehandModel.js";
 
 export interface ExploreRetailerResult {
   config: Record<string, unknown>;
@@ -2398,7 +2399,7 @@ export async function exploreRetailer(
           "--disable-features=IsolateOrigins,site-per-process",
         ],
       },
-      model: "anthropic/claude-sonnet-4-6",
+      model: getStagehandModel(),
     });
 
     await stagehand.init();
