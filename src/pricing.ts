@@ -13,7 +13,7 @@ export interface DiscoverApiUsage {
 
 /**
  * USD/MTok for Gemini Flash-class usage — override via env when Google changes pricing.
- * Defaults approximate gemini-2.5-flash list pricing; verify on https://ai.google.dev/pricing
+ * Defaults approximate Gemini 3 Flash / Flash-class list pricing; verify on https://ai.google.dev/pricing
  */
 function geminiInputUsdPerMtok(): number {
   const v = process.env.GEMINI_INPUT_USD_PER_MTOK;

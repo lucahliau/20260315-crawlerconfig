@@ -9,7 +9,26 @@ const DISCOVERED_BRANDS_PATH =
   process.env.DISCOVERED_BRANDS_PATH ?? path.join(process.cwd(), "discovered-brands.json");
 
 /** Default model for niche-brand discovery (Gemini API id, not Stagehand `google/...` form). */
-const DEFAULT_GEMINI_DISCOVER_MODEL = "gemini-2.5-flash";
+const DEFAULT_GEMINI_DISCOVER_MODEL = "gemini-3-flash-preview";
+
+/** JSON Schema for structured discover output (Gemini `responseJsonSchema`). */
+const DISCOVER_BRANDS_RESPONSE_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    brands: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          url: { type: "string" },
+        },
+        required: ["name", "url"],
+      },
+    },
+  },
+  required: ["brands"],
+} as const;
 
 function discoverModelId(): string {
   const m = process.env.GEMINI_DISCOVER_MODEL?.trim();
@@ -91,29 +110,55 @@ function enqueueMaster(fn: () => void): void {
   }
 }
 
-function extractJsonFromResponse(text: string): { brands: DiscoveredBrand[] } | null {
-  const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const jsonStr = codeBlockMatch ? codeBlockMatch[1].trim() : text.trim();
+function parseBrandsFromPayload(parsed: unknown): { brands: DiscoveredBrand[] } | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const brands = (parsed as { brands?: unknown }).brands;
+  if (!Array.isArray(brands)) return null;
 
-  try {
-    const parsed = JSON.parse(jsonStr) as { brands?: unknown };
-    if (!parsed || typeof parsed !== "object") return null;
-    const brands = parsed.brands;
-    if (!Array.isArray(brands)) return null;
-
-    const result: DiscoveredBrand[] = [];
-    for (const b of brands) {
-      if (b && typeof b === "object" && typeof b.name === "string" && typeof b.url === "string") {
-        const url = b.url.trim();
-        if (url.startsWith("http://") || url.startsWith("https://")) {
-          result.push({ name: String(b.name).trim(), url });
-        }
+  const result: DiscoveredBrand[] = [];
+  for (const b of brands) {
+    if (b && typeof b === "object" && typeof b.name === "string" && typeof b.url === "string") {
+      const url = b.url.trim();
+      if (url.startsWith("http://") || url.startsWith("https://")) {
+        result.push({ name: String(b.name).trim(), url });
       }
     }
-    return result.length > 0 ? { brands: result } : null;
-  } catch {
-    return null;
   }
+  return result.length > 0 ? { brands: result } : null;
+}
+
+/** Fallback when the model returns markdown or multiple fences; structured JSON skips this path. */
+function extractJsonFromResponse(text: string): { brands: DiscoveredBrand[] } | null {
+  const candidates: string[] = [];
+  const trimmed = text.trim();
+  if (trimmed) candidates.push(trimmed);
+
+  const fenceRe = /```(?:json)?\s*([\s\S]*?)```/g;
+  let fm: RegExpExecArray | null;
+  while ((fm = fenceRe.exec(text)) !== null) {
+    const inner = fm[1].trim();
+    if (inner) candidates.push(inner);
+  }
+
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    candidates.push(text.slice(start, end + 1));
+  }
+
+  const tried = new Set<string>();
+  for (const s of candidates) {
+    if (tried.has(s)) continue;
+    tried.add(s);
+    try {
+      const parsed = JSON.parse(s) as unknown;
+      const p = parseBrandsFromPayload(parsed);
+      if (p) return p;
+    } catch {
+      // try next candidate
+    }
+  }
+  return null;
 }
 
 function extractBrandsFromText(text: string): { brands: DiscoveredBrand[]; rawText: string } | null {
@@ -230,12 +275,14 @@ export async function discoverBrands(
       ? `USER-SPECIFIED SEARCH FOCUS (prioritize this theme, region, or niche in your web search):
 "${category}"
 
-Still apply every rule below: only brands that pass the STRICT DEFINITION, exclude everything in STRICT EXCLUSIONS and the exclusion list, and return 15-20 results in the required JSON format when possible.
+Still apply every rule below: only brands that pass the STRICT DEFINITION, exclude everything in STRICT EXCLUSIONS and the exclusion list, and return 15-20 results matching the API JSON schema when possible.
 
 `
       : "";
 
   const prompt = `You are a fashion researcher. Use web search to find 15-20 cool, niche CLOTHING and APPAREL brands.
+
+The API enforces a fixed JSON schema for your reply. Output only that JSON structure: do not wrap it in markdown, do not use code fences (no triple backticks), do not add explanations, and do not repeat or restart the answer mid-output—complete a single valid response.
 
 ${categoryBlock}STRICT DEFINITION — what counts as a valid result:
 - The brand's PRIMARY business must be selling wearable apparel: tops, bottoms, outerwear, dresses, tailoring, knitwear, denim, activewear, technical/outdoor CLOTHING (jackets, pants, baselayers), footwear sold as fashion or apparel, hats/headwear, and fashion bags/backpacks when sold by a clothing label.
@@ -259,12 +306,9 @@ ${exclusionText}REQUIREMENTS:
 - Return EXACTLY 15-20 brands (fewer is not acceptable)
 - Every brand must satisfy the STRICT DEFINITION above; exclude anything that fails the STRICT EXCLUSIONS
 - Each brand must have a valid homepage URL (https preferred) for a clothing/apparel brand
-- Respond with ONLY a single JSON object—no markdown, no code blocks, no explanation before or after
+- Your reply must be one JSON object only, matching the schema: an object with a "brands" array of { "name", "url" } objects
 
-Output format (copy this structure exactly):
-{"brands":[{"name":"Brand Name","url":"https://example.com"},{"name":"Another Brand","url":"https://another.com"},...]}
-
-Search the web, verify each candidate is primarily a clothing company, then respond with ONLY the JSON object as shown above.`;
+Search the web, verify each candidate is primarily a clothing company, then output only the JSON object (no markdown, no code fences).`;
 
   onProgress("Searching the web for niche brands...");
 
@@ -273,13 +317,15 @@ Search the web, verify each candidate is primarily a clothing company, then resp
     httpOptions: { timeout: discoverTimeoutMs() },
   });
 
-  // Google Search grounding: https://ai.google.dev/gemini-api/docs/google-search
+  // Google Search grounding + structured JSON (Gemini 3): https://ai.google.dev/gemini-api/docs/google-search
   const response = await ai.models.generateContent({
     model: discoverModelId(),
     contents: prompt,
     config: {
       tools: [{ googleSearch: {} }],
-      maxOutputTokens: 4096,
+      maxOutputTokens: 8192,
+      responseMimeType: "application/json",
+      responseJsonSchema: DISCOVER_BRANDS_RESPONSE_JSON_SCHEMA,
     },
   });
 
