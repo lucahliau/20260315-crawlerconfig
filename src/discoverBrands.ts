@@ -8,7 +8,7 @@ import { estimateUsdFromDiscoverUsage, type DiscoverApiUsage } from "./pricing.j
 const DISCOVERED_BRANDS_PATH =
   process.env.DISCOVERED_BRANDS_PATH ?? path.join(process.cwd(), "discovered-brands.json");
 
-/** Default model for niche-brand discovery (Gemini API id, not Stagehand `google/...` form). */
+/** Default model for brand discovery (Gemini API id, not Stagehand `google/...` form). */
 const DEFAULT_GEMINI_DISCOVER_MODEL = "gemini-3-flash-preview";
 
 /** JSON Schema for structured discover output (Gemini `responseJsonSchema`). */
@@ -167,7 +167,7 @@ function extractBrandsFromText(text: string): { brands: DiscoveredBrand[]; rawTe
   return null;
 }
 
-function normalizeUrl(raw: string): string | null {
+export function normalizeUrl(raw: string): string | null {
   let s = raw.trim();
   if (!s) return null;
   s = s.replace(/^["'<]+|["'>]+$/g, "");
@@ -232,7 +232,7 @@ export function normalizeDiscoverCategory(raw: unknown): string | undefined {
 }
 
 export interface DiscoverBrandsOptions {
-  /** Optional theme, region, or niche to prioritize in web search (e.g. "San Diego surf brands"). */
+  /** Optional theme, region, or focus to prioritize in web search (e.g. "San Diego surf brands"). */
   category?: string;
 }
 
@@ -272,7 +272,7 @@ export async function discoverBrands(
   const category = normalizeDiscoverCategory(options?.category);
   const categoryBlock =
     category !== undefined
-      ? `USER-SPECIFIED SEARCH FOCUS (prioritize this theme, region, or niche in your web search):
+      ? `USER-SPECIFIED SEARCH FOCUS (prioritize this theme, region, or category in your web search):
 "${category}"
 
 Still apply every rule below: only brands that pass the STRICT DEFINITION, exclude everything in STRICT EXCLUSIONS and the exclusion list, and return 15-20 results matching the API JSON schema when possible.
@@ -280,27 +280,30 @@ Still apply every rule below: only brands that pass the STRICT DEFINITION, exclu
 `
       : "";
 
-  const prompt = `You are a fashion researcher. Use web search to find 15-20 cool, niche CLOTHING and APPAREL brands.
+  const prompt = `You are a fashion researcher. Use web search to find 15-20 interesting CLOTHING and APPAREL brands that are NOT commoditized mass-market fashion.
+
+"Not commoditized" means the brand has a real product identity and its own line of apparel—not interchangeable trend-factory mall fashion or pure aggregators. You do NOT need to find "niche" or underground labels only.
 
 The API enforces a fixed JSON schema for your reply. Output only that JSON structure: do not wrap it in markdown, do not use code fences (no triple backticks), do not add explanations, and do not repeat or restart the answer mid-output—complete a single valid response.
 
 ${categoryBlock}STRICT DEFINITION — what counts as a valid result:
 - The brand's PRIMARY business must be selling wearable apparel: tops, bottoms, outerwear, dresses, tailoring, knitwear, denim, activewear, technical/outdoor CLOTHING (jackets, pants, baselayers), footwear sold as fashion or apparel, hats/headwear, and fashion bags/backpacks when sold by a clothing label.
 - The brand must be a clothing/apparel company first. It is NOT enough that they sell a few T-shirts alongside other product lines.
+- Specialty sport and performance apparel brands are valid when apparel/footwear is a substantive part of their offering (e.g. Wilson tennis, running, cycling brands)—these are welcome even if they are well-known in their category.
 
 STRICT EXCLUSIONS — do NOT include brands that are mainly any of the following (even if they also sell some apparel):
 - Outdoor/camping/equipment retailers (tents, tent pegs, sleeping bags as gear, climbing hardware, general camp supplies)
 - Art, prints, posters, wall decor, framing, or "gallery" shops
 - Gift cards, e-gifts, vouchers, or digital-only gift products as a primary offering
 - Home goods, furniture, kitchenware, bedding-only, candles, general lifestyle objects
-- General merchandise, bookstores, music, electronics, beauty-only, or sporting goods stores where apparel is not the core business
+- General merchandise, bookstores, music, electronics, beauty-only
+- Big-box sporting goods megastores (chains that primarily resell many brands) — but apparel-first brand sites (e.g. wilson.com for Wilson) are OK
 - Marketplaces or department stores (unless you can point to a single in-house apparel label as the brand)
 
 STYLE PREFERENCES (among valid clothing brands only):
 - Men-focused or unisex
-- NOT mainstream (avoid Nike, Zara, H&M, Uniqlo, ASOS, etc.)
-- Independent, underground, or lesser-known
-- Examples of niches: streetwear boutiques, sustainable/ethical brands, vintage-inspired, avant-garde, workwear, technical apparel, Japanese/European independents
+- Strongly avoid commoditized fashion mass retailers and aggregators: ASOS, Shein-style ultra-fast fashion, and interchangeable fast-fashion chains (Zara, H&M, Uniqlo, etc.)
+- Prefer brands with distinct identity: independents, heritage labels, workwear, technical apparel, sustainable/ethical lines, streetwear, Japanese/European specialty labels, and specialty sport/performance apparel (e.g. Wilson tennis)—not required to be obscure
 
 ${exclusionText}REQUIREMENTS:
 - Return EXACTLY 15-20 brands (fewer is not acceptable)
@@ -310,7 +313,7 @@ ${exclusionText}REQUIREMENTS:
 
 Search the web, verify each candidate is primarily a clothing company, then output only the JSON object (no markdown, no code fences).`;
 
-  onProgress("Searching the web for niche brands...");
+  onProgress("Searching the web for brands...");
 
   const ai = new GoogleGenAI({
     apiKey,

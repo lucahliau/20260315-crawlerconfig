@@ -10,6 +10,7 @@ import { uploadRetailer, type UploadResult } from "./upload.js";
 import {
   discoverBrands,
   normalizeDiscoverCategory,
+  normalizeUrl,
   syncConfigsToMasterList,
   type DiscoveredBrand,
   type DiscoverBrandsOptions,
@@ -52,7 +53,7 @@ interface Job {
   error?: string;
   discoveredBrands?: DiscoveredBrand[];
   e2eProgress?: Record<string, unknown>;
-  /** Latest niche-brand discovery model text (for SSE replay). */
+  /** Latest brand-discovery model text (for SSE replay). */
   discoverModelResponse?: string;
 }
 
@@ -137,7 +138,7 @@ function pushEvent(jobId: string, event: Record<string, unknown>) {
   }
 }
 
-/** Full model text from niche-brand discovery — stored for SSE replay + collapsible UI. */
+/** Full model text from brand discovery — stored for SSE replay + collapsible UI. */
 function pushDiscoverModelResponse(jobId: string, body: string) {
   const job = jobs.get(jobId);
   if (job) {
@@ -839,6 +840,9 @@ app.get("/api/retailers-overview", (_req, res) => {
     fs.mkdirSync(CONFIGS_DIR, { recursive: true });
     const files = fs.readdirSync(CONFIGS_DIR).filter((f) => f.endsWith(".json"));
 
+    /** Normalized config base URLs for matching against the discovery master list. */
+    const configBaseUrls = new Set<string>();
+
     const retailers = files.map((filename) => {
       const fromFile = filename.replace(/\.json$/, "");
       const raw = fs.readFileSync(path.join(CONFIGS_DIR, filename), "utf-8");
@@ -848,6 +852,11 @@ app.get("/api/retailers-overview", (_req, res) => {
       } catch {
         return null;
       }
+      const baseUrlRaw =
+        typeof config.baseUrl === "string" ? config.baseUrl.trim() : "";
+      const normBase = normalizeUrl(baseUrlRaw);
+      if (normBase) configBaseUrls.add(normBase);
+
       const retailer = (typeof config.retailer === "string" ? config.retailer : null) ?? fromFile;
       const dq = config.dataQuality as { overallRecommendation?: string } | undefined;
       const recommendation = dq?.overallRecommendation ?? "unknown";
@@ -902,7 +911,46 @@ app.get("/api/retailers-overview", (_req, res) => {
       };
     }).filter((x): x is NonNullable<typeof x> => x != null);
 
-    res.json({ retailers });
+    /** Discovered brands/URLs not yet represented by a config file (same URL normalization as discovery). */
+    const identifiedWithoutConfig: { name: string; url: string }[] = [];
+    const backlogSeen = new Set<string>();
+
+    let discoveredBrandsList: DiscoveredBrand[] = [];
+    let discoveredUrlStrings: string[] = [];
+    if (fs.existsSync(DISCOVERED_BRANDS_PATH)) {
+      try {
+        const raw = fs.readFileSync(DISCOVERED_BRANDS_PATH, "utf-8");
+        const data = JSON.parse(raw) as { brands?: unknown; urls?: unknown };
+        discoveredBrandsList = Array.isArray(data.brands) ? (data.brands as DiscoveredBrand[]) : [];
+        discoveredUrlStrings = Array.isArray(data.urls) ? (data.urls as string[]) : [];
+      } catch {
+        // ignore parse errors
+      }
+    }
+
+    for (const b of discoveredBrandsList) {
+      if (!b || typeof b.url !== "string") continue;
+      const n = normalizeUrl(b.url);
+      if (!n || backlogSeen.has(n)) continue;
+      if (configBaseUrls.has(n)) continue;
+      backlogSeen.add(n);
+      const name =
+        typeof b.name === "string" && b.name.trim().length > 0 ? b.name.trim() : n;
+      identifiedWithoutConfig.push({ name, url: n });
+    }
+    for (const u of discoveredUrlStrings) {
+      if (typeof u !== "string") continue;
+      const n = normalizeUrl(u);
+      if (!n || backlogSeen.has(n)) continue;
+      if (configBaseUrls.has(n)) continue;
+      backlogSeen.add(n);
+      identifiedWithoutConfig.push({ name: n, url: n });
+    }
+    identifiedWithoutConfig.sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    );
+
+    res.json({ retailers, identifiedWithoutConfig });
   } catch (err) {
     console.error("[api/retailers-overview] Error:", err);
     res.status(500).json({ error: "Failed to load retailers overview." });

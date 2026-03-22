@@ -108,7 +108,7 @@ function mean(nums: number[]): number | null {
 export interface CostMetricsResponse {
   /** Sum of estimated USD from all recorded events (discover + explore). */
   totalEstimatedUsd: number;
-  /** Average cost per niche-brand discovery run. */
+  /** Average cost per brand-discovery run. */
   avgDiscoverUsd: number | null;
   /** Average cost per config crawl (explore) run. */
   avgExploreUsd: number | null;

@@ -200,6 +200,10 @@
     display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;
   }
   .config-section-header h2 { margin: 0; }
+  .config-toolbar-spacer {
+    flex: 1;
+    min-width: 0;
+  }
 
   .dashboard-toolbar {
     margin-bottom: 1rem;
@@ -544,6 +548,113 @@
     transition: width 0.2s ease;
   }
   .e2e-meta { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; }
+
+  .workflow-lede {
+    font-size: 0.9rem;
+    color: var(--muted);
+    margin-bottom: 1rem;
+    line-height: 1.45;
+  }
+  .workflow-subsection {
+    margin-bottom: 1.25rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .workflow-subsection:last-of-type {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+  .workflow-subsection h3 {
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+    color: var(--text);
+    font-weight: 600;
+  }
+  .workflow-discovery .discover-section { margin-bottom: 0; }
+  .dashboard-subsection {
+    margin-top: 1.5rem;
+  }
+  .dashboard-subsection:first-of-type {
+    margin-top: 0;
+  }
+  .dashboard-subsection h3 {
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+    color: var(--text);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .dashboard-subsection-hint {
+    font-size: 0.82rem;
+    color: var(--muted);
+    margin-bottom: 0.75rem;
+    line-height: 1.4;
+  }
+  .dashboard-subsection-hint code {
+    font-size: 0.78rem;
+    padding: 0.1rem 0.25rem;
+    background: var(--json-bg);
+    border-radius: 4px;
+  }
+  .backlog-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.5rem;
+    height: 1.5rem;
+    padding: 0 0.45rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    border-radius: 999px;
+    background: var(--warn);
+    color: #fff;
+    line-height: 1;
+  }
+  .backlog-badge.is-zero {
+    background: var(--border);
+    color: var(--muted);
+  }
+  .backlog-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .backlog-entry {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    padding: 0.6rem 0.75rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 0.85rem;
+  }
+  .backlog-name {
+    font-weight: 600;
+    flex: 1;
+    min-width: 120px;
+  }
+  .backlog-url {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.78rem;
+    color: var(--muted);
+    word-break: break-all;
+    flex: 2;
+    min-width: 180px;
+  }
+  .backlog-entry .btn-small {
+    flex-shrink: 0;
+  }
+  .backlog-empty {
+    font-size: 0.85rem;
+    color: var(--muted);
+    padding: 0.35rem 0;
+  }
 </style>
 </head>
 <body>
@@ -562,140 +673,165 @@
   </div>
 </div>
 
-<section class="brand-search-focus-section">
-  <h2>Brand search focus</h2>
-  <p style="font-size: 0.9rem; color: var(--muted); margin-bottom: 0.5rem;">
-    Optional theme, region, or niche for the 15–20 brand web search.
+<section class="workflow-discovery">
+  <h2>Discovery &amp; intake</h2>
+  <p class="workflow-lede">
+    Set an optional search theme, discover brands, then add URLs to the queue or run Explore.
   </p>
-  <label for="brandSearchCategory">Optional search category or focus</label>
-  <div class="input-row">
-    <input type="text" id="brandSearchCategory" placeholder="e.g. San Diego surf brands" autocomplete="off" />
-  </div>
-  <p class="brand-search-focus-hint">
-    Applies to <strong>Run End-to-End</strong> (step 1) and <strong>Discover Niche Brands</strong>.
-  </p>
-</section>
 
-<!-- End-to-End Section -->
-<section class="e2e-section">
-  <h2>Run the whole process end-to-end</h2>
-  <p style="font-size: 0.9rem; color: var(--muted); margin-bottom: 0.75rem;">
-    Discover brands → Generate configs → Crawl product URLs → Extract &amp; upload. Saves after each brand completes.
-  </p>
-  <button type="button" class="btn-primary" id="runE2eBtn">Run End-to-End</button>
-  <div class="e2e-status" id="e2eStatus">
-    <div class="e2e-step" id="e2eStepLabel">Step 1/4: Discovering brands</div>
-    <div class="e2e-counts" id="e2eCounts">
-      <span id="e2eBrands">Brands: 0</span>
-      <span id="e2eConfigs">Configs: 0 / 0</span>
-      <span id="e2eRecommended">Recommended: 0</span>
-      <span id="e2eUrls">Product URLs: 0</span>
-      <span id="e2eUploaded">Uploaded: 0 / 0</span>
+  <div class="workflow-subsection brand-search-focus-section">
+    <h3>Brand search focus</h3>
+    <p style="font-size: 0.9rem; color: var(--muted); margin-bottom: 0.5rem;">
+      Optional theme, region, or focus for the 15–20 brand web search.
+    </p>
+    <label for="brandSearchCategory">Optional search category or focus</label>
+    <div class="input-row">
+      <input type="text" id="brandSearchCategory" placeholder="e.g. San Diego surf brands" autocomplete="off" />
     </div>
-    <div class="e2e-progress-bar">
-      <div class="e2e-progress-bar-fill" id="e2eProgressFill" style="width: 0%"></div>
-    </div>
-    <div class="e2e-meta" id="e2eMeta">0% complete</div>
-    <details class="model-response-panel" id="e2eModelPanel" hidden>
-      <summary>Model response (15–20 brand search)</summary>
-      <pre class="model-response-pre" id="e2eModelPre"></pre>
-    </details>
+    <p class="brand-search-focus-hint">
+      Applies to <strong>Run End-to-End</strong> (step 1) and <strong>Discover Brands</strong>.
+    </p>
   </div>
-</section>
 
-<!-- Discover Niche Brands Section -->
-<section class="discover-section">
-  <h2>Discover Niche Brands</h2>
-  <p style="font-size: 0.9rem; color: var(--muted); margin-bottom: 0.75rem;">
-    Uses Gemini 3 Flash with Google Search to find 15–20 cool niche men's/unisex clothing brands. Results are added to a master list so future searches avoid duplicates.
-  </p>
-  <button type="button" class="btn-primary" id="discoverBtn">Discover Niche Brands</button>
-  <div class="discover-progress-bar" id="discoverProgressBar"></div>
-  <div class="discover-output" id="discoverOutput">
-    <span class="discover-status" id="discoverStatus"></span>
-    <details class="model-response-panel" id="discoverModelPanel" hidden>
-      <summary>Model response (15–20 brand search)</summary>
-      <pre class="model-response-pre" id="discoverModelPre"></pre>
-    </details>
-    <div class="discover-log" id="discoverLog"></div>
-    <div class="discover-brands-list" id="discoverBrandsList"></div>
-    <div class="discover-add-row">
-      <button type="button" class="btn-primary btn-small" id="discoverAddToQueueBtn" style="display:none">Add to Queue</button>
+  <div class="workflow-subsection discover-section">
+    <h3>Discover brands</h3>
+    <p style="font-size: 0.9rem; color: var(--muted); margin-bottom: 0.75rem;">
+      Uses Gemini 3 Flash with Google Search to find 15–20 men's/unisex clothing brands that are not commoditized mass-market fashion (e.g. still skip ASOS; specialty labels like Wilson tennis are OK). Results are added to a master list so future searches avoid duplicates.
+    </p>
+    <button type="button" class="btn-primary" id="discoverBtn">Discover Brands</button>
+    <div class="discover-progress-bar" id="discoverProgressBar"></div>
+    <div class="discover-output" id="discoverOutput">
+      <span class="discover-status" id="discoverStatus"></span>
+      <details class="model-response-panel" id="discoverModelPanel" hidden>
+        <summary>Model response (15–20 brand search)</summary>
+        <pre class="model-response-pre" id="discoverModelPre"></pre>
+      </details>
+      <div class="discover-log" id="discoverLog"></div>
+      <div class="discover-brands-list" id="discoverBrandsList"></div>
+      <div class="discover-add-row">
+        <button type="button" class="btn-primary btn-small" id="discoverAddToQueueBtn" style="display:none">Add to Queue</button>
+      </div>
     </div>
   </div>
-</section>
 
-<!-- Input Section -->
-<section>
-  <h2>Add URLs</h2>
-  <div class="input-row">
-    <input type="text" id="urlInput" placeholder="https://www.example.com" />
-    <button type="button" class="btn-primary" id="addUrlBtn">Add URL</button>
-    <label class="file-label">
-      Upload CSV
-      <input type="file" id="csvInput" accept=".csv,.txt" />
-    </label>
-  </div>
-  <div id="inputStatus" class="input-status"></div>
-  <ul class="queue-list" id="queueList"></ul>
-  <div class="actions-row">
-    <button type="button" class="btn-primary" id="runBtn" disabled>Run</button>
-    <button type="button" class="btn-secondary btn-small" id="clearBtn" style="display:none">Clear</button>
-    <span class="progress-text" id="progressText"></span>
-  </div>
-</section>
-
-<!-- Progress Section -->
-<section id="progressSection" style="display:none">
-  <h2>Progress</h2>
-  <div class="log-area" id="logArea"></div>
-</section>
-
-<!-- Results Section -->
-<section>
-  <div class="config-section-header">
-    <h2>Generated Configs</h2>
-    <button type="button" class="btn-primary" id="crawlAllRecommendedBtn" disabled>Crawl All Recommended URLs</button>
-    <button type="button" class="btn-primary upload-btn" id="uploadAllProductUrlsBtn" disabled>Upload All Product URLs</button>
-  </div>
-  <div class="dashboard-toolbar" id="dashboardToolbar">
-    <div class="toolbar-row">
-      <label>Search <input type="search" id="dashboardSearch" placeholder="Retailer name" autocomplete="off" /></label>
-      <label>Recommendation
-        <select id="filterRecommendation">
-          <option value="all">All</option>
-          <option value="recommended">Recommended</option>
-          <option value="usable">Usable</option>
-          <option value="not recommended">Not recommended</option>
-          <option value="unknown">Unknown</option>
-        </select>
-      </label>
-      <label>Pipeline
-        <select id="filterPipeline">
-          <option value="all">All</option>
-          <option value="need_crawl">Needs crawl (recommended, no URLs)</option>
-          <option value="need_upload">Needs upload</option>
-          <option value="upload_done">Upload complete (current crawl)</option>
-        </select>
-      </label>
-      <label>Sort
-        <select id="sortDashboard">
-          <option value="rec">Recommendation</option>
-          <option value="name">Name A–Z</option>
-          <option value="crawled">Crawled date</option>
-          <option value="uploaded">Upload date</option>
-          <option value="urls">URL count</option>
-        </select>
+  <div class="workflow-subsection">
+    <h3>Add URLs</h3>
+    <div class="input-row">
+      <input type="text" id="urlInput" placeholder="https://www.example.com" />
+      <button type="button" class="btn-primary" id="addUrlBtn">Add URL</button>
+      <label class="file-label">
+        Upload CSV
+        <input type="file" id="csvInput" accept=".csv,.txt" />
       </label>
     </div>
-    <div class="toolbar-row">
-      <label title="When off, re-crawl sites that already have product URLs"><input type="checkbox" id="crawlIncludeCrawled" /> Include already crawled</label>
-      <label title="When off, skip uploads already done for this crawl snapshot"><input type="checkbox" id="uploadIncludeUploaded" /> Include already uploaded</label>
-      <label title="Skip explore when configs/&lt;slug&gt;.json exists"><input type="checkbox" id="skipExploreExisting" checked /> Skip existing configs (Run)</label>
+    <div id="inputStatus" class="input-status"></div>
+    <ul class="queue-list" id="queueList"></ul>
+    <div class="actions-row">
+      <button type="button" class="btn-primary" id="runBtn" disabled>Run</button>
+      <button type="button" class="btn-secondary btn-small" id="clearBtn" style="display:none">Clear</button>
+      <span class="progress-text" id="progressText"></span>
     </div>
-    <div id="dashboardBulkHint"></div>
   </div>
-  <div id="configList"><div class="empty-state">No configs generated yet.</div></div>
+</section>
+
+<section class="workflow-active-runs">
+  <h2>Active runs</h2>
+  <p class="workflow-lede">
+    Long-running jobs: end-to-end pipeline and per-URL explore. Monitor progress here.
+  </p>
+
+  <div class="workflow-subsection e2e-section">
+    <h3>End-to-end</h3>
+    <p style="font-size: 0.9rem; color: var(--muted); margin-bottom: 0.75rem;">
+      Discover brands → Generate configs → Crawl product URLs → Extract &amp; upload. Saves after each brand completes.
+    </p>
+    <button type="button" class="btn-primary" id="runE2eBtn">Run End-to-End</button>
+    <div class="e2e-status" id="e2eStatus">
+      <div class="e2e-step" id="e2eStepLabel">Step 1/4: Discovering brands</div>
+      <div class="e2e-counts" id="e2eCounts">
+        <span id="e2eBrands">Brands: 0</span>
+        <span id="e2eConfigs">Configs: 0 / 0</span>
+        <span id="e2eRecommended">Recommended: 0</span>
+        <span id="e2eUrls">Product URLs: 0</span>
+        <span id="e2eUploaded">Uploaded: 0 / 0</span>
+      </div>
+      <div class="e2e-progress-bar">
+        <div class="e2e-progress-bar-fill" id="e2eProgressFill" style="width: 0%"></div>
+      </div>
+      <div class="e2e-meta" id="e2eMeta">0% complete</div>
+      <details class="model-response-panel" id="e2eModelPanel" hidden>
+        <summary>Model response (15–20 brand search)</summary>
+        <pre class="model-response-pre" id="e2eModelPre"></pre>
+      </details>
+    </div>
+  </div>
+
+  <div class="workflow-subsection" id="progressSection" style="display:none">
+    <h3>Explore progress</h3>
+    <div class="log-area" id="logArea"></div>
+  </div>
+</section>
+
+<section class="config-dashboard-section">
+  <h2>Config dashboard</h2>
+  <p class="workflow-lede">
+    Configured retailers (crawl/upload) and the discovery backlog that still needs a config file.
+  </p>
+
+  <div class="dashboard-subsection">
+    <h3>Configured retailers</h3>
+    <div class="config-section-header">
+      <span class="config-toolbar-spacer"></span>
+      <button type="button" class="btn-primary" id="crawlAllRecommendedBtn" disabled>Crawl All Recommended URLs</button>
+      <button type="button" class="btn-primary upload-btn" id="uploadAllProductUrlsBtn" disabled>Upload All Product URLs</button>
+    </div>
+    <div class="dashboard-toolbar" id="dashboardToolbar">
+      <div class="toolbar-row">
+        <label>Search <input type="search" id="dashboardSearch" placeholder="Retailer name" autocomplete="off" /></label>
+        <label>Recommendation
+          <select id="filterRecommendation">
+            <option value="all">All</option>
+            <option value="recommended">Recommended</option>
+            <option value="usable">Usable</option>
+            <option value="not recommended">Not recommended</option>
+            <option value="unknown">Unknown</option>
+          </select>
+        </label>
+        <label>Pipeline
+          <select id="filterPipeline">
+            <option value="all">All</option>
+            <option value="need_crawl">Needs crawl (recommended, no URLs)</option>
+            <option value="need_upload">Needs upload</option>
+            <option value="upload_done">Upload complete (current crawl)</option>
+          </select>
+        </label>
+        <label>Sort
+          <select id="sortDashboard">
+            <option value="rec">Recommendation</option>
+            <option value="name">Name A–Z</option>
+            <option value="crawled">Crawled date</option>
+            <option value="uploaded">Upload date</option>
+            <option value="urls">URL count</option>
+          </select>
+        </label>
+      </div>
+      <div class="toolbar-row">
+        <label title="When off, re-crawl sites that already have product URLs"><input type="checkbox" id="crawlIncludeCrawled" /> Include already crawled</label>
+        <label title="When off, skip uploads already done for this crawl snapshot"><input type="checkbox" id="uploadIncludeUploaded" /> Include already uploaded</label>
+        <label title="Skip explore when configs/&lt;slug&gt;.json exists"><input type="checkbox" id="skipExploreExisting" checked /> Skip existing configs (Run)</label>
+      </div>
+      <div id="dashboardBulkHint"></div>
+    </div>
+    <div id="configList"><div class="empty-state">No configs generated yet.</div></div>
+  </div>
+
+  <div class="dashboard-subsection">
+    <h3>Identified — no config yet <span id="identifiedBacklogBadge" class="backlog-badge is-zero">0</span></h3>
+    <p class="dashboard-subsection-hint">
+      Brands from discovery that are not yet represented by a config file (matched by normalized <code>baseUrl</code>). Add to queue to run Explore.
+    </p>
+    <div id="identifiedBacklogList" class="backlog-list"></div>
+  </div>
 </section>
 
 <div class="history-modal" id="historyModal" style="display:none">
@@ -707,7 +843,7 @@
     </div>
     <div class="history-modal-summary" id="historyModalSummary">Loading…</div>
     <div class="history-snapshots" id="historySnapshots" style="display:none"></div>
-    <p class="history-modal-desc">Brands and URLs excluded from niche brand discovery:</p>
+    <p class="history-modal-desc">Brands and URLs excluded from brand discovery:</p>
     <div class="history-modal-list" id="historyModalList"></div>
   </div>
 </div>
@@ -998,7 +1134,7 @@ function discoverConnectToJob(jobId) {
   progressBar.classList.add("active");
   discoverOutput.classList.add("active");
   discoverLog.classList.add("active");
-  discoverStatus.textContent = "Searching the web for niche brands...";
+  discoverStatus.textContent = "Searching the web for brands...";
   discoverStatus.className = "discover-status";
   if (!discoverLog.textContent) discoverBrandsList.innerHTML = "";
   addToQueueBtn.style.display = "none";
@@ -1038,6 +1174,7 @@ function discoverConnectToJob(jobId) {
         discoverStatus.textContent = "Done \u2014 " + msg.brands.length + " brands found.";
       }
       refreshCostMetrics();
+      loadOverview();
     }
   };
   es.onerror = function () {
@@ -1277,6 +1414,8 @@ var crawlingRetailers = {};
 var uploadingRetailers = {};
 var productUrlsCache = {};
 var overviewRetailers = [];
+/** From /api/retailers-overview: discovered brands with no matching config file yet. */
+var identifiedWithoutConfig = [];
 var dashboardToolbarWired = false;
 
 function recommendationRank(rec) {
@@ -1493,7 +1632,7 @@ function refreshCostMetrics() {
     .then(function (m) {
       var parts = [];
       parts.push('<span class="cost-item">Total tracked: <strong>' + fmtUsd(m.totalEstimatedUsd) + "</strong></span>");
-      parts.push('<span class="cost-item">Avg niche-brand search: <strong>' + fmtUsd(m.avgDiscoverUsd) + "</strong> <span>(" + (m.counts && m.counts.discover != null ? m.counts.discover : 0) + " runs)</span></span>");
+      parts.push('<span class="cost-item">Avg brand discovery: <strong>' + fmtUsd(m.avgDiscoverUsd) + "</strong> <span>(" + (m.counts && m.counts.discover != null ? m.counts.discover : 0) + " runs)</span></span>");
       parts.push('<span class="cost-item">Avg config crawl: <strong>' + fmtUsd(m.avgExploreUsd) + "</strong> <span>(" + (m.counts && m.counts.explore != null ? m.counts.explore : 0) + " runs)</span></span>");
       parts.push('<span class="cost-item">Avg end-to-end: <strong>' + fmtUsd(m.avgE2eUsd) + "</strong> <span>(" + (m.counts && m.counts.e2e != null ? m.counts.e2e : 0) + " runs)</span></span>");
       inner.innerHTML = parts.join("");
@@ -1509,17 +1648,84 @@ function loadOverview() {
     .then(function (r) { return r.json(); })
     .then(function (data) {
       overviewRetailers = data.retailers || [];
+      identifiedWithoutConfig = data.identifiedWithoutConfig || [];
       wireDashboardToolbar();
       renderDashboard();
+      renderIdentifiedBacklog();
     })
     .catch(function (err) {
       console.error("[loadOverview] Error:", err);
+      overviewRetailers = [];
+      identifiedWithoutConfig = [];
       container.innerHTML = '<div class="empty-state">Could not load configs.</div>';
+      renderIdentifiedBacklog();
       var crawlAllBtn = document.getElementById("crawlAllRecommendedBtn");
       var uploadAllBtn = document.getElementById("uploadAllProductUrlsBtn");
       if (crawlAllBtn) crawlAllBtn.disabled = true;
       if (uploadAllBtn) uploadAllBtn.disabled = true;
     });
+}
+
+function renderIdentifiedBacklog() {
+  var listEl = document.getElementById("identifiedBacklogList");
+  var badge = document.getElementById("identifiedBacklogBadge");
+  if (!listEl || !badge) return;
+
+  var n = identifiedWithoutConfig.length;
+  badge.textContent = String(n);
+  badge.className = "backlog-badge" + (n === 0 ? " is-zero" : "");
+
+  if (n === 0) {
+    listEl.innerHTML =
+      '<div class="backlog-empty">No brands waiting for a config (all discovered URLs match a config, or the discovery list is empty).</div>';
+    return;
+  }
+
+  var html = [];
+  for (var i = 0; i < identifiedWithoutConfig.length; i++) {
+    var row = identifiedWithoutConfig[i];
+    var name = row.name || row.url || "";
+    var url = row.url || "";
+    html.push(
+      '<div class="backlog-entry">' +
+        '<span class="backlog-name">' + escHtml(name) + "</span>" +
+        '<span class="backlog-url">' + escHtml(url) + "</span>" +
+        '<button type="button" class="btn-primary btn-small backlog-add-btn" data-backlog-idx="' +
+        i +
+        '">Add to queue</button>' +
+        "</div>"
+    );
+  }
+  listEl.innerHTML = html.join("");
+
+  var btns = listEl.querySelectorAll(".backlog-add-btn");
+  for (var b = 0; b < btns.length; b++) {
+    (function (btn) {
+      btn.onclick = function () {
+        var idx = parseInt(btn.getAttribute("data-backlog-idx"), 10);
+        if (!isNaN(idx) && identifiedWithoutConfig[idx] && identifiedWithoutConfig[idx].url) {
+          addBacklogUrlToQueue(identifiedWithoutConfig[idx].url);
+        }
+      };
+    })(btns[b]);
+  }
+}
+
+function addBacklogUrlToQueue(url) {
+  var result = normalizeUrl(url);
+  if (!result.url) {
+    showStatus(result.reason || "Invalid URL", "error", 4000);
+    return;
+  }
+  for (var i = 0; i < queue.length; i++) {
+    if (queue[i] === result.url) {
+      showStatus("Already in queue.", "info", 3000);
+      return;
+    }
+  }
+  queue.push(result.url);
+  showStatus("Added to queue: " + result.url, "success", 3000);
+  renderQueue();
 }
 
 // ── Crawl all recommended retailers in parallel ────────────────────────
