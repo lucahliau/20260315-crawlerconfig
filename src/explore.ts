@@ -8,6 +8,11 @@ import { writeJsonAtomic } from "./jsonFs.js";
 import { retailerSlugFromUrl } from "./retailerSlug.js";
 import { estimateUsdFromStagehandMetrics } from "./pricing.js";
 import { getStagehandModel } from "./stagehandModel.js";
+import {
+  augmentStagehandInitError,
+  formatStagehandInitMessage,
+  getStagehandBrowserOptions,
+} from "./stagehandConfig.js";
 
 export interface ExploreRetailerResult {
   config: Record<string, unknown>;
@@ -2388,10 +2393,10 @@ export async function exploreRetailer(
     configsDir = process.env.CONFIGS_DIR ?? path.join(process.cwd(), "configs");
     fs.mkdirSync(configsDir, { recursive: true });
 
-    log(session, "Initializing Stagehand (LOCAL, headed browser)...");
+    log(session, formatStagehandInitMessage(false));
 
     stagehand = new Stagehand({
-      env: (process.env.STAGEHAND_ENV as "LOCAL" | "BROWSERBASE") || "LOCAL",
+      ...getStagehandBrowserOptions(),
       localBrowserLaunchOptions: {
         headless: false,
         args: [
@@ -2685,9 +2690,10 @@ export async function exploreRetailer(
 
     return { config: finalConfig, metrics, estimatedUsd };
   } catch (err) {
+    const reportErr = augmentStagehandInitError(err);
     if (retailer && configsDir) {
       try {
-        writeDegradedExploration(configsDir, retailer, displayName, baseUrl, err, {
+        writeDegradedExploration(configsDir, retailer, displayName, baseUrl, reportErr, {
           sitemapResult,
           categoryResult,
           blocksHeadlessBrowsers,
@@ -2700,10 +2706,9 @@ export async function exploreRetailer(
     }
     await shutdownStagehand(stagehand);
     stagehand = null;
-    const msg = err instanceof Error ? err.message : String(err);
-    log(session, `Exploration failed: ${msg}`);
-    if (err instanceof Error && err.stack) log(session, err.stack);
-    throw err;
+    log(session, `Exploration failed: ${reportErr.message}`);
+    if (reportErr.stack) log(session, reportErr.stack);
+    throw reportErr;
   } finally {
     clearTimeout(timeoutHandle);
   }

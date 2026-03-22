@@ -1,6 +1,7 @@
 import path from "node:path";
 import { Stagehand } from "@browserbasehq/stagehand";
 import { getStagehandModel } from "./stagehandModel.js";
+import { getStagehandBrowserOptions } from "./stagehandConfig.js";
 import type { Config } from "./schemas/config.js";
 import { writeJsonAtomic } from "./jsonFs.js";
 
@@ -248,7 +249,7 @@ async function crawlCategoryPagination(
   if (needsBrowser) {
     log("  JS rendering required — using headless browser");
     const stagehand = new Stagehand({
-      env: (process.env.STAGEHAND_ENV as "LOCAL" | "BROWSERBASE") || "LOCAL",
+      ...getStagehandBrowserOptions(),
       model: getStagehandModel(),
     });
     try {
@@ -381,7 +382,7 @@ async function crawlInfiniteScroll(
   const pattern = new RegExp(extraction.productUrlPattern);
 
   const stagehand = new Stagehand({
-    env: (process.env.STAGEHAND_ENV as "LOCAL" | "BROWSERBASE") || "LOCAL",
+    ...getStagehandBrowserOptions(),
     model: getStagehandModel(),
   });
   try {
