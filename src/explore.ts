@@ -10,8 +10,10 @@ import { estimateUsdFromStagehandMetrics } from "./pricing.js";
 import { getStagehandModel } from "./stagehandModel.js";
 import {
   augmentStagehandInitError,
+  classifyExploreFailure,
   formatStagehandInitMessage,
   getStagehandBrowserOptions,
+  type ExploreFailureInfo,
 } from "./stagehandConfig.js";
 
 export interface ExploreRetailerResult {
@@ -20,6 +22,8 @@ export interface ExploreRetailerResult {
   /** Rough USD from Stagehand token totals (same model as `model` option). */
   estimatedUsd: number;
 }
+
+export type ExploreFailureError = Error & { failureInfo?: ExploreFailureInfo };
 
 async function shutdownStagehand(stagehand: Stagehand | null): Promise<StagehandMetrics | null> {
   if (!stagehand) return null;
@@ -2691,6 +2695,7 @@ export async function exploreRetailer(
     return { config: finalConfig, metrics, estimatedUsd };
   } catch (err) {
     const reportErr = augmentStagehandInitError(err);
+    const failureInfo = classifyExploreFailure(reportErr);
     if (retailer && configsDir) {
       try {
         writeDegradedExploration(configsDir, retailer, displayName, baseUrl, reportErr, {
@@ -2706,9 +2711,13 @@ export async function exploreRetailer(
     }
     await shutdownStagehand(stagehand);
     stagehand = null;
+    log(
+      session,
+      `Explore failure classified as ${failureInfo.retryable ? "retryable" : "terminal"} (${failureInfo.code}).`,
+    );
     log(session, `Exploration failed: ${reportErr.message}`);
     if (reportErr.stack) log(session, reportErr.stack);
-    throw reportErr;
+    throw Object.assign(reportErr, { failureInfo }) as ExploreFailureError;
   } finally {
     clearTimeout(timeoutHandle);
   }

@@ -243,7 +243,9 @@
     gap: 0.6rem;
     flex-wrap: wrap;
   }
-  .input-row input[type="text"] {
+  .input-row input[type="text"],
+  .input-row input[type="number"],
+  .actions-row input[type="number"] {
     flex: 1;
     min-width: 220px;
     padding: 0.65rem 0.8rem;
@@ -254,6 +256,8 @@
     color: var(--text);
   }
   .input-row input[type="text"]:focus,
+  .input-row input[type="number"]:focus,
+  .actions-row input[type="number"]:focus,
   .dashboard-toolbar input[type="search"]:focus,
   .dashboard-toolbar select:focus {
     outline: 2px solid var(--accent);
@@ -452,6 +456,23 @@
     font-weight: 700;
     font-size: 0.95rem;
   }
+  .process-card-title,
+  .process-detail-title {
+    color: #fff;
+  }
+  .queue-parallelism-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.84rem;
+    color: var(--muted);
+  }
+  .queue-parallelism-field input[type="number"] {
+    flex: 0 0 5.25rem;
+    min-width: 0;
+    width: 5.25rem;
+    padding: 0.5rem 0.65rem;
+  }
   .process-card-subtitle,
   .retailer-meta,
   .process-card-summary,
@@ -483,6 +504,11 @@
     background: var(--accent-soft);
     color: var(--accent);
   }
+  .process-state.warn,
+  .detail-chip.warn {
+    background: #ffedd5;
+    color: #9a3412;
+  }
   .process-state.success,
   .status-pill.done,
   .detail-chip.success {
@@ -512,12 +538,16 @@
   .badge-recommended { background: #dcfce7; color: #166534; }
   .badge-usable { background: #fef3c7; color: #92400e; }
   .badge-not-recommended { background: #fee2e2; color: #991b1b; }
+  .badge-unknown { background: var(--card-subtle); color: var(--muted); border: 1px solid var(--border); }
   @media (prefers-color-scheme: dark) {
     .badge-recommended,
     .process-state.success,
     .status-pill.done,
     .detail-chip.success { background: #14532d; color: #86efac; }
+    .process-state.warn,
+    .detail-chip.warn { background: #7c2d12; color: #fdba74; }
     .badge-usable { background: #78350f; color: #fcd34d; }
+    .badge-unknown { background: #1e293b; color: #cbd5e1; border-color: #334155; }
     .badge-not-recommended,
     .process-state.error,
     .detail-chip.error { background: #7f1d1d; color: #fca5a5; }
@@ -561,6 +591,31 @@
     font-size: 1rem;
     margin-top: 0.25rem;
     color: var(--text);
+  }
+  .detail-inline-form {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+  }
+  .detail-inline-form select {
+    min-width: 10rem;
+    padding: 0.42rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--text);
+    font-size: 0.82rem;
+  }
+  .detail-inline-form .detail-note {
+    font-size: 0.74rem;
+  }
+  .detail-error-note {
+    margin-top: 0.85rem;
+    padding: 0.75rem 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card);
   }
   .process-log {
     background: var(--log-bg);
@@ -672,30 +727,51 @@
   .retailer-list {
     display: flex;
     flex-direction: column;
-    gap: 0.65rem;
+    gap: 0.42rem;
   }
   .retailer-list-item {
     border: 1px solid var(--border);
-    border-radius: 14px;
+    border-radius: 10px;
     background: var(--card-subtle);
-    padding: 0.85rem;
+    padding: 0.58rem 0.72rem;
     display: flex;
     flex-direction: column;
-    gap: 0.65rem;
+    gap: 0.32rem;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
   }
   .retailer-list-item.is-selected {
     border-color: var(--accent);
     box-shadow: inset 0 0 0 1px var(--accent);
   }
+  .retailer-list-item:hover {
+    border-color: var(--accent);
+    background: var(--card);
+  }
+  .retailer-list-item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .retailer-list-main {
+    flex: 1;
+    min-width: 0;
+  }
   .retailer-list-subrow {
     display: flex;
     align-items: center;
-    gap: 0.45rem;
+    gap: 0.35rem;
     flex-wrap: wrap;
   }
   .method-tag {
-    font-size: 0.76rem;
+    font-size: 0.72rem;
     color: var(--muted);
+  }
+  .retailer-actions {
+    flex-shrink: 0;
+  }
+  .retailer-actions .btn-small {
+    padding: 0.34rem 0.56rem;
+    font-size: 0.74rem;
   }
   .config-site-link {
     color: var(--accent);
@@ -971,6 +1047,10 @@
           <div id="inputStatus" class="input-status"></div>
           <ul class="queue-list" id="queueList"></ul>
           <div class="actions-row">
+            <label class="queue-parallelism-field" for="exploreParallelismInput">
+              Parallel explores
+              <input type="number" id="exploreParallelismInput" min="1" max="10" step="1" value="2" inputmode="numeric" />
+            </label>
             <button type="button" class="btn-primary" id="runBtn" disabled>Run Explore</button>
             <button type="button" class="btn-secondary btn-small" id="clearBtn" style="display:none">Clear queue</button>
             <span class="progress-text" id="progressText">Ready.</span>
@@ -1144,6 +1224,7 @@ var uploadingRetailers = {};
 var productUrlsCache = {};
 var productUrlsLoading = {};
 var overviewRetailers = [];
+var recommendationSaveState = {};
 var identifiedWithoutConfig = [];
 var dashboardToolbarWired = false;
 var bulkHintOverride = "";
@@ -1186,8 +1267,39 @@ function escHtml(s) {
 }
 
 function processToneClass(tone) {
-  if (tone === "success" || tone === "error" || tone === "running") return tone;
+  if (tone === "success" || tone === "error" || tone === "running" || tone === "warn") return tone;
   return "idle";
+}
+
+function recommendationBadgeClass(rec) {
+  if (rec === "recommended") return "badge-recommended";
+  if (rec === "usable") return "badge-usable";
+  if (rec === "unknown") return "badge-unknown";
+  return "badge-not-recommended";
+}
+
+function getExploreStatusMeta(row) {
+  var status = row && row.exploreStatus ? row.exploreStatus : "idle";
+  if (status === "completed") return { label: "Ready", tone: "success" };
+  if (status === "running") return { label: "Exploring", tone: "running" };
+  if (status === "queued_retry") return { label: "Retry queued", tone: "warn" };
+  if (status === "needs_retry") return { label: "Needs retry", tone: "warn" };
+  if (status === "failed") return { label: "Failed", tone: "error" };
+  return { label: "Idle", tone: "idle" };
+}
+
+function getExploreStatusSummary(row) {
+  var meta = getExploreStatusMeta(row);
+  if (row && row.exploreStatus === "queued_retry" && row.retryAt) {
+    return meta.label + " until " + new Date(row.retryAt).toLocaleString();
+  }
+  if (row && row.exploreStatus === "needs_retry") {
+    return row.exploreFailureReason || row.exploreError || "Explore failed for an operational reason and should be retried.";
+  }
+  if (row && row.exploreStatus === "failed") {
+    return row.exploreError || row.exploreFailureReason || "Explore failed.";
+  }
+  return meta.label;
 }
 
 function setSelectedProcess(id) {
@@ -1512,7 +1624,7 @@ function renderActiveProcesses() {
   detail.innerHTML =
     '<div class="detail-header">' +
       '<div>' +
-        '<h3>' + escHtml(selected.title || selected.id) + "</h3>" +
+        '<h3 class="process-detail-title">' + escHtml(selected.title || selected.id) + "</h3>" +
         (selected.subtitle ? '<div class="detail-subtext" style="margin-top: 0.25rem;">' + escHtml(selected.subtitle) + "</div>" : "") +
       "</div>" +
       '<div class="workspace-actions">' +
@@ -1562,6 +1674,17 @@ function registerRetailerProcess(id, title, retailer, subtitle) {
   setSelectedProcess(id);
 }
 
+function getExploreParallelism() {
+  var input = document.getElementById("exploreParallelismInput");
+  if (!input) return 2;
+  var parsed = parseInt(input.value, 10);
+  if (!isFinite(parsed)) parsed = 2;
+  if (parsed < 1) parsed = 1;
+  if (parsed > 10) parsed = 10;
+  input.value = String(parsed);
+  return parsed;
+}
+
 function runExplore() {
   if (queue.length === 0 || running) return;
   running = true;
@@ -1579,6 +1702,7 @@ function runExplore() {
 
   var skipEl = document.getElementById("skipExploreExisting");
   var skipExisting = skipEl ? skipEl.checked : true;
+  var parallelism = getExploreParallelism();
   var processId = "explore:queue";
   upsertProcess({
     id: processId,
@@ -1589,7 +1713,10 @@ function runExplore() {
     tone: "running",
     summary: "Submitting explore run…",
     logs: [],
-    metrics: [skipExisting ? "Skip existing configs" : "Include existing configs"],
+    metrics: [
+      skipExisting ? "Skip existing configs" : "Include existing configs",
+      "Parallel explores: " + parallelism
+    ],
     active: true,
     percent: 0
   });
@@ -1598,7 +1725,7 @@ function runExplore() {
   fetch("/api/explore", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ urls: urls, skipExisting: skipExisting })
+    body: JSON.stringify({ urls: urls, skipExisting: skipExisting, parallelism: parallelism })
   })
     .then(function (res) {
       return res.json().then(function (data) {
@@ -1611,6 +1738,7 @@ function runExplore() {
       var jobId = data.jobId;
       var skippedN = data.skippedCount || 0;
       var toProcess = submittedCount - skippedN;
+      var jobParallelism = data.parallelism || parallelism;
 
       upsertProcess({
         id: processId,
@@ -1618,7 +1746,8 @@ function runExplore() {
         summary: "Explore job started.",
         metrics: [
           submittedCount + " URL(s) queued",
-          skippedN ? skippedN + " skipped" : toProcess + " to process"
+          skippedN ? skippedN + " skipped" : toProcess + " to process",
+          "Parallel explores: " + jobParallelism
         ],
         jobId: jobId
       });
@@ -1630,14 +1759,18 @@ function runExplore() {
           appendProcessLog(processId, msg.msg);
         } else if (msg.type === "progress") {
           var percent = msg.total ? Math.round((msg.current / msg.total) * 100) : null;
+          var progressSummary = "Completed " + msg.current + "/" + msg.total + ": " + msg.url;
+          if (msg.activeCount > 0) {
+            progressSummary += " (" + msg.activeCount + " still running)";
+          }
           upsertProcess({
             id: processId,
             statusText: "Running",
             tone: "running",
-            summary: "Processing " + msg.current + "/" + msg.total + ": " + msg.url,
+            summary: progressSummary,
             percent: percent
           });
-          if (progressText) progressText.textContent = "Processing " + msg.current + "/" + msg.total + ": " + msg.url;
+          if (progressText) progressText.textContent = progressSummary;
         } else if (msg.type === "done") {
           es.close();
           running = false;
@@ -2167,16 +2300,38 @@ function renderRetailerDetail() {
   var baseUrl = cfg.baseUrl || "";
   var method = cfg.discovery && cfg.discovery.method ? cfg.discovery.method : "unknown";
   var rec = row.recommendation || "unknown";
-  var badgeClass = rec === "recommended" ? "badge-recommended" : (rec === "usable" ? "badge-usable" : "badge-not-recommended");
+  var badgeClass = recommendationBadgeClass(rec);
+  var exploreMeta = getExploreStatusMeta(row);
+  var exploreSummary = getExploreStatusSummary(row);
   var hasUrls = !!(row.crawl && row.crawl.totalUrls > 0);
   var crawlLabel = hasUrls ? "Re-crawl URLs" : "Crawl URLs";
   var currentProc = currentRetailerProcess(row.retailer);
+  var recommendationSaving = !!recommendationSaveState[row.retailer];
   var uploadSummary = row.upload
     ? (row.uploadMatchesCurrentCrawl ? "Uploaded for current crawl" : "Upload is stale against the latest crawl")
     : "No upload yet";
   var crawlSummary = row.crawl
     ? (row.crawl.totalUrls || 0) + " URLs found on " + new Date(row.crawl.crawledAt).toLocaleString()
     : "No crawl yet";
+  var recommendationOptions =
+    '<option value=""' + (rec === "unknown" ? " selected" : "") + '>Choose recommendation</option>' +
+    '<option value="recommended"' + (rec === "recommended" ? " selected" : "") + '>Recommended</option>' +
+    '<option value="usable"' + (rec === "usable" ? " selected" : "") + '>Usable</option>' +
+    '<option value="not recommended"' + (rec === "not recommended" ? " selected" : "") + '>Not recommended</option>';
+  var exploreErrorNote = "";
+  if (row.exploreStatus === "queued_retry" || row.exploreStatus === "needs_retry" || row.exploreStatus === "failed") {
+    exploreErrorNote =
+      '<div class="detail-error-note">' +
+        '<div class="detail-inline-form">' +
+          '<span class="detail-chip ' + processToneClass(exploreMeta.tone) + '">' + escHtml(exploreMeta.label) + '</span>' +
+          (row.exploreAttempt && row.exploreMaxAttempts
+            ? '<span class="detail-note">Attempt ' + escHtml(row.exploreAttempt + "/" + row.exploreMaxAttempts) + "</span>"
+            : "") +
+        "</div>" +
+        '<div class="detail-note" style="margin-top: 0.45rem;">' + escHtml(exploreSummary) + "</div>" +
+        (row.exploreError ? '<div class="detail-note" style="margin-top: 0.3rem;">' + escHtml(row.exploreError) + "</div>" : "") +
+      "</div>";
+  }
 
   if (hasUrls && !productUrlsCache[row.retailer] && !productUrlsLoading[row.retailer]) {
     loadProductUrlsForRetailer(row.retailer);
@@ -2217,11 +2372,20 @@ function renderRetailerDetail() {
       "</div>" +
     "</div>" +
     '<div class="detail-summary-grid">' +
-      '<div class="detail-stat"><span>Recommendation</span><strong><span class="badge ' + badgeClass + '">' + escHtml(rec) + "</span></strong></div>" +
+      '<div class="detail-stat"><span>Recommendation</span><strong><span class="badge ' + badgeClass + '">' + escHtml(rec) + "</span></strong>" +
+        '<div class="detail-inline-form" style="margin-top: 0.55rem;">' +
+          '<select data-recommendation-select="' + escHtml(row.retailer) + '"' + (recommendationSaving ? " disabled" : "") + ">" +
+            recommendationOptions +
+          "</select>" +
+          '<button type="button" class="btn-secondary btn-small" data-save-recommendation="' + escHtml(row.retailer) + '"' + (recommendationSaving ? " disabled" : "") + ">" + escHtml(recommendationSaving ? "Saving..." : "Save") + "</button>" +
+        "</div>" +
+      "</div>" +
+      '<div class="detail-stat"><span>Explore status</span><strong><span class="detail-chip ' + processToneClass(exploreMeta.tone) + '">' + escHtml(exploreMeta.label) + "</span></strong></div>" +
       '<div class="detail-stat"><span>Discovery method</span><strong>' + escHtml(method) + "</strong></div>" +
       '<div class="detail-stat"><span>Last crawl</span><strong>' + escHtml(crawlSummary) + "</strong></div>" +
       '<div class="detail-stat"><span>Last upload</span><strong>' + escHtml(uploadSummary) + "</strong></div>" +
     "</div>" +
+    exploreErrorNote +
     (currentProc
       ? '<div class="detail-disclosure" style="margin-top: 0.85rem; padding: 0.8rem 0.95rem;">' +
           '<div class="detail-header">' +
@@ -2278,6 +2442,39 @@ function renderRetailerDetail() {
       setSelectedProcess(this.getAttribute("data-open-process"));
     };
   }
+  var saveRecommendationBtn = panel.querySelector("[data-save-recommendation]");
+  if (saveRecommendationBtn) {
+    saveRecommendationBtn.onclick = function () {
+      var retailer = this.getAttribute("data-save-recommendation");
+      var selectEl = panel.querySelector("[data-recommendation-select='" + retailer + "']");
+      if (!retailer || !selectEl) return;
+      if (!selectEl.value) {
+        showToast("Choose a recommendation first");
+        return;
+      }
+      recommendationSaveState[retailer] = true;
+      renderRetailerDetail();
+      fetch("/api/configs/" + encodeURIComponent(retailer) + "/recommendation", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recommendation: selectEl.value })
+      })
+        .then(function (res) { return res.json().then(function (data) { return { ok: res.ok, data: data }; }); })
+        .then(function (result) {
+          if (!result.ok || result.data.error) throw new Error(result.data.error || "Failed to save recommendation.");
+          showToast("Saved recommendation for " + retailer);
+          loadOverview();
+        })
+        .catch(function (err) {
+          console.error("[saveRecommendation] Error:", err);
+          showToast("Could not save recommendation");
+        })
+        .finally(function () {
+          delete recommendationSaveState[retailer];
+          renderRetailerDetail();
+        });
+    };
+  }
 }
 
 function renderDashboardHint(rowsLength) {
@@ -2330,7 +2527,8 @@ function renderDashboard() {
     var entry = rows[j];
     var cfg = entry.config || {};
     var rec = entry.recommendation || "unknown";
-    var badgeClass = rec === "recommended" ? "badge-recommended" : (rec === "usable" ? "badge-usable" : "badge-not-recommended");
+    var badgeClass = recommendationBadgeClass(rec);
+    var exploreMeta = getExploreStatusMeta(entry);
     var method = cfg.discovery && cfg.discovery.method ? cfg.discovery.method : "unknown";
     var hasUrls = !!(entry.crawl && entry.crawl.totalUrls > 0);
     var urlCount = hasUrls ? entry.crawl.totalUrls : 0;
@@ -2343,48 +2541,62 @@ function renderDashboard() {
     }
     if (crawlingRetailers[entry.retailer]) uploadPill += '<span class="detail-chip running">Crawl running</span>';
     if (uploadingRetailers[entry.retailer]) uploadPill += '<span class="detail-chip running">Upload running</span>';
+    var summaryText = process
+      ? process.summary || process.statusText
+      : (entry.exploreStatus === "queued_retry" || entry.exploreStatus === "needs_retry" || entry.exploreStatus === "failed")
+        ? getExploreStatusSummary(entry)
+        : (hasUrls ? "Ready for upload review." : "Select to inspect config and next step.");
 
     html.push(
-      '<article class="retailer-list-item' + (uiState.selectedRetailer === entry.retailer ? " is-selected" : "") + '">' +
+      '<article class="retailer-list-item' + (uiState.selectedRetailer === entry.retailer ? " is-selected" : "") + '" data-select-retailer="' + escHtml(entry.retailer) + '" tabindex="0" role="button" aria-pressed="' + (uiState.selectedRetailer === entry.retailer ? "true" : "false") + '">' +
         '<div class="retailer-list-header">' +
-          '<div>' +
+          '<div class="retailer-list-main">' +
             '<div class="retailer-name">' + escHtml(entry.retailer) + "</div>" +
-            '<div class="retailer-list-subrow" style="margin-top: 0.35rem;">' +
+            '<div class="retailer-list-subrow" style="margin-top: 0.2rem;">' +
               '<span class="badge ' + badgeClass + '">' + escHtml(rec) + "</span>" +
+              '<span class="detail-chip ' + processToneClass(exploreMeta.tone) + '">' + escHtml(exploreMeta.label) + "</span>" +
               '<span class="method-tag">' + escHtml(method) + "</span>" +
               (hasUrls ? '<span class="method-tag">' + urlCount + ' URLs</span>' : '<span class="method-tag">No URLs crawled yet</span>') +
               uploadPill +
             "</div>" +
           "</div>" +
           '<div class="retailer-actions">' +
-            '<button type="button" class="btn-secondary btn-small" data-view-retailer="' + escHtml(entry.retailer) + '">View details</button>' +
             '<button type="button" class="btn-primary btn-small crawl-btn" data-crawl-retailer="' + escHtml(entry.retailer) + '"' + (crawlingRetailers[entry.retailer] ? " disabled" : "") + ">" + escHtml(hasUrls ? "Re-crawl URLs" : "Crawl URLs") + "</button>" +
             (hasUrls ? '<button type="button" class="btn-primary btn-small upload-btn" data-upload-retailer="' + escHtml(entry.retailer) + '"' + (uploadingRetailers[entry.retailer] ? " disabled" : "") + '>Upload</button>' : "") +
           "</div>" +
         "</div>" +
-        '<div class="retailer-meta">' + escHtml(process ? process.summary || process.statusText : (hasUrls ? "Ready for upload review." : "Select to inspect config and next step.")) + "</div>" +
+        '<div class="retailer-meta">' + escHtml(summaryText) + "</div>" +
       "</article>"
     );
   }
   container.innerHTML = html.join("");
 
-  var viewBtns = container.querySelectorAll("[data-view-retailer]");
-  for (var v = 0; v < viewBtns.length; v++) {
-    viewBtns[v].onclick = function () {
-      uiState.selectedRetailer = this.getAttribute("data-view-retailer");
+  var rowsToSelect = container.querySelectorAll("[data-select-retailer]");
+  for (var v = 0; v < rowsToSelect.length; v++) {
+    rowsToSelect[v].onclick = function () {
+      uiState.selectedRetailer = this.getAttribute("data-select-retailer");
+      renderDashboard();
+      renderRetailerDetail();
+    };
+    rowsToSelect[v].onkeydown = function (event) {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      uiState.selectedRetailer = this.getAttribute("data-select-retailer");
       renderDashboard();
       renderRetailerDetail();
     };
   }
   var crawlBtns = container.querySelectorAll("[data-crawl-retailer]");
   for (var c = 0; c < crawlBtns.length; c++) {
-    crawlBtns[c].onclick = function () {
+    crawlBtns[c].onclick = function (event) {
+      event.stopPropagation();
       startCrawl(this.getAttribute("data-crawl-retailer"));
     };
   }
   var uploadBtns = container.querySelectorAll("[data-upload-retailer]");
   for (var u = 0; u < uploadBtns.length; u++) {
-    uploadBtns[u].onclick = function () {
+    uploadBtns[u].onclick = function (event) {
+      event.stopPropagation();
       startUpload(this.getAttribute("data-upload-retailer"));
     };
   }

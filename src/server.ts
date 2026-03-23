@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
-import { exploreRetailer } from "./explore.js";
+import { exploreRetailer, type ExploreFailureError } from "./explore.js";
 import { crawlProductUrls, type CrawlResult } from "./crawl.js";
 import { uploadRetailer, type UploadResult } from "./upload.js";
 import {
@@ -18,6 +18,7 @@ import {
 import { writeJsonAtomic } from "./jsonFs.js";
 import { retailerSlugFromUrl } from "./retailerSlug.js";
 import { recordDiscoverUsage, recordExploreUsage, getCostMetrics } from "./usageLedger.js";
+import { classifyExploreFailure, type ExploreFailureInfo } from "./stagehandConfig.js";
 import {
   appendPipelineEvent,
   createPipelineJob,
@@ -53,12 +54,37 @@ const SSE_HEARTBEAT_MS = parseInt(process.env.SSE_HEARTBEAT_MS ?? "20000", 10);
 
 // Delay between processing consecutive URLs (helps with rate limits)
 const INTER_URL_DELAY_MS = parseInt(process.env.INTER_URL_DELAY_MS ?? "5000", 10);
+const MIN_EXPLORE_PARALLELISM = 1;
+const MAX_EXPLORE_PARALLELISM = 10;
+const EXPLORE_RETRY_ATTEMPTS = parseInt(process.env.EXPLORE_RETRY_ATTEMPTS ?? "2", 10);
+const EXPLORE_RETRY_DELAY_MS = parseInt(process.env.EXPLORE_RETRY_DELAY_MS ?? "30000", 10);
 
 // ---------------------------------------------------------------------------
-// Job tracking — one Stagehand browser at a time
+// Job tracking and live progress
 // ---------------------------------------------------------------------------
 
 type Job = PipelineJobRecord;
+type RecommendationValue = "recommended" | "usable" | "not recommended" | "unknown";
+type ExploreUiStatus = "idle" | "running" | "completed" | "queued_retry" | "needs_retry" | "failed";
+
+interface ExploreAttemptSuccess {
+  ok: true;
+  config: Record<string, unknown>;
+  metrics: Awaited<ReturnType<typeof exploreRetailer>>["metrics"];
+  estimatedUsd: number;
+  attemptCount: number;
+  retailer: string;
+  recommendation: RecommendationValue;
+}
+
+interface ExploreAttemptFailure {
+  ok: false;
+  error: Error;
+  failureInfo: ExploreFailureInfo;
+  attemptCount: number;
+  retailer: string;
+  status: Extract<ExploreUiStatus, "needs_retry" | "failed">;
+}
 
 const jobs = new Map<string, Job>();
 const sseClients = new Map<string, Set<express.Response>>();
@@ -216,75 +242,261 @@ function createJobRecord(args: {
   };
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function clampExploreParallelism(raw: unknown): number {
+  const parsed =
+    typeof raw === "number" ? raw : typeof raw === "string" ? parseInt(raw, 10) : Number.NaN;
+  if (!Number.isFinite(parsed)) return MIN_EXPLORE_PARALLELISM;
+  return Math.max(MIN_EXPLORE_PARALLELISM, Math.min(MAX_EXPLORE_PARALLELISM, Math.trunc(parsed)));
+}
+
+function clampExploreRetryAttempts(raw: unknown): number {
+  const parsed =
+    typeof raw === "number" ? raw : typeof raw === "string" ? parseInt(raw, 10) : Number.NaN;
+  if (!Number.isFinite(parsed)) return Math.max(1, EXPLORE_RETRY_ATTEMPTS);
+  return Math.max(1, Math.min(5, Math.trunc(parsed)));
+}
+
+function normalizeRecommendationValue(raw: unknown): RecommendationValue {
+  if (raw === "recommended" || raw === "usable" || raw === "not recommended") return raw;
+  return "unknown";
+}
+
+function getExploreFailureInfo(err: unknown): ExploreFailureInfo {
+  const tagged = err as ExploreFailureError | undefined;
+  if (tagged?.failureInfo) return tagged.failureInfo;
+  return classifyExploreFailure(err);
+}
+
+function getExploreStatus(state: Record<string, unknown> | undefined, hasConfig: boolean): ExploreUiStatus {
+  const status = state?.status;
+  if (
+    status === "running" ||
+    status === "completed" ||
+    status === "queued_retry" ||
+    status === "needs_retry" ||
+    status === "failed"
+  ) {
+    return status;
+  }
+  return hasConfig ? "completed" : "idle";
+}
+
+async function exploreRetailerWithRecovery(
+  job: Job,
+  args: { url: string; retailer: string; displayName: string },
+): Promise<ExploreAttemptSuccess | ExploreAttemptFailure> {
+  const maxAttempts = clampExploreRetryAttempts(job.meta?.exploreRetryAttempts);
+  const startedAt = new Date().toISOString();
+  let lastError: Error | null = null;
+  let lastFailureInfo: ExploreFailureInfo | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await upsertRetailerPipelineState({
+      retailer: args.retailer,
+      baseUrl: args.url,
+      displayName: args.displayName,
+      latestJobId: job.id,
+      exploreState: {
+        status: "running",
+        startedAt,
+        attempt,
+        maxAttempts,
+        retryable: false,
+        nextRetryAt: null,
+        failedAt: null,
+        error: null,
+        failureCode: null,
+        failureReason: null,
+      },
+    });
+
+    if (attempt > 1) {
+      pushLog(
+        job.id,
+        `Retrying explore for ${args.displayName} (${attempt}/${maxAttempts}) after a retryable failure.\n`,
+      );
+    }
+
+    try {
+      const { config, metrics, estimatedUsd } = await exploreRetailer(args.url, (msg) => pushLog(job.id, msg));
+      const retailer = (config.retailer as string) ?? args.retailer;
+      const dq = config.dataQuality as Record<string, unknown> | undefined;
+      const recommendation = normalizeRecommendationValue(dq?.overallRecommendation);
+
+      await upsertRetailerPipelineState({
+        retailer,
+        baseUrl: typeof config.baseUrl === "string" ? config.baseUrl : args.url,
+        displayName:
+          typeof config.retailerDisplayName === "string" ? config.retailerDisplayName : args.displayName,
+        latestJobId: job.id,
+        exploreState: {
+          status: "completed",
+          startedAt,
+          completedAt: new Date().toISOString(),
+          recommendation,
+          estimatedUsd,
+          configPath: path.join(CONFIGS_DIR, `${retailer}.json`),
+          config,
+          attempt,
+          maxAttempts,
+          retryable: false,
+          nextRetryAt: null,
+          failedAt: null,
+          error: null,
+          failureCode: null,
+          failureReason: null,
+        },
+      });
+
+      return {
+        ok: true,
+        config,
+        metrics,
+        estimatedUsd,
+        attemptCount: attempt,
+        retailer,
+        recommendation,
+      };
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      lastFailureInfo = getExploreFailureInfo(lastError);
+      const retryable = lastFailureInfo.retryable;
+      const hasRetryRemaining = retryable && attempt < maxAttempts;
+      const status: ExploreAttemptFailure["status"] = retryable && !hasRetryRemaining ? "needs_retry" : "failed";
+
+      pushLog(
+        job.id,
+        `${retryable ? "Retryable" : "Terminal"} explore failure for ${args.displayName}: ${lastError.message}\n`,
+        lastError,
+      );
+
+      await upsertRetailerPipelineState({
+        retailer: args.retailer,
+        baseUrl: args.url,
+        displayName: args.displayName,
+        latestJobId: job.id,
+        exploreState: {
+          status: hasRetryRemaining ? "queued_retry" : status,
+          startedAt,
+          failedAt: new Date().toISOString(),
+          attempt,
+          maxAttempts,
+          retryable,
+          error: lastError.message,
+          failureCode: lastFailureInfo.code,
+          failureReason: lastFailureInfo.reason,
+          nextRetryAt: hasRetryRemaining ? new Date(Date.now() + EXPLORE_RETRY_DELAY_MS).toISOString() : null,
+        },
+      });
+
+      if (!hasRetryRemaining) {
+        return {
+          ok: false,
+          error: lastError,
+          failureInfo: lastFailureInfo,
+          attemptCount: attempt,
+          retailer: args.retailer,
+          status,
+        };
+      }
+
+      pushLog(
+        job.id,
+        `Queued retry for ${args.displayName} in ${Math.round(EXPLORE_RETRY_DELAY_MS / 1000)}s (${lastFailureInfo.code}).\n`,
+      );
+      await sleep(EXPLORE_RETRY_DELAY_MS);
+    }
+  }
+
+  return {
+    ok: false,
+    error: lastError ?? new Error(`Explore failed for ${args.displayName}.`),
+    failureInfo: lastFailureInfo ?? {
+      retryable: false,
+      code: "unknown",
+      reason: "The explore run failed without a classified error.",
+    },
+    attemptCount: maxAttempts,
+    retailer: args.retailer,
+    status: lastFailureInfo?.retryable ? "needs_retry" : "failed",
+  };
+}
+
+async function processExploreUrl(job: Job, url: string) {
+  const fallbackRetailer = retailerSlugFromUrl(url);
+  const displayName = fallbackRetailer;
+  const outcome = await exploreRetailerWithRecovery(job, {
+    url,
+    retailer: fallbackRetailer,
+    displayName,
+  });
+
+  if (outcome.ok) {
+    const { config, metrics, estimatedUsd } = outcome;
+    recordExploreUsage({
+      retailer: outcome.retailer,
+      estimatedUsd,
+      promptTokens: metrics?.totalPromptTokens ?? 0,
+      completionTokens: metrics?.totalCompletionTokens ?? 0,
+      inferenceTimeMs: metrics?.totalInferenceTimeMs ?? 0,
+    });
+    job.results.push(config);
+    persistJob(job);
+    return;
+  }
+
+  console.error(`[processJob job=${job.id}] Error processing ${url}:`, outcome.error);
+}
+
 async function processJob(job: Job, skippedUrls?: string[]) {
+  const parallelism = clampExploreParallelism(job.meta?.parallelism);
   if (skippedUrls && skippedUrls.length > 0) {
     pushLog(
       job.id,
       `Skipped ${skippedUrls.length} URL(s) with existing configs:\n${skippedUrls.join("\n")}\n`,
     );
   }
-  for (let i = 0; i < job.urls.length; i++) {
-    // Add a cooldown between URLs to avoid stacking rate limit usage
-    if (i > 0 && INTER_URL_DELAY_MS > 0) {
-      pushLog(job.id, `\nWaiting ${INTER_URL_DELAY_MS / 1000}s before next URL...\n`);
-      await new Promise((r) => setTimeout(r, INTER_URL_DELAY_MS));
+  if (parallelism > 1) {
+    pushLog(job.id, `Running up to ${parallelism} explore tasks in parallel.\n`);
+  }
+
+  let completedCount = 0;
+  let activeCount = 0;
+
+  for (let batchStart = 0; batchStart < job.urls.length; batchStart += parallelism) {
+    if (batchStart > 0 && INTER_URL_DELAY_MS > 0) {
+      pushLog(job.id, `\nWaiting ${INTER_URL_DELAY_MS / 1000}s before next URL batch...\n`);
+      await sleep(INTER_URL_DELAY_MS);
     }
 
-    const url = job.urls[i];
-    job.current = i;
-    job.currentUrl = url;
-    persistJob(job);
-    pushEvent(job.id, {
-      type: "progress",
-      current: i + 1,
-      total: job.urls.length,
-      url,
-    });
-    pushLog(job.id, `\n========== Processing ${i + 1}/${job.urls.length}: ${url} ==========\n`);
-
-    try {
-      const { config, metrics, estimatedUsd } = await exploreRetailer(url, (msg) => pushLog(job.id, msg));
-      recordExploreUsage({
-        retailer: (config.retailer as string) ?? retailerSlugFromUrl(url),
-        estimatedUsd,
-        promptTokens: metrics?.totalPromptTokens ?? 0,
-        completionTokens: metrics?.totalCompletionTokens ?? 0,
-        inferenceTimeMs: metrics?.totalInferenceTimeMs ?? 0,
-      });
-      job.results.push(config);
-      persistJob(job);
-      const retailer = (config.retailer as string) ?? retailerSlugFromUrl(url);
-      await upsertRetailerPipelineState({
-        retailer,
-        baseUrl: typeof config.baseUrl === "string" ? config.baseUrl : url,
-        displayName: typeof config.retailerDisplayName === "string" ? config.retailerDisplayName : retailer,
-        latestJobId: job.id,
-        exploreState: {
-          status: "completed",
-          startedAt: job.createdAt ?? new Date().toISOString(),
-          completedAt: new Date().toISOString(),
-          configPath: path.join(CONFIGS_DIR, `${retailer}.json`),
-          config,
-          estimatedUsd,
-          promptTokens: metrics?.totalPromptTokens ?? 0,
-          completionTokens: metrics?.totalCompletionTokens ?? 0,
-        },
-      });
-    } catch (err) {
-      const e = err instanceof Error ? err : new Error(String(err));
-      console.error(`[processJob job=${job.id}] Error processing ${url}:`, err);
-      pushLog(job.id, `ERROR processing ${url}: ${e.message}`, e);
-      await upsertRetailerPipelineState({
-        retailer: retailerSlugFromUrl(url),
-        baseUrl: url,
-        latestJobId: job.id,
-        exploreState: {
-          status: "failed",
-          failedAt: new Date().toISOString(),
-          error: e.message,
-        },
-      });
-    }
+    const batch = job.urls.slice(batchStart, batchStart + parallelism);
+    await Promise.all(
+      batch.map(async (url, offset) => {
+        const index = batchStart + offset;
+        activeCount += 1;
+        job.currentUrl = url;
+        persistJob(job);
+        pushLog(job.id, `\n========== Processing ${index + 1}/${job.urls.length}: ${url} ==========\n`);
+        await processExploreUrl(job, url);
+        activeCount = Math.max(0, activeCount - 1);
+        completedCount += 1;
+        job.current = completedCount;
+        job.currentUrl = url;
+        persistJob(job);
+        pushEvent(job.id, {
+          type: "progress",
+          current: completedCount,
+          total: job.urls.length,
+          url,
+          activeCount,
+          parallelism,
+        });
+      }),
+    );
   }
 
   job.status = "done";
@@ -326,7 +538,11 @@ function cleanUrl(raw: string): string | null {
 }
 
 app.post("/api/explore", async (req, res) => {
-  const { urls, skipExisting } = req.body as { urls?: string[]; skipExisting?: boolean };
+  const { urls, skipExisting, parallelism } = req.body as {
+    urls?: string[];
+    skipExisting?: boolean;
+    parallelism?: number | string;
+  };
   if (!urls || !Array.isArray(urls) || urls.length === 0) {
     res.status(400).json({ error: "Provide a non-empty urls array." });
     return;
@@ -357,8 +573,12 @@ app.post("/api/explore", async (req, res) => {
     if (shouldSkipExisting) {
       const slug = retailerSlugFromUrl(url);
       if (fs.existsSync(path.join(CONFIGS_DIR, `${slug}.json`))) {
-        skippedUrls.push(url);
-        continue;
+        const state = await getRetailerPipelineState(slug);
+        const status = getExploreStatus(state?.exploreState, true);
+        if (status !== "needs_retry" && status !== "queued_retry") {
+          skippedUrls.push(url);
+          continue;
+        }
       }
     }
     toExplore.push(url);
@@ -373,7 +593,13 @@ app.post("/api/explore", async (req, res) => {
   }
 
   const id = crypto.randomUUID();
-  const job = createJobRecord({ id, kind: "explore", urls: toExplore });
+  const normalizedParallelism = clampExploreParallelism(parallelism);
+  const job = createJobRecord({
+    id,
+    kind: "explore",
+    urls: toExplore,
+    meta: { parallelism: normalizedParallelism },
+  });
   jobs.set(id, job);
   await createPipelineJob(job);
 
@@ -384,7 +610,12 @@ app.post("/api/explore", async (req, res) => {
     console.error(`[processJob job=${job.id}] Error:`, err);
   });
 
-  res.json({ jobId: id, skippedUrls, skippedCount: skippedUrls.length });
+  res.json({
+    jobId: id,
+    skippedUrls,
+    skippedCount: skippedUrls.length,
+    parallelism: normalizedParallelism,
+  });
 });
 
 app.post("/api/discover-brands", async (req, res) => {
@@ -659,20 +890,16 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
         percentComplete: 20 + Math.floor((i / brands.length) * 35),
       });
 
-      try {
-        await upsertRetailerPipelineState({
-          retailer: fallbackRetailer,
-          baseUrl: url,
-          displayName: brand.name,
-          latestJobId: jobId,
-          exploreState: {
-            status: "running",
-            startedAt: new Date().toISOString(),
-          },
-        });
-        const { config, metrics, estimatedUsd } = await exploreRetailer(url, (msg) => pushLog(jobId, msg));
+      const outcome = await exploreRetailerWithRecovery(job, {
+        url,
+        retailer: fallbackRetailer,
+        displayName: brand.name,
+      });
+
+      if (outcome.ok) {
+        const { config, metrics, estimatedUsd } = outcome;
         recordExploreUsage({
-          retailer: (config.retailer as string) ?? extractRetailerFromUrl(url),
+          retailer: outcome.retailer,
           estimatedUsd,
           promptTokens: metrics?.totalPromptTokens ?? 0,
           completionTokens: metrics?.totalCompletionTokens ?? 0,
@@ -680,9 +907,9 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
           e2eJobId: jobId,
         });
         configsSuccessful++;
-        const retailer = (config.retailer as string) ?? extractRetailerFromUrl(url);
+        const retailer = outcome.retailer;
         const dq = config.dataQuality as Record<string, unknown> | undefined;
-        const rec = dq?.overallRecommendation as string | undefined;
+        const rec = normalizeRecommendationValue(dq?.overallRecommendation);
         await upsertRetailerPipelineState({
           retailer,
           baseUrl: typeof config.baseUrl === "string" ? config.baseUrl : url,
@@ -691,30 +918,17 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
           exploreState: {
             status: "completed",
             completedAt: new Date().toISOString(),
-            recommendation: rec ?? "unknown",
+            recommendation: rec,
             estimatedUsd,
             configPath: path.join(CONFIGS_DIR, `${retailer}.json`),
             config,
+            attempt: outcome.attemptCount,
           },
         });
         if (rec === "recommended") {
           recommendedConfigs.push({ retailer, config });
         }
-        pushLog(jobId, `  Config for ${brand.name}: ${rec ?? "unknown"}\n`);
-      } catch (err) {
-        const e = err instanceof Error ? err : new Error(String(err));
-        pushLog(jobId, `  ERROR exploring ${brand.name}: ${e.message}\n`, e);
-        await upsertRetailerPipelineState({
-          retailer: fallbackRetailer,
-          baseUrl: url,
-          displayName: brand.name,
-          latestJobId: jobId,
-          exploreState: {
-            status: "failed",
-            failedAt: new Date().toISOString(),
-            error: e.message,
-          },
-        });
+        pushLog(jobId, `  Config for ${brand.name}: ${rec}\n`);
       }
 
       if (i < brands.length - 1 && INTER_URL_DELAY_MS > 0) {
@@ -1245,9 +1459,22 @@ app.get("/api/retailers-overview", async (_req, res) => {
 
       const dq = config.dataQuality as { overallRecommendation?: string } | undefined;
       const state = stateRows.find((row) => row.retailer === retailer);
-      const recommendation =
-        dq?.overallRecommendation ??
-        (typeof state?.exploreState?.recommendation === "string" ? state.exploreState.recommendation : "unknown");
+      const recommendation = normalizeRecommendationValue(
+        dq?.overallRecommendation ?? state?.exploreState?.recommendation,
+      );
+      const exploreStatus = getExploreStatus(state?.exploreState, true);
+      const exploreError =
+        typeof state?.exploreState?.error === "string" ? state.exploreState.error : null;
+      const retryAt =
+        typeof state?.exploreState?.nextRetryAt === "string" ? state.exploreState.nextRetryAt : null;
+      const failureCode =
+        typeof state?.exploreState?.failureCode === "string" ? state.exploreState.failureCode : null;
+      const failureReason =
+        typeof state?.exploreState?.failureReason === "string" ? state.exploreState.failureReason : null;
+      const exploreAttempt =
+        typeof state?.exploreState?.attempt === "number" ? state.exploreState.attempt : null;
+      const exploreMaxAttempts =
+        typeof state?.exploreState?.maxAttempts === "number" ? state.exploreState.maxAttempts : null;
 
       const crawlResult = await loadStoredCrawlResult(retailer);
       const crawl = crawlResult
@@ -1271,6 +1498,13 @@ app.get("/api/retailers-overview", async (_req, res) => {
         filename,
         config,
         recommendation,
+        exploreStatus,
+        exploreError,
+        retryAt,
+        exploreFailureCode: failureCode,
+        exploreFailureReason: failureReason,
+        exploreAttempt,
+        exploreMaxAttempts,
         crawl,
         upload,
         uploadMatchesCurrentCrawl,
@@ -1363,6 +1597,54 @@ app.get("/api/configs/:retailer", async (req, res) => {
     return;
   }
   res.json(config);
+});
+
+app.patch("/api/configs/:retailer/recommendation", async (req, res) => {
+  const retailer = req.params.retailer;
+  const recommendation = normalizeRecommendationValue(req.body?.recommendation);
+  if (recommendation === "unknown") {
+    res.status(400).json({ error: "Recommendation must be recommended, usable, or not recommended." });
+    return;
+  }
+
+  const config = await loadStoredConfig(retailer);
+  if (!config) {
+    res.status(404).json({ error: "Config not found." });
+    return;
+  }
+
+  const currentDataQuality =
+    config.dataQuality && typeof config.dataQuality === "object"
+      ? (config.dataQuality as Record<string, unknown>)
+      : {};
+
+  const nextConfig: Record<string, unknown> = {
+    ...config,
+    dataQuality: {
+      ...currentDataQuality,
+      overallRecommendation: recommendation,
+    },
+  };
+
+  writeJsonAtomic(path.join(CONFIGS_DIR, `${retailer}.json`), nextConfig);
+  const state = await getRetailerPipelineState(retailer);
+  await upsertRetailerPipelineState({
+    retailer,
+    baseUrl: typeof nextConfig.baseUrl === "string" ? nextConfig.baseUrl : state?.baseUrl,
+    displayName:
+      typeof nextConfig.retailerDisplayName === "string" ? nextConfig.retailerDisplayName : state?.displayName,
+    latestJobId: state?.latestJobId,
+    exploreState: {
+      recommendation,
+      config: nextConfig,
+    },
+  });
+
+  res.json({
+    retailer,
+    recommendation,
+    config: nextConfig,
+  });
 });
 
 // ---------------------------------------------------------------------------
