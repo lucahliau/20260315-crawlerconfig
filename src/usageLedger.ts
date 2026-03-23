@@ -48,15 +48,34 @@ function loadLedger(): LedgerFile {
   }
 }
 
+const ledgerQueue: Array<() => void> = [];
+let ledgerQueueFlushing = false;
+
+function enqueueLedgerWrite(fn: () => void): void {
+  ledgerQueue.push(fn);
+  if (ledgerQueueFlushing) return;
+  ledgerQueueFlushing = true;
+  try {
+    while (ledgerQueue.length > 0) {
+      const next = ledgerQueue.shift()!;
+      next();
+    }
+  } finally {
+    ledgerQueueFlushing = false;
+  }
+}
+
 function appendEvent(event: UsageLedgerEvent): void {
   try {
-    const ledger = loadLedger();
-    ledger.events.push(event);
-    const max = parseInt(process.env.USAGE_LEDGER_MAX_EVENTS ?? "2000", 10);
-    if (ledger.events.length > max) {
-      ledger.events.splice(0, ledger.events.length - max);
-    }
-    writeJsonAtomic(LEDGER_PATH, ledger);
+    enqueueLedgerWrite(() => {
+      const ledger = loadLedger();
+      ledger.events.push(event);
+      const max = parseInt(process.env.USAGE_LEDGER_MAX_EVENTS ?? "2000", 10);
+      if (ledger.events.length > max) {
+        ledger.events.splice(0, ledger.events.length - max);
+      }
+      writeJsonAtomic(LEDGER_PATH, ledger);
+    });
   } catch {
     // non-fatal
   }

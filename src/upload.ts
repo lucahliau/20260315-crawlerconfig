@@ -125,6 +125,23 @@ export interface UploadResult {
   total: number;
 }
 
+export interface UploadItemOutcome {
+  url: string;
+  status: "uploaded" | "skipped" | "failed";
+  error?: string;
+  externalId?: string;
+  itemName?: string;
+  imageCount?: number;
+  uploadedToR2?: boolean;
+  upsertedToDb?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UploadRunOptions {
+  resumeUploadedUrls?: Iterable<string>;
+  onItemResult?: (result: UploadItemOutcome) => void | Promise<void>;
+}
+
 // ---------------------------------------------------------------------------
 // Fetch helpers
 // ---------------------------------------------------------------------------
@@ -931,6 +948,7 @@ export async function uploadRetailer(
   urls: string[],
   onLog?: (msg: string) => void,
   onProgress?: (progress: UploadProgress) => void,
+  options?: UploadRunOptions,
 ): Promise<UploadResult> {
   if (onLog) _logFn = onLog;
 
@@ -976,6 +994,7 @@ export async function uploadRetailer(
 
     let consecutiveFailures = 0;
     let successesSinceBrowserRefresh = 0;
+    const resumeUploaded = new Set(options?.resumeUploadedUrls ?? []);
 
     for (let i = 0; i < urls.length; i++) {
       const url = urls[i];
@@ -985,7 +1004,26 @@ export async function uploadRetailer(
 
       log(`\n  [${i + 1}/${urls.length}] ${url}`);
 
+      if (resumeUploaded.has(url)) {
+        log("    SKIPPED: already uploaded successfully for this crawl checkpoint");
+        progress.skipped++;
+        onProgress?.(progress);
+        if (options?.onItemResult) {
+          await options.onItemResult({
+            url,
+            status: "skipped",
+            metadata: { reason: "already_uploaded_for_crawl_checkpoint" },
+          });
+        }
+        continue;
+      }
+
       for (let attempt = 0; attempt < 2; attempt++) {
+        let externalId: string | undefined;
+        let itemName: string | undefined;
+        let imageCount = 0;
+        let uploadedToR2 = false;
+        let upsertedToDb = false;
         try {
           // Fetch page HTML
           let html: string;
@@ -1003,6 +1041,16 @@ export async function uploadRetailer(
               progress.failed++;
               consecutiveFailures++;
               onProgress?.(progress);
+              if (options?.onItemResult) {
+                await options.onItemResult({
+                  url,
+                  status: "failed",
+                  error: `HTTP ${res.status}`,
+                  uploadedToR2,
+                  upsertedToDb,
+                  metadata: { httpStatus: res.status },
+                });
+              }
               break;
             }
             html = await res.text();
@@ -1018,18 +1066,32 @@ export async function uploadRetailer(
             progress.skipped++;
             consecutiveFailures = 0;
             onProgress?.(progress);
+            if (options?.onItemResult) {
+              await options.onItemResult({
+                url,
+                status: "skipped",
+                itemName: item.name ?? undefined,
+                externalId: item.externalId ?? undefined,
+                uploadedToR2,
+                upsertedToDb,
+                metadata: { reason: "missing_required_fields", missingFields },
+              });
+            }
             break;
           }
 
           // Upload images to R2
-          const externalId = item.externalId ?? extractSlugFromUrl(url);
+          externalId = item.externalId ?? extractSlugFromUrl(url);
           const r2Images: string[] = [];
           const allImages = item.images.length > 0 ? item.images : (item.imageUrl ? [item.imageUrl] : []);
+          itemName = item.name ?? undefined;
+          imageCount = allImages.length;
 
           for (let imgIdx = 0; imgIdx < allImages.length; imgIdx++) {
             const r2Url = await uploadImageToR2(allImages[imgIdx], config.retailer, externalId, imgIdx);
             r2Images.push(r2Url);
           }
+          uploadedToR2 = r2Images.length > 0;
 
           if (r2Images.length > 0) {
             item.imageUrl = r2Images[0];
@@ -1043,6 +1105,7 @@ export async function uploadRetailer(
 
           // Upsert into database
           await upsertClothingItem(item, pool);
+          upsertedToDb = true;
 
           log(`    OK: "${item.name}" | ${item.category}/${item.subcategory ?? "?"} | $${item.price} | ${r2Images.length} images`);
           progress.uploaded++;
@@ -1064,6 +1127,22 @@ export async function uploadRetailer(
           }
 
           onProgress?.(progress);
+          if (options?.onItemResult) {
+            await options.onItemResult({
+              url,
+              status: "uploaded",
+              itemName: item.name ?? undefined,
+              externalId,
+              imageCount: r2Images.length,
+              uploadedToR2,
+              upsertedToDb,
+              metadata: {
+                category: item.category,
+                subcategory: item.subcategory,
+                price: item.price,
+              },
+            });
+          }
           break;
         } catch (err) {
           const e = err instanceof Error ? err : new Error(String(err));
@@ -1089,6 +1168,18 @@ export async function uploadRetailer(
 
           progress.failed++;
           onProgress?.(progress);
+          if (options?.onItemResult) {
+            await options.onItemResult({
+              url,
+              status: "failed",
+              error: e.message,
+              externalId,
+              itemName,
+              imageCount,
+              uploadedToR2,
+              upsertedToDb,
+            });
+          }
           break;
         }
       }

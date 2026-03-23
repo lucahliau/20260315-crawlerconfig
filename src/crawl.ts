@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { Stagehand } from "@browserbasehq/stagehand";
 import { getStagehandModel } from "./stagehandModel.js";
@@ -547,12 +548,33 @@ export interface CrawlResult {
   method: string;
   totalUrls: number;
   urls: string[];
+  completed?: boolean;
+  error?: string;
+  resumedFromCheckpoint?: boolean;
+}
+
+export interface CrawlPersistenceHooks {
+  initialUrls?: string[];
+  onCheckpoint?: (partial: CrawlResult) => void | Promise<void>;
+  onComplete?: (result: CrawlResult) => void | Promise<void>;
+  onError?: (partial: CrawlResult, error: Error) => void | Promise<void>;
+}
+
+function parseCheckpointEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === "") return fallback;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 /** Periodic atomic writes to `product-urls/<retailer>.partial.json` (env: CRAWL_CHECKPOINT_EVERY_N, CRAWL_CHECKPOINT_EVERY_MS). */
-function crawlCheckpointWriter(config: Config, urls: Set<string>): () => void {
-  const everyN = parseInt(process.env.CRAWL_CHECKPOINT_EVERY_N ?? "0", 10);
-  const everyMs = parseInt(process.env.CRAWL_CHECKPOINT_EVERY_MS ?? "0", 10);
+function crawlCheckpointWriter(
+  config: Config,
+  urls: Set<string>,
+  hooks?: CrawlPersistenceHooks,
+): () => void {
+  const everyN = parseCheckpointEnv("CRAWL_CHECKPOINT_EVERY_N", 250);
+  const everyMs = parseCheckpointEnv("CRAWL_CHECKPOINT_EVERY_MS", 30_000);
   const dir = process.env.PRODUCT_URLS_DIR ?? path.join(process.cwd(), "product-urls");
   let lastWrittenCount = 0;
   let lastWriteTime = Date.now();
@@ -573,8 +595,15 @@ function crawlCheckpointWriter(config: Config, urls: Set<string>): () => void {
       method: config.discovery.method,
       totalUrls: n,
       urls: Array.from(urls).sort(),
+      completed: false,
+      resumedFromCheckpoint: !!(hooks?.initialUrls && hooks.initialUrls.length > 0),
     };
     writeJsonAtomic(path.join(dir, `${config.retailer}.partial.json`), partial);
+    if (hooks?.onCheckpoint) {
+      Promise.resolve(hooks.onCheckpoint(partial)).catch((err) => {
+        log(`  [checkpoint] persistence hook failed: ${(err as Error).message}`);
+      });
+    }
     log(`  [checkpoint] ${n} URLs → product-urls/${config.retailer}.partial.json`);
   };
 }
@@ -583,10 +612,11 @@ export async function crawlProductUrls(
   config: Config,
   onLog?: (msg: string) => void,
   onProgress?: (count: number) => void,
+  hooks?: CrawlPersistenceHooks,
 ): Promise<CrawlResult> {
   if (onLog) _logFn = onLog;
 
-  const urls = new Set<string>();
+  const urls = new Set<string>(hooks?.initialUrls ?? []);
   let excludedNonClothing = 0;
   const addUrl = (u: string) => {
     if (isExcludedNonClothingProductUrl(u)) {
@@ -595,7 +625,7 @@ export async function crawlProductUrls(
     }
     urls.add(u);
   };
-  const runCheckpoint = crawlCheckpointWriter(config, urls);
+  const runCheckpoint = crawlCheckpointWriter(config, urls, hooks);
   const progressCb = (count: number) => {
     (onProgress ?? (() => {}))(count);
     runCheckpoint();
@@ -604,6 +634,9 @@ export async function crawlProductUrls(
   log(`\nStarting product URL crawl for ${config.retailerDisplayName}`);
   log(`Discovery method: ${config.discovery.method}`);
   log(`Rate limit: ${effectiveDelay(config)}ms between requests`);
+  if (urls.size > 0) {
+    log(`Resuming crawl with ${urls.size} URL(s) already checkpointed`);
+  }
 
   // Check robots.txt crawl-delay and use the larger value
   const robotsDelay = await getRobotsCrawlDelay(config.baseUrl);
@@ -618,6 +651,7 @@ export async function crawlProductUrls(
     };
   }
 
+  let crawlError: Error | null = null;
   try {
     switch (config.discovery.method) {
       case "sitemap":
@@ -634,7 +668,8 @@ export async function crawlProductUrls(
         break;
     }
   } catch (err) {
-    log(`Crawl error: ${(err as Error).message}`);
+    crawlError = err instanceof Error ? err : new Error(String(err));
+    log(`Crawl error: ${crawlError.message}`);
   }
 
   const result: CrawlResult = {
@@ -643,7 +678,30 @@ export async function crawlProductUrls(
     method: config.discovery.method,
     totalUrls: urls.size,
     urls: Array.from(urls).sort(),
+    completed: !crawlError,
+    ...(crawlError ? { error: crawlError.message } : {}),
+    resumedFromCheckpoint: !!(hooks?.initialUrls && hooks.initialUrls.length > 0),
   };
+
+  const partialPath = path.join(
+    process.env.PRODUCT_URLS_DIR ?? path.join(process.cwd(), "product-urls"),
+    `${config.retailer}.partial.json`,
+  );
+  if (crawlError) {
+    writeJsonAtomic(partialPath, result);
+    if (hooks?.onError) {
+      await hooks.onError(result, crawlError);
+    }
+  } else {
+    try {
+      if (fs.existsSync(partialPath)) fs.unlinkSync(partialPath);
+    } catch {
+      // ignore cleanup errors
+    }
+    if (hooks?.onComplete) {
+      await hooks.onComplete(result);
+    }
+  }
 
   log(`\nCrawl complete: ${result.totalUrls} product URLs found`);
   if (excludedNonClothing > 0) {

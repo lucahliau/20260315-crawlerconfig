@@ -18,6 +18,21 @@ import {
 import { writeJsonAtomic } from "./jsonFs.js";
 import { retailerSlugFromUrl } from "./retailerSlug.js";
 import { recordDiscoverUsage, recordExploreUsage, getCostMetrics } from "./usageLedger.js";
+import {
+  appendPipelineEvent,
+  createPipelineJob,
+  ensurePipelinePersistenceSchema,
+  getPipelineJob,
+  getRetailerPipelineState,
+  getSuccessfulUploadUrls,
+  listRetailerPipelineStates,
+  listPipelineEvents,
+  markRunningJobsInterrupted,
+  recordUploadUrlResult,
+  savePipelineJob,
+  upsertRetailerPipelineState,
+  type PipelineJobRecord,
+} from "./pipelineStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -43,19 +58,7 @@ const INTER_URL_DELAY_MS = parseInt(process.env.INTER_URL_DELAY_MS ?? "5000", 10
 // Job tracking — one Stagehand browser at a time
 // ---------------------------------------------------------------------------
 
-interface Job {
-  id: string;
-  urls: string[];
-  current: number;
-  status: "running" | "done" | "error";
-  logs: string[];
-  results: Record<string, unknown>[];
-  error?: string;
-  discoveredBrands?: DiscoveredBrand[];
-  e2eProgress?: Record<string, unknown>;
-  /** Latest brand-discovery model text (for SSE replay). */
-  discoverModelResponse?: string;
-}
+type Job = PipelineJobRecord;
 
 const jobs = new Map<string, Job>();
 const sseClients = new Map<string, Set<express.Response>>();
@@ -104,6 +107,35 @@ function appendJobNdjson(jobId: string, payload: Record<string, unknown>) {
   }
 }
 
+function persistJob(job: Job) {
+  void savePipelineJob(job).catch((err) => {
+    console.error(`[job=${job.id}] Failed to persist job snapshot:`, err);
+  });
+}
+
+function buildUploadStatusPayload(
+  retailer: string,
+  crawlSourceCrawledAt: string,
+  result: UploadResult,
+  extra?: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    retailer,
+    uploadedAt: result.uploadedAt,
+    uploaded: result.uploaded,
+    skipped: result.skipped,
+    failed: result.failed,
+    total: result.total,
+    crawlSourceCrawledAt,
+    ...(extra ?? {}),
+  };
+}
+
+function writeUploadStatusSnapshot(retailer: string, payload: Record<string, unknown>) {
+  fs.mkdirSync(UPLOAD_STATUS_DIR, { recursive: true });
+  writeJsonAtomic(path.join(UPLOAD_STATUS_DIR, `${retailer}.json`), payload);
+}
+
 /** @param err Optional error — stack is appended to the log line and NDJSON record */
 function pushLog(jobId: string, msg: string, err?: Error) {
   let full = msg;
@@ -116,8 +148,10 @@ function pushLog(jobId: string, msg: string, err?: Error) {
     if (job.logs.length > JOB_LOG_MAX_LINES) {
       job.logs.splice(0, job.logs.length - JOB_LOG_MAX_LINES);
     }
+    persistJob(job);
   }
   appendJobNdjson(jobId, { type: "log", msg: full });
+  void appendPipelineEvent(jobId, { type: "log", msg: full });
 
   const clients = sseClients.get(jobId);
   if (clients) {
@@ -130,7 +164,14 @@ function pushEvent(jobId: string, event: Record<string, unknown>) {
   const job = jobs.get(jobId);
   if (job && event.type === "e2e-progress") {
     job.e2eProgress = event;
+    persistJob(job);
   }
+  if (job && event.type === "progress" && typeof event.current === "number") {
+    job.current = Math.max(0, Number(event.current) - 1);
+    job.currentUrl = typeof event.url === "string" ? event.url : job.currentUrl;
+    persistJob(job);
+  }
+  void appendPipelineEvent(jobId, event);
   const clients = sseClients.get(jobId);
   if (clients) {
     const data = `data: ${JSON.stringify(event)}\n\n`;
@@ -143,14 +184,36 @@ function pushDiscoverModelResponse(jobId: string, body: string) {
   const job = jobs.get(jobId);
   if (job) {
     job.discoverModelResponse = body;
+    persistJob(job);
   }
   appendJobNdjson(jobId, { type: "model-response", phase: "discover", body });
+  void appendPipelineEvent(jobId, { type: "model-response", phase: "discover", body });
   const payload = { type: "model-response" as const, phase: "discover" as const, body };
   const clients = sseClients.get(jobId);
   if (clients) {
     const data = `data: ${JSON.stringify(payload)}\n\n`;
     for (const res of clients) res.write(data);
   }
+}
+
+function createJobRecord(args: {
+  id: string;
+  kind: Job["kind"];
+  urls?: string[];
+  retailer?: string | null;
+  meta?: Record<string, unknown>;
+}): Job {
+  return {
+    id: args.id,
+    kind: args.kind,
+    retailer: args.retailer ?? null,
+    urls: args.urls ?? [],
+    current: 0,
+    status: "running",
+    logs: [],
+    results: [],
+    meta: args.meta ?? {},
+  };
 }
 
 async function processJob(job: Job, skippedUrls?: string[]) {
@@ -167,8 +230,10 @@ async function processJob(job: Job, skippedUrls?: string[]) {
       await new Promise((r) => setTimeout(r, INTER_URL_DELAY_MS));
     }
 
-    job.current = i;
     const url = job.urls[i];
+    job.current = i;
+    job.currentUrl = url;
+    persistJob(job);
     pushEvent(job.id, {
       type: "progress",
       current: i + 1,
@@ -187,14 +252,43 @@ async function processJob(job: Job, skippedUrls?: string[]) {
         inferenceTimeMs: metrics?.totalInferenceTimeMs ?? 0,
       });
       job.results.push(config);
+      persistJob(job);
+      const retailer = (config.retailer as string) ?? retailerSlugFromUrl(url);
+      await upsertRetailerPipelineState({
+        retailer,
+        baseUrl: typeof config.baseUrl === "string" ? config.baseUrl : url,
+        displayName: typeof config.retailerDisplayName === "string" ? config.retailerDisplayName : retailer,
+        latestJobId: job.id,
+        exploreState: {
+          status: "completed",
+          startedAt: job.createdAt ?? new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+          configPath: path.join(CONFIGS_DIR, `${retailer}.json`),
+          config,
+          estimatedUsd,
+          promptTokens: metrics?.totalPromptTokens ?? 0,
+          completionTokens: metrics?.totalCompletionTokens ?? 0,
+        },
+      });
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
       console.error(`[processJob job=${job.id}] Error processing ${url}:`, err);
       pushLog(job.id, `ERROR processing ${url}: ${e.message}`, e);
+      await upsertRetailerPipelineState({
+        retailer: retailerSlugFromUrl(url),
+        baseUrl: url,
+        latestJobId: job.id,
+        exploreState: {
+          status: "failed",
+          failedAt: new Date().toISOString(),
+          error: e.message,
+        },
+      });
     }
   }
 
   job.status = "done";
+  persistJob(job);
   pushEvent(job.id, { type: "done" });
 
   closeAllSseClients(job.id);
@@ -231,7 +325,7 @@ function cleanUrl(raw: string): string | null {
   }
 }
 
-app.post("/api/explore", (req, res) => {
+app.post("/api/explore", async (req, res) => {
   const { urls, skipExisting } = req.body as { urls?: string[]; skipExisting?: boolean };
   if (!urls || !Array.isArray(urls) || urls.length === 0) {
     res.status(400).json({ error: "Provide a non-empty urls array." });
@@ -279,39 +373,33 @@ app.post("/api/explore", (req, res) => {
   }
 
   const id = crypto.randomUUID();
-  const job: Job = {
-    id,
-    urls: toExplore,
-    current: 0,
-    status: "running",
-    logs: [],
-    results: [],
-  };
+  const job = createJobRecord({ id, kind: "explore", urls: toExplore });
   jobs.set(id, job);
+  await createPipelineJob(job);
 
   processJob(job, skippedUrls.length > 0 ? skippedUrls : undefined).catch((err) => {
     job.status = "error";
     job.error = (err as Error).message;
+    persistJob(job);
     console.error(`[processJob job=${job.id}] Error:`, err);
   });
 
   res.json({ jobId: id, skippedUrls, skippedCount: skippedUrls.length });
 });
 
-app.post("/api/discover-brands", (req, res) => {
+app.post("/api/discover-brands", async (req, res) => {
   const id = crypto.randomUUID();
   const cat = normalizeDiscoverCategory(req.body?.category);
   const discoverOptions: DiscoverBrandsOptions | undefined =
     cat !== undefined ? { category: cat } : undefined;
-  const job: Job = {
+  const job = createJobRecord({
     id,
+    kind: "discover",
     urls: [],
-    current: 0,
-    status: "running",
-    logs: [],
-    results: [],
-  };
+    meta: discoverOptions ? { category: discoverOptions.category } : {},
+  });
   jobs.set(id, job);
+  await createPipelineJob(job);
 
   (async () => {
     try {
@@ -329,8 +417,24 @@ app.post("/api/discover-brands", (req, res) => {
         outputTokens: result.usage.output_tokens,
         webSearchRequests: result.usage.web_search_requests,
       });
+      await Promise.all(
+        result.brands.map((brand) =>
+          upsertRetailerPipelineState({
+            retailer: retailerSlugFromUrl(brand.url),
+            baseUrl: brand.url,
+            displayName: brand.name,
+            latestJobId: job.id,
+            discoveryState: {
+              status: "completed",
+              discoveredAt: new Date().toISOString(),
+              source: "discover-brands",
+            },
+          }),
+        ),
+      );
       job.discoveredBrands = result.brands;
       job.status = "done";
+      persistJob(job);
       pushEvent(job.id, { type: "brands", brands: result.brands });
       pushEvent(job.id, { type: "done", brands: result.brands });
     } catch (err) {
@@ -339,6 +443,7 @@ app.post("/api/discover-brands", (req, res) => {
       pushLog(job.id, `ERROR: ${e.message}`, e);
       job.status = "error";
       job.error = e.message;
+      persistJob(job);
       pushEvent(job.id, { type: "done", error: e.message });
     }
 
@@ -397,6 +502,63 @@ function extractRetailerFromUrl(url: string): string {
   }
 }
 
+function readJsonFile<T>(filePath: string): T | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function loadStoredConfig(retailer: string): Promise<Record<string, unknown> | null> {
+  const filePath = path.join(CONFIGS_DIR, `${retailer}.json`);
+  const fromFile = readJsonFile<Record<string, unknown>>(filePath);
+  if (fromFile) return fromFile;
+  const state = await getRetailerPipelineState(retailer);
+  const config = state?.exploreState?.config;
+  return config && typeof config === "object" ? (config as Record<string, unknown>) : null;
+}
+
+async function loadStoredCrawlResult(retailer: string): Promise<CrawlResult | null> {
+  const filePath = path.join(PRODUCT_URLS_DIR, `${retailer}.json`);
+  const fromFile = readJsonFile<CrawlResult>(filePath);
+  if (fromFile) return fromFile;
+  const state = await getRetailerPipelineState(retailer);
+  const crawlState = state?.crawlState;
+  if (!crawlState) return null;
+  const urls = Array.isArray(crawlState.urls) ? (crawlState.urls as string[]) : [];
+  const totalUrls =
+    typeof crawlState.totalUrls === "number" ? crawlState.totalUrls : urls.length;
+  const crawledAt =
+    typeof crawlState.crawledAt === "string" ? crawlState.crawledAt : new Date().toISOString();
+  const method = typeof crawlState.method === "string" ? crawlState.method : "unknown";
+  return {
+    retailer,
+    crawledAt,
+    method,
+    totalUrls,
+    urls,
+    completed: crawlState.status === "completed",
+    error: typeof crawlState.error === "string" ? crawlState.error : undefined,
+    resumedFromCheckpoint: !!crawlState.resumedFromCheckpoint,
+  };
+}
+
+async function loadStoredUploadStatus(retailer: string): Promise<Record<string, unknown> | null> {
+  const filePath = path.join(UPLOAD_STATUS_DIR, `${retailer}.json`);
+  const fromFile = readJsonFile<Record<string, unknown>>(filePath);
+  if (fromFile) return fromFile;
+  const state = await getRetailerPipelineState(retailer);
+  const uploadState = state?.uploadState;
+  return uploadState && typeof uploadState === "object"
+    ? ({
+        retailer,
+        ...uploadState,
+      } as Record<string, unknown>)
+    : null;
+}
+
 async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrandsOptions) {
   const startedAt = new Date().toISOString();
   const job = jobs.get(jobId);
@@ -443,6 +605,23 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
     if (!brands || brands.length === 0) {
       throw new Error("No brands discovered.");
     }
+    await Promise.all(
+      brands.map((brand) =>
+        upsertRetailerPipelineState({
+          retailer: retailerSlugFromUrl(brand.url),
+          baseUrl: brand.url,
+          displayName: brand.name,
+          latestJobId: jobId,
+          discoveryState: {
+            status: "completed",
+            discoveredAt: new Date().toISOString(),
+            source: "e2e",
+          },
+        }),
+      ),
+    );
+    job.discoveredBrands = brands;
+    persistJob(job);
 
     pushProgress({
       step: 1,
@@ -468,6 +647,7 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
     for (let i = 0; i < brands.length; i++) {
       const brand = brands[i];
       const url = brand.url;
+      const fallbackRetailer = retailerSlugFromUrl(url);
       pushProgress({
         step: 2,
         stepLabel: "Generating configs",
@@ -480,6 +660,16 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
       });
 
       try {
+        await upsertRetailerPipelineState({
+          retailer: fallbackRetailer,
+          baseUrl: url,
+          displayName: brand.name,
+          latestJobId: jobId,
+          exploreState: {
+            status: "running",
+            startedAt: new Date().toISOString(),
+          },
+        });
         const { config, metrics, estimatedUsd } = await exploreRetailer(url, (msg) => pushLog(jobId, msg));
         recordExploreUsage({
           retailer: (config.retailer as string) ?? extractRetailerFromUrl(url),
@@ -493,6 +683,20 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
         const retailer = (config.retailer as string) ?? extractRetailerFromUrl(url);
         const dq = config.dataQuality as Record<string, unknown> | undefined;
         const rec = dq?.overallRecommendation as string | undefined;
+        await upsertRetailerPipelineState({
+          retailer,
+          baseUrl: typeof config.baseUrl === "string" ? config.baseUrl : url,
+          displayName: typeof config.retailerDisplayName === "string" ? config.retailerDisplayName : brand.name,
+          latestJobId: jobId,
+          exploreState: {
+            status: "completed",
+            completedAt: new Date().toISOString(),
+            recommendation: rec ?? "unknown",
+            estimatedUsd,
+            configPath: path.join(CONFIGS_DIR, `${retailer}.json`),
+            config,
+          },
+        });
         if (rec === "recommended") {
           recommendedConfigs.push({ retailer, config });
         }
@@ -500,6 +704,17 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
       } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
         pushLog(jobId, `  ERROR exploring ${brand.name}: ${e.message}\n`, e);
+        await upsertRetailerPipelineState({
+          retailer: fallbackRetailer,
+          baseUrl: url,
+          displayName: brand.name,
+          latestJobId: jobId,
+          exploreState: {
+            status: "failed",
+            failedAt: new Date().toISOString(),
+            error: e.message,
+          },
+        });
       }
 
       if (i < brands.length - 1 && INTER_URL_DELAY_MS > 0) {
@@ -522,6 +737,7 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
     if (recommendedConfigs.length === 0) {
       pushLog(jobId, "No recommended configs — skipping crawl and upload.\n");
       job.status = "done";
+      persistJob(job);
       pushProgress({
         step: 4,
         stepLabel: "Complete",
@@ -553,14 +769,85 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
 
     await runWithConcurrencyLimit(recommendedConfigs, E2E_CONCURRENCY, async ({ retailer, config }) => {
       try {
+        const crawlConfig = config as Parameters<typeof crawlProductUrls>[0];
+        const existingState = await getRetailerPipelineState(retailer);
+        const initialUrls = Array.isArray(existingState?.crawlState?.urls)
+          ? (existingState?.crawlState?.urls as string[])
+          : [];
+        await upsertRetailerPipelineState({
+          retailer,
+          baseUrl: typeof config.baseUrl === "string" ? config.baseUrl : undefined,
+          displayName: typeof config.retailerDisplayName === "string" ? config.retailerDisplayName : retailer,
+          latestJobId: jobId,
+          crawlState: {
+            status: "running",
+            startedAt: new Date().toISOString(),
+            method: crawlConfig.discovery.method,
+            resumedFromCheckpoint: initialUrls.length > 0,
+          },
+        });
         const result = await crawlProductUrls(
-          config as Parameters<typeof crawlProductUrls>[0],
+          crawlConfig,
           (msg) => pushLog(jobId, msg),
+          undefined,
+          {
+            initialUrls,
+            onCheckpoint: async (partial) => {
+              await upsertRetailerPipelineState({
+                retailer,
+                latestJobId: jobId,
+                crawlState: {
+                  status: "running",
+                  lastCheckpointAt: partial.crawledAt,
+                  totalUrls: partial.totalUrls,
+                  method: partial.method,
+                  urls: partial.urls,
+                  resumable: true,
+                  resumedFromCheckpoint: partial.resumedFromCheckpoint,
+                },
+              });
+            },
+            onComplete: async (finalResult) => {
+              await upsertRetailerPipelineState({
+                retailer,
+                latestJobId: jobId,
+                crawlState: {
+                  status: "completed",
+                  completedAt: finalResult.crawledAt,
+                  totalUrls: finalResult.totalUrls,
+                  method: finalResult.method,
+                  crawledAt: finalResult.crawledAt,
+                  urls: finalResult.urls,
+                  resumedFromCheckpoint: finalResult.resumedFromCheckpoint,
+                },
+              });
+            },
+            onError: async (partial, error) => {
+              await upsertRetailerPipelineState({
+                retailer,
+                latestJobId: jobId,
+                crawlState: {
+                  status: "failed",
+                  failedAt: new Date().toISOString(),
+                  totalUrls: partial.totalUrls,
+                  method: partial.method,
+                  crawledAt: partial.crawledAt,
+                  urls: partial.urls,
+                  error: error.message,
+                  resumable: true,
+                  resumedFromCheckpoint: partial.resumedFromCheckpoint,
+                },
+              });
+            },
+          },
         );
         fs.mkdirSync(PRODUCT_URLS_DIR, { recursive: true });
         writeJsonAtomic(path.join(PRODUCT_URLS_DIR, `${retailer}.json`), result);
         productUrlsTotal += result.totalUrls;
         crawlResults.push({ retailer, config, urls: result.urls });
+        if (!result.completed) {
+          pushLog(jobId, `Crawl recovered partial URLs for ${retailer}: ${result.error ?? "unknown error"}\n`);
+        }
         pushEvent(jobId, {
           type: "e2e-progress",
           step: 3,
@@ -580,6 +867,16 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
       } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
         pushLog(jobId, `Crawl failed for ${retailer}: ${e.message}\n`, e);
+        await upsertRetailerPipelineState({
+          retailer,
+          latestJobId: jobId,
+          crawlState: {
+            status: "failed",
+            failedAt: new Date().toISOString(),
+            error: e.message,
+            resumable: true,
+          },
+        });
         return null;
       }
     });
@@ -623,11 +920,82 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
 
     await runWithConcurrencyLimit(toUpload, E2E_CONCURRENCY, async ({ retailer, config, urls }) => {
       try {
+        const crawlResult = await loadStoredCrawlResult(retailer);
+        const crawlSourceCrawledAt = crawlResult?.crawledAt ?? new Date().toISOString();
+        const resumeUploadedUrls = await getSuccessfulUploadUrls(retailer, crawlSourceCrawledAt);
+        await upsertRetailerPipelineState({
+          retailer,
+          baseUrl: typeof config.baseUrl === "string" ? config.baseUrl : undefined,
+          displayName: typeof config.retailerDisplayName === "string" ? config.retailerDisplayName : retailer,
+          latestJobId: jobId,
+          uploadState: {
+            status: "running",
+            startedAt: new Date().toISOString(),
+            total: urls.length,
+            uploaded: 0,
+            skipped: resumeUploadedUrls.size,
+            failed: 0,
+            crawlSourceCrawledAt,
+          },
+        });
         const result = await uploadRetailer(
           config as Parameters<typeof uploadRetailer>[0],
           urls,
           (msg) => pushLog(jobId, msg),
+          async (progress) => {
+            await upsertRetailerPipelineState({
+              retailer,
+              latestJobId: jobId,
+              uploadState: {
+                status: "running",
+                updatedAt: new Date().toISOString(),
+                uploaded: progress.uploaded,
+                skipped: progress.skipped,
+                failed: progress.failed,
+                total: progress.total,
+                currentUrl: progress.currentUrl,
+                crawlSourceCrawledAt,
+              },
+            });
+          },
+          {
+            resumeUploadedUrls,
+            onItemResult: async (itemResult) => {
+              await recordUploadUrlResult({
+                retailer,
+                crawlSourceCrawledAt,
+                url: itemResult.url,
+                jobId,
+                status: itemResult.status,
+                externalId: itemResult.externalId,
+                itemName: itemResult.itemName,
+                imageCount: itemResult.imageCount,
+                uploadedToR2: itemResult.uploadedToR2,
+                upsertedToDb: itemResult.upsertedToDb,
+                error: itemResult.error,
+                metadata: itemResult.metadata,
+              });
+            },
+          },
         );
+        const uploadStatusPayload = buildUploadStatusPayload(retailer, crawlSourceCrawledAt, result, {
+          jobId,
+        });
+        writeUploadStatusSnapshot(retailer, uploadStatusPayload);
+        await upsertRetailerPipelineState({
+          retailer,
+          latestJobId: jobId,
+          uploadState: {
+            status: "completed",
+            completedAt: result.uploadedAt,
+            uploadedAt: result.uploadedAt,
+            uploaded: result.uploaded,
+            skipped: result.skipped,
+            failed: result.failed,
+            total: result.total,
+            crawlSourceCrawledAt,
+          },
+        });
         uploadState.success += result.uploaded;
         uploadState.retailersDone += 1;
         pushEvent(jobId, {
@@ -655,6 +1023,15 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
         const e = err instanceof Error ? err : new Error(String(err));
         uploadState.retailersDone += 1;
         pushLog(jobId, `Upload failed for ${retailer}: ${e.message}\n`, e);
+        await upsertRetailerPipelineState({
+          retailer,
+          latestJobId: jobId,
+          uploadState: {
+            status: "failed",
+            failedAt: new Date().toISOString(),
+            error: e.message,
+          },
+        });
         pushEvent(jobId, {
           type: "e2e-progress",
           step: 4,
@@ -680,6 +1057,7 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
     });
 
     job.status = "done";
+    persistJob(job);
     pushProgress({
       step: 4,
       stepLabel: "Complete",
@@ -699,6 +1077,7 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
     console.error(`[run-e2e job=${jobId}] Error:`, err);
     job.status = "error";
     job.error = e.message;
+    persistJob(job);
     pushLog(jobId, `ERROR: ${e.message}`, e);
     pushEvent(jobId, { type: "done", error: e.message });
   }
@@ -706,20 +1085,19 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
   closeAllSseClients(jobId);
 }
 
-app.post("/api/run-e2e", (req, res) => {
+app.post("/api/run-e2e", async (req, res) => {
   const id = crypto.randomUUID();
   const cat = normalizeDiscoverCategory(req.body?.category);
   const discoverOptions: DiscoverBrandsOptions | undefined =
     cat !== undefined ? { category: cat } : undefined;
-  const job: Job = {
+  const job = createJobRecord({
     id,
+    kind: "e2e",
     urls: [],
-    current: 0,
-    status: "running",
-    logs: [],
-    results: [],
-  };
+    meta: discoverOptions ? { category: discoverOptions.category } : {},
+  });
   jobs.set(id, job);
+  await createPipelineJob(job);
 
   runE2EOrchestrator(id, discoverOptions).catch((err) => {
     console.error(`[run-e2e job=${id}] Unhandled error:`, err);
@@ -727,6 +1105,7 @@ app.post("/api/run-e2e", (req, res) => {
     if (job) {
       job.status = "error";
       job.error = (err as Error).message;
+      persistJob(job);
       pushEvent(id, { type: "done", error: (err as Error).message });
     }
     closeAllSseClients(id);
@@ -735,8 +1114,8 @@ app.post("/api/run-e2e", (req, res) => {
   res.json({ jobId: id });
 });
 
-app.get("/api/job/:jobId", (req, res) => {
-  const job = jobs.get(req.params.jobId);
+app.get("/api/job/:jobId", async (req, res) => {
+  const job = jobs.get(req.params.jobId) ?? await getPipelineJob(req.params.jobId);
   if (!job) {
     res.status(404).json({ error: "Job not found." });
     return;
@@ -744,8 +1123,9 @@ app.get("/api/job/:jobId", (req, res) => {
   res.json({ exists: true, status: job.status });
 });
 
-app.get("/api/progress/:jobId", (req, res) => {
-  const job = jobs.get(req.params.jobId);
+app.get("/api/progress/:jobId", async (req, res) => {
+  const jobId = req.params.jobId;
+  const job = jobs.get(jobId) ?? await getPipelineJob(jobId);
   if (!job) {
     res.status(404).json({ error: "Job not found." });
     return;
@@ -757,27 +1137,30 @@ app.get("/api/progress/:jobId", (req, res) => {
     Connection: "keep-alive",
   });
 
-  // Replay existing logs
-  for (const msg of job.logs) {
-    res.write(`data: ${JSON.stringify({ type: "log", msg })}\n\n`);
+  const replayedEvents = await listPipelineEvents(job.id);
+  if (replayedEvents.length > 0) {
+    for (const event of replayedEvents) {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    }
+  } else {
+    for (const msg of job.logs) {
+      res.write(`data: ${JSON.stringify({ type: "log", msg })}\n\n`);
+    }
+    if (job.e2eProgress) {
+      res.write(`data: ${JSON.stringify(job.e2eProgress)}\n\n`);
+    }
+    if (job.discoverModelResponse) {
+      res.write(
+        `data: ${JSON.stringify({
+          type: "model-response",
+          phase: "discover",
+          body: job.discoverModelResponse,
+        })}\n\n`,
+      );
+    }
   }
 
-  // Replay last e2e-progress for late-joining clients
-  if (job.e2eProgress) {
-    res.write(`data: ${JSON.stringify(job.e2eProgress)}\n\n`);
-  }
-
-  if (job.discoverModelResponse) {
-    res.write(
-      `data: ${JSON.stringify({
-        type: "model-response",
-        phase: "discover",
-        body: job.discoverModelResponse,
-      })}\n\n`,
-    );
-  }
-
-  if (job.status === "done") {
+  if (job.status !== "running" || !jobs.has(job.id)) {
     const doneEvent: Record<string, unknown> = { type: "done" };
     if (job.discoveredBrands) doneEvent.brands = job.discoveredBrands;
     if (job.error) doneEvent.error = job.error;
@@ -835,72 +1218,55 @@ app.get("/api/discovered-brands", (_req, res) => {
   }
 });
 
-app.get("/api/retailers-overview", (_req, res) => {
+app.get("/api/retailers-overview", async (_req, res) => {
   try {
     fs.mkdirSync(CONFIGS_DIR, { recursive: true });
     const files = fs.readdirSync(CONFIGS_DIR).filter((f) => f.endsWith(".json"));
+    const stateRows = await listRetailerPipelineStates();
+    const stateRetailers = new Set(
+      stateRows
+        .filter((row) => row.exploreState?.config)
+        .map((row) => row.retailer),
+    );
+    const allRetailers = new Set<string>([
+      ...files.map((filename) => filename.replace(/\.json$/, "")),
+      ...stateRetailers,
+    ]);
 
-    /** Normalized config base URLs for matching against the discovery master list. */
     const configBaseUrls = new Set<string>();
-
-    const retailers = files.map((filename) => {
-      const fromFile = filename.replace(/\.json$/, "");
-      const raw = fs.readFileSync(path.join(CONFIGS_DIR, filename), "utf-8");
-      let config: Record<string, unknown> | null = null;
-      try {
-        config = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
-        return null;
-      }
-      const baseUrlRaw =
-        typeof config.baseUrl === "string" ? config.baseUrl.trim() : "";
+    const retailers = [];
+    for (const retailer of [...allRetailers].sort()) {
+      const filename = `${retailer}.json`;
+      const config = await loadStoredConfig(retailer);
+      if (!config) continue;
+      const baseUrlRaw = typeof config.baseUrl === "string" ? config.baseUrl.trim() : "";
       const normBase = normalizeUrl(baseUrlRaw);
       if (normBase) configBaseUrls.add(normBase);
 
-      const retailer = (typeof config.retailer === "string" ? config.retailer : null) ?? fromFile;
       const dq = config.dataQuality as { overallRecommendation?: string } | undefined;
-      const recommendation = dq?.overallRecommendation ?? "unknown";
+      const state = stateRows.find((row) => row.retailer === retailer);
+      const recommendation =
+        dq?.overallRecommendation ??
+        (typeof state?.exploreState?.recommendation === "string" ? state.exploreState.recommendation : "unknown");
 
-      let crawl: { totalUrls: number; crawledAt: string; method: string } | null = null;
-      const puPath = path.join(PRODUCT_URLS_DIR, `${retailer}.json`);
-      if (fs.existsSync(puPath)) {
-        try {
-          const pu = JSON.parse(fs.readFileSync(puPath, "utf-8")) as CrawlResult;
-          crawl = {
-            totalUrls: pu.totalUrls,
-            crawledAt: pu.crawledAt,
-            method: pu.method,
-          };
-        } catch {
-          // ignore
-        }
-      }
+      const crawlResult = await loadStoredCrawlResult(retailer);
+      const crawl = crawlResult
+        ? {
+            totalUrls: crawlResult.totalUrls,
+            crawledAt: crawlResult.crawledAt,
+            method: crawlResult.method,
+          }
+        : null;
 
-      let upload: {
-        retailer: string;
-        uploadedAt: string;
-        uploaded: number;
-        skipped: number;
-        failed: number;
-        total: number;
-        crawlSourceCrawledAt: string;
-      } | null = null;
-      const upPath = path.join(UPLOAD_STATUS_DIR, `${retailer}.json`);
-      if (fs.existsSync(upPath)) {
-        try {
-          upload = JSON.parse(fs.readFileSync(upPath, "utf-8"));
-        } catch {
-          // ignore
-        }
-      }
-
+      const upload = await loadStoredUploadStatus(retailer);
       const uploadMatchesCurrentCrawl = !!(
         crawl &&
         upload &&
+        typeof upload.crawlSourceCrawledAt === "string" &&
         upload.crawlSourceCrawledAt === crawl.crawledAt
       );
 
-      return {
+      retailers.push({
         retailer,
         filename,
         config,
@@ -908,10 +1274,9 @@ app.get("/api/retailers-overview", (_req, res) => {
         crawl,
         upload,
         uploadMatchesCurrentCrawl,
-      };
-    }).filter((x): x is NonNullable<typeof x> => x != null);
+      });
+    }
 
-    /** Discovered brands/URLs not yet represented by a config file (same URL normalization as discovery). */
     const identifiedWithoutConfig: { name: string; url: string }[] = [];
     const backlogSeen = new Set<string>();
 
@@ -934,8 +1299,7 @@ app.get("/api/retailers-overview", (_req, res) => {
       if (!n || backlogSeen.has(n)) continue;
       if (configBaseUrls.has(n)) continue;
       backlogSeen.add(n);
-      const name =
-        typeof b.name === "string" && b.name.trim().length > 0 ? b.name.trim() : n;
+      const name = typeof b.name === "string" && b.name.trim().length > 0 ? b.name.trim() : n;
       identifiedWithoutConfig.push({ name, url: n });
     }
     for (const u of discoveredUrlStrings) {
@@ -945,6 +1309,16 @@ app.get("/api/retailers-overview", (_req, res) => {
       if (configBaseUrls.has(n)) continue;
       backlogSeen.add(n);
       identifiedWithoutConfig.push({ name: n, url: n });
+    }
+    for (const row of stateRows) {
+      const n = typeof row.baseUrl === "string" ? normalizeUrl(row.baseUrl) : null;
+      if (!n || backlogSeen.has(n)) continue;
+      if (configBaseUrls.has(n)) continue;
+      backlogSeen.add(n);
+      identifiedWithoutConfig.push({
+        name: row.displayName?.trim() || n,
+        url: n,
+      });
     }
     identifiedWithoutConfig.sort((a, b) =>
       a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
@@ -957,23 +1331,23 @@ app.get("/api/retailers-overview", (_req, res) => {
   }
 });
 
-app.get("/api/configs", (_req, res) => {
+app.get("/api/configs", async (_req, res) => {
   try {
     fs.mkdirSync(CONFIGS_DIR, { recursive: true });
-    const files = fs
-      .readdirSync(CONFIGS_DIR)
-      .filter((f) => f.endsWith(".json"));
+    const files = fs.readdirSync(CONFIGS_DIR).filter((f) => f.endsWith(".json"));
+    const stateRows = await listRetailerPipelineStates();
+    const allRetailers = new Set<string>([
+      ...files.map((filename) => filename.replace(/\.json$/, "")),
+      ...stateRows.filter((row) => row.exploreState?.config).map((row) => row.retailer),
+    ]);
 
-    const configs = files.map((filename) => {
-      const raw = fs.readFileSync(path.join(CONFIGS_DIR, filename), "utf-8");
-      try {
-        const config = JSON.parse(raw);
-        return { retailer: config.retailer ?? filename.replace(".json", ""), filename, config };
-      } catch (e) {
-        console.error("[api/configs] Failed to parse config:", filename, e);
-        return { retailer: filename.replace(".json", ""), filename, config: null };
-      }
-    });
+    const configs = await Promise.all(
+      [...allRetailers].sort().map(async (retailer) => ({
+        retailer,
+        filename: `${retailer}.json`,
+        config: await loadStoredConfig(retailer),
+      })),
+    );
 
     res.json(configs);
   } catch (err) {
@@ -982,66 +1356,120 @@ app.get("/api/configs", (_req, res) => {
   }
 });
 
-app.get("/api/configs/:retailer", (req, res) => {
-  const filePath = path.join(CONFIGS_DIR, `${req.params.retailer}.json`);
-  if (!fs.existsSync(filePath)) {
+app.get("/api/configs/:retailer", async (req, res) => {
+  const config = await loadStoredConfig(req.params.retailer);
+  if (!config) {
     res.status(404).json({ error: "Config not found." });
     return;
   }
-  res.sendFile(filePath);
+  res.json(config);
 });
 
 // ---------------------------------------------------------------------------
 // Crawl endpoints — use a generated config to discover all product URLs
 // ---------------------------------------------------------------------------
 
-app.post("/api/crawl/:retailer", (req, res) => {
+app.post("/api/crawl/:retailer", async (req, res) => {
   const retailer = req.params.retailer;
-  const configPath = path.join(CONFIGS_DIR, `${retailer}.json`);
-  if (!fs.existsSync(configPath)) {
+  const config = await loadStoredConfig(retailer);
+  if (!config) {
     res.status(404).json({ error: "Config not found." });
     return;
   }
 
-  let config;
-  try {
-    config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-  } catch {
-    res.status(500).json({ error: "Failed to parse config." });
-    return;
-  }
-
   const id = crypto.randomUUID();
-  const job: Job = {
+  const job = createJobRecord({
     id,
-    urls: [config.baseUrl],
-    current: 0,
-    status: "running",
-    logs: [],
-    results: [],
-  };
+    kind: "crawl",
+    retailer,
+    urls: typeof config.baseUrl === "string" ? [config.baseUrl] : [],
+  });
   jobs.set(id, job);
+  await createPipelineJob(job);
 
   (async () => {
     try {
+      const existingState = await getRetailerPipelineState(retailer);
+      const initialUrls = Array.isArray(existingState?.crawlState?.urls)
+        ? (existingState.crawlState.urls as string[])
+        : [];
       const result = await crawlProductUrls(
-        config,
+        config as Parameters<typeof crawlProductUrls>[0],
         (msg) => pushLog(job.id, msg),
         (count) => pushEvent(job.id, { type: "crawl-progress", count }),
+        {
+          initialUrls,
+          onCheckpoint: async (partial) => {
+            await upsertRetailerPipelineState({
+              retailer,
+              baseUrl: typeof config.baseUrl === "string" ? config.baseUrl : undefined,
+              displayName: typeof config.retailerDisplayName === "string" ? config.retailerDisplayName : retailer,
+              latestJobId: job.id,
+              crawlState: {
+                status: "running",
+                lastCheckpointAt: partial.crawledAt,
+                totalUrls: partial.totalUrls,
+                method: partial.method,
+                urls: partial.urls,
+                resumable: true,
+                resumedFromCheckpoint: partial.resumedFromCheckpoint,
+              },
+            });
+          },
+          onComplete: async (finalResult) => {
+            await upsertRetailerPipelineState({
+              retailer,
+              latestJobId: job.id,
+              crawlState: {
+                status: "completed",
+                completedAt: finalResult.crawledAt,
+                crawledAt: finalResult.crawledAt,
+                totalUrls: finalResult.totalUrls,
+                method: finalResult.method,
+                urls: finalResult.urls,
+                resumedFromCheckpoint: finalResult.resumedFromCheckpoint,
+              },
+            });
+          },
+          onError: async (partial, error) => {
+            await upsertRetailerPipelineState({
+              retailer,
+              latestJobId: job.id,
+              crawlState: {
+                status: "failed",
+                failedAt: new Date().toISOString(),
+                crawledAt: partial.crawledAt,
+                totalUrls: partial.totalUrls,
+                method: partial.method,
+                urls: partial.urls,
+                error: error.message,
+                resumable: true,
+                resumedFromCheckpoint: partial.resumedFromCheckpoint,
+              },
+            });
+          },
+        },
       );
 
       fs.mkdirSync(PRODUCT_URLS_DIR, { recursive: true });
       writeJsonAtomic(path.join(PRODUCT_URLS_DIR, `${retailer}.json`), result);
 
       job.results.push(result as unknown as Record<string, unknown>);
-      job.status = "done";
-      pushEvent(job.id, { type: "done", totalUrls: result.totalUrls });
+      job.status = result.completed === false ? "error" : "done";
+      if (result.error) job.error = result.error;
+      persistJob(job);
+      pushEvent(job.id, {
+        type: "done",
+        totalUrls: result.totalUrls,
+        ...(result.error ? { error: result.error } : {}),
+      });
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
       console.error(`[crawl job=${job.id}] Error crawling ${retailer}:`, err);
       pushLog(job.id, `ERROR: ${e.message}`, e);
       job.status = "error";
       job.error = e.message;
+      persistJob(job);
       pushEvent(job.id, { type: "done", error: e.message });
     }
 
@@ -1051,27 +1479,32 @@ app.post("/api/crawl/:retailer", (req, res) => {
   res.json({ jobId: id });
 });
 
-app.get("/api/product-urls", (_req, res) => {
+app.get("/api/product-urls", async (_req, res) => {
   try {
     fs.mkdirSync(PRODUCT_URLS_DIR, { recursive: true });
     const files = fs
       .readdirSync(PRODUCT_URLS_DIR)
-      .filter((f) => f.endsWith(".json"));
+      .filter((f) => f.endsWith(".json") && !f.endsWith(".partial.json"));
+    const stateRows = await listRetailerPipelineStates();
+    const allRetailers = new Set<string>([
+      ...files.map((filename) => filename.replace(/\.json$/, "")),
+      ...stateRows.filter((row) => Array.isArray(row.crawlState?.urls)).map((row) => row.retailer),
+    ]);
 
-    const results = files.map((filename) => {
-      const raw = fs.readFileSync(path.join(PRODUCT_URLS_DIR, filename), "utf-8");
-      try {
-        const data = JSON.parse(raw) as CrawlResult;
-        return {
-          retailer: data.retailer,
-          crawledAt: data.crawledAt,
-          method: data.method,
-          totalUrls: data.totalUrls,
-        };
-      } catch {
-        return null;
-      }
-    }).filter(Boolean);
+    const results = (
+      await Promise.all(
+        [...allRetailers].sort().map(async (retailer) => {
+          const data = await loadStoredCrawlResult(retailer);
+          if (!data) return null;
+          return {
+            retailer: data.retailer,
+            crawledAt: data.crawledAt,
+            method: data.method,
+            totalUrls: data.totalUrls,
+          };
+        }),
+      )
+    ).filter(Boolean);
 
     res.json(results);
   } catch (err) {
@@ -1080,51 +1513,29 @@ app.get("/api/product-urls", (_req, res) => {
   }
 });
 
-app.get("/api/product-urls/:retailer", (req, res) => {
-  const filePath = path.join(PRODUCT_URLS_DIR, `${req.params.retailer}.json`);
-  if (!fs.existsSync(filePath)) {
+app.get("/api/product-urls/:retailer", async (req, res) => {
+  const data = await loadStoredCrawlResult(req.params.retailer);
+  if (!data) {
     res.status(404).json({ error: "Product URLs not found." });
     return;
   }
-  try {
-    const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-    res.json(data);
-  } catch {
-    res.status(500).json({ error: "Failed to read product URLs." });
-  }
+  res.json(data);
 });
 
 // ---------------------------------------------------------------------------
 // Upload endpoints — scrape product URLs, upload images to R2, upsert to DB
 // ---------------------------------------------------------------------------
 
-app.post("/api/upload/:retailer", (req, res) => {
+app.post("/api/upload/:retailer", async (req, res) => {
   const retailer = req.params.retailer;
-  const configPath = path.join(CONFIGS_DIR, `${retailer}.json`);
-  if (!fs.existsSync(configPath)) {
+  const config = await loadStoredConfig(retailer);
+  if (!config) {
     res.status(404).json({ error: "Config not found." });
     return;
   }
-
-  const urlsPath = path.join(PRODUCT_URLS_DIR, `${retailer}.json`);
-  if (!fs.existsSync(urlsPath)) {
+  const urlsData = await loadStoredCrawlResult(retailer);
+  if (!urlsData) {
     res.status(404).json({ error: "Product URLs not found. Crawl first." });
-    return;
-  }
-
-  let config;
-  try {
-    config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-  } catch {
-    res.status(500).json({ error: "Failed to parse config." });
-    return;
-  }
-
-  let urlsData;
-  try {
-    urlsData = JSON.parse(fs.readFileSync(urlsPath, "utf-8")) as CrawlResult;
-  } catch {
-    res.status(500).json({ error: "Failed to parse product URLs." });
     return;
   }
 
@@ -1134,43 +1545,103 @@ app.post("/api/upload/:retailer", (req, res) => {
   }
 
   const id = crypto.randomUUID();
-  const job: Job = {
+  const job = createJobRecord({
     id,
+    kind: "upload",
+    retailer,
     urls: urlsData.urls,
-    current: 0,
-    status: "running",
-    logs: [],
-    results: [],
-  };
+  });
   jobs.set(id, job);
+  await createPipelineJob(job);
 
   (async () => {
     try {
+      const resumeUploadedUrls = await getSuccessfulUploadUrls(retailer, urlsData.crawledAt);
+      await upsertRetailerPipelineState({
+        retailer,
+        baseUrl: typeof config.baseUrl === "string" ? config.baseUrl : undefined,
+        displayName: typeof config.retailerDisplayName === "string" ? config.retailerDisplayName : retailer,
+        latestJobId: job.id,
+        uploadState: {
+          status: "running",
+          startedAt: new Date().toISOString(),
+          uploaded: 0,
+          skipped: resumeUploadedUrls.size,
+          failed: 0,
+          total: urlsData.urls.length,
+          crawlSourceCrawledAt: urlsData.crawledAt,
+        },
+      });
       const result = await uploadRetailer(
-        config,
+        config as Parameters<typeof uploadRetailer>[0],
         urlsData.urls,
         (msg) => pushLog(job.id, msg),
-        (progress) => pushEvent(job.id, {
-          type: "upload-progress",
-          uploaded: progress.uploaded,
-          skipped: progress.skipped,
-          failed: progress.failed,
-          total: progress.total,
-          currentUrl: progress.currentUrl,
-        }),
+        async (progress) => {
+          pushEvent(job.id, {
+            type: "upload-progress",
+            uploaded: progress.uploaded,
+            skipped: progress.skipped,
+            failed: progress.failed,
+            total: progress.total,
+            currentUrl: progress.currentUrl,
+          });
+          await upsertRetailerPipelineState({
+            retailer,
+            latestJobId: job.id,
+            uploadState: {
+              status: "running",
+              updatedAt: new Date().toISOString(),
+              uploaded: progress.uploaded,
+              skipped: progress.skipped,
+              failed: progress.failed,
+              total: progress.total,
+              currentUrl: progress.currentUrl,
+              crawlSourceCrawledAt: urlsData.crawledAt,
+            },
+          });
+        },
+        {
+          resumeUploadedUrls,
+          onItemResult: async (itemResult) => {
+            await recordUploadUrlResult({
+              retailer,
+              crawlSourceCrawledAt: urlsData.crawledAt,
+              url: itemResult.url,
+              jobId: job.id,
+              status: itemResult.status,
+              externalId: itemResult.externalId,
+              itemName: itemResult.itemName,
+              imageCount: itemResult.imageCount,
+              uploadedToR2: itemResult.uploadedToR2,
+              upsertedToDb: itemResult.upsertedToDb,
+              error: itemResult.error,
+              metadata: itemResult.metadata,
+            });
+          },
+        },
       );
 
       job.results.push(result as unknown as Record<string, unknown>);
       job.status = "done";
+      persistJob(job);
 
-      writeJsonAtomic(path.join(UPLOAD_STATUS_DIR, `${retailer}.json`), {
+      const uploadStatusPayload = buildUploadStatusPayload(retailer, urlsData.crawledAt, result, {
+        jobId: job.id,
+      });
+      writeUploadStatusSnapshot(retailer, uploadStatusPayload);
+      await upsertRetailerPipelineState({
         retailer,
-        uploadedAt: result.uploadedAt,
-        uploaded: result.uploaded,
-        skipped: result.skipped,
-        failed: result.failed,
-        total: result.total,
-        crawlSourceCrawledAt: urlsData.crawledAt,
+        latestJobId: job.id,
+        uploadState: {
+          status: "completed",
+          uploadedAt: result.uploadedAt,
+          completedAt: result.uploadedAt,
+          uploaded: result.uploaded,
+          skipped: result.skipped,
+          failed: result.failed,
+          total: result.total,
+          crawlSourceCrawledAt: urlsData.crawledAt,
+        },
       });
 
       pushEvent(job.id, {
@@ -1186,6 +1657,17 @@ app.post("/api/upload/:retailer", (req, res) => {
       pushLog(job.id, `ERROR: ${e.message}`, e);
       job.status = "error";
       job.error = e.message;
+      persistJob(job);
+      await upsertRetailerPipelineState({
+        retailer,
+        latestJobId: job.id,
+        uploadState: {
+          status: "failed",
+          failedAt: new Date().toISOString(),
+          error: e.message,
+          crawlSourceCrawledAt: urlsData.crawledAt,
+        },
+      });
       pushEvent(job.id, { type: "done", error: e.message });
     }
 
@@ -1208,10 +1690,18 @@ app.get("/", (_req, res) => {
 // ---------------------------------------------------------------------------
 
 app.listen(PORT, () => {
-  try {
-    syncConfigsToMasterList(CONFIGS_DIR);
-  } catch (err) {
-    console.error("[startup] Failed to sync configs to master list:", err);
-  }
-  console.log(`\n  Crawler Config UI running at http://localhost:${PORT}\n`);
+  void (async () => {
+    try {
+      await ensurePipelinePersistenceSchema();
+      await markRunningJobsInterrupted();
+    } catch (err) {
+      console.error("[startup] Failed to initialize pipeline persistence:", err);
+    }
+    try {
+      syncConfigsToMasterList(CONFIGS_DIR);
+    } catch (err) {
+      console.error("[startup] Failed to sync configs to master list:", err);
+    }
+    console.log(`\n  Crawler Config UI running at http://localhost:${PORT}\n`);
+  })();
 });
