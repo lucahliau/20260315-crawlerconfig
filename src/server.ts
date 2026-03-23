@@ -34,6 +34,7 @@ import {
   upsertRetailerPipelineState,
   type PipelineJobRecord,
 } from "./pipelineStore.js";
+import { safeParseConfig } from "./schemas/config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -742,6 +743,14 @@ function readJsonFile<T>(filePath: string): T | null {
   }
 }
 
+function summarizeConfigValidationIssues(
+  issues: Array<{ path: (string | number)[]; message: string }>,
+): string {
+  return issues
+    .map((issue) => `${issue.path.length ? issue.path.join(".") : "config"}: ${issue.message}`)
+    .join("; ");
+}
+
 async function loadStoredConfig(retailer: string): Promise<Record<string, unknown> | null> {
   const filePath = path.join(CONFIGS_DIR, `${retailer}.json`);
   const fromFile = readJsonFile<Record<string, unknown>>(filePath);
@@ -983,7 +992,24 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
 
     await runWithConcurrencyLimit(recommendedConfigs, E2E_CONCURRENCY, async ({ retailer, config }) => {
       try {
-        const crawlConfig = config as Parameters<typeof crawlProductUrls>[0];
+        const parsedConfig = safeParseConfig(config);
+        if (!parsedConfig.success) {
+          const details = summarizeConfigValidationIssues(parsedConfig.error.issues);
+          pushLog(jobId, `Skipping crawl for ${retailer}: stored config is invalid (${details}).\n`);
+          await upsertRetailerPipelineState({
+            retailer,
+            baseUrl: typeof config.baseUrl === "string" ? config.baseUrl : undefined,
+            displayName: typeof config.retailerDisplayName === "string" ? config.retailerDisplayName : retailer,
+            latestJobId: jobId,
+            crawlState: {
+              status: "failed",
+              failedAt: new Date().toISOString(),
+              error: `Stored config is invalid: ${details}`,
+            },
+          });
+          return null;
+        }
+        const crawlConfig = parsedConfig.data;
         const existingState = await getRetailerPipelineState(retailer);
         const initialUrls = Array.isArray(existingState?.crawlState?.urls)
           ? (existingState?.crawlState?.urls as string[])
@@ -1659,12 +1685,22 @@ app.post("/api/crawl/:retailer", async (req, res) => {
     return;
   }
 
+  const parsedConfig = safeParseConfig(config);
+  if (!parsedConfig.success) {
+    res.status(400).json({
+      error: "Stored config is invalid.",
+      details: parsedConfig.error.flatten(),
+    });
+    return;
+  }
+  const crawlConfig = parsedConfig.data;
+
   const id = crypto.randomUUID();
   const job = createJobRecord({
     id,
     kind: "crawl",
     retailer,
-    urls: typeof config.baseUrl === "string" ? [config.baseUrl] : [],
+    urls: [crawlConfig.baseUrl],
   });
   jobs.set(id, job);
   await createPipelineJob(job);
@@ -1676,7 +1712,7 @@ app.post("/api/crawl/:retailer", async (req, res) => {
         ? (existingState.crawlState.urls as string[])
         : [];
       const result = await crawlProductUrls(
-        config as Parameters<typeof crawlProductUrls>[0],
+        crawlConfig,
         (msg) => pushLog(job.id, msg),
         (count) => pushEvent(job.id, { type: "crawl-progress", count }),
         {
@@ -1684,8 +1720,8 @@ app.post("/api/crawl/:retailer", async (req, res) => {
           onCheckpoint: async (partial) => {
             await upsertRetailerPipelineState({
               retailer,
-              baseUrl: typeof config.baseUrl === "string" ? config.baseUrl : undefined,
-              displayName: typeof config.retailerDisplayName === "string" ? config.retailerDisplayName : retailer,
+              baseUrl: crawlConfig.baseUrl,
+              displayName: crawlConfig.retailerDisplayName,
               latestJobId: job.id,
               crawlState: {
                 status: "running",

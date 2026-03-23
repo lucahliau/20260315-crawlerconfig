@@ -615,6 +615,11 @@ export async function crawlProductUrls(
   hooks?: CrawlPersistenceHooks,
 ): Promise<CrawlResult> {
   if (onLog) _logFn = onLog;
+  if (!config?.discovery) {
+    throw new Error(
+      "Config must include a valid discovery block before crawling. Re-run explore or fix the saved config JSON.",
+    );
+  }
 
   const urls = new Set<string>(hooks?.initialUrls ?? []);
   let excludedNonClothing = 0;

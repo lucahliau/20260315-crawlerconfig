@@ -108,3 +108,7 @@ export type Config = z.infer<typeof ConfigSchema>;
 export function validateConfig(data: unknown): Config {
   return ConfigSchema.parse(data);
 }
+
+export function safeParseConfig(data: unknown) {
+  return ConfigSchema.safeParse(data);
+}
