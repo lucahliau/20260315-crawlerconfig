@@ -272,7 +272,17 @@ function getExploreFailureInfo(err: unknown): ExploreFailureInfo {
   return classifyExploreFailure(err);
 }
 
-function getExploreStatus(state: Record<string, unknown> | undefined, hasConfig: boolean): ExploreUiStatus {
+function hasConfigError(config: Record<string, unknown> | null | undefined): boolean {
+  if (!config || typeof config !== "object") return false;
+  const error = config.error;
+  return !!(error && typeof error === "object" && typeof (error as { message?: unknown }).message === "string");
+}
+
+function getExploreStatus(
+  state: Record<string, unknown> | undefined,
+  hasConfig: boolean,
+  configHasError = false,
+): ExploreUiStatus {
   const status = state?.status;
   if (
     status === "running" ||
@@ -283,7 +293,49 @@ function getExploreStatus(state: Record<string, unknown> | undefined, hasConfig:
   ) {
     return status;
   }
+  if (configHasError) return "failed";
   return hasConfig ? "completed" : "idle";
+}
+
+function shouldSkipExistingExplore(status: ExploreUiStatus): boolean {
+  return status === "completed" || status === "running";
+}
+
+function getEffectiveRecommendation(
+  recommendation: RecommendationValue,
+  exploreStatus: ExploreUiStatus,
+): RecommendationValue {
+  if (exploreStatus !== "completed") return "not recommended";
+  return recommendation;
+}
+
+async function createExploreJob(
+  urls: string[],
+  parallelism?: number | string,
+  skippedUrls?: string[],
+): Promise<{ jobId: string; parallelism: number }> {
+  const id = crypto.randomUUID();
+  const normalizedParallelism = clampExploreParallelism(parallelism);
+  const job = createJobRecord({
+    id,
+    kind: "explore",
+    urls,
+    meta: { parallelism: normalizedParallelism },
+  });
+  jobs.set(id, job);
+  await createPipelineJob(job);
+
+  processJob(job, skippedUrls && skippedUrls.length > 0 ? skippedUrls : undefined).catch((err) => {
+    job.status = "error";
+    job.error = (err as Error).message;
+    persistJob(job);
+    console.error(`[processJob job=${job.id}] Error:`, err);
+  });
+
+  return {
+    jobId: id,
+    parallelism: normalizedParallelism,
+  };
 }
 
 async function exploreRetailerWithRecovery(
@@ -574,9 +626,10 @@ app.post("/api/explore", async (req, res) => {
     if (shouldSkipExisting) {
       const slug = retailerSlugFromUrl(url);
       if (fs.existsSync(path.join(CONFIGS_DIR, `${slug}.json`))) {
+        const config = await loadStoredConfig(slug);
         const state = await getRetailerPipelineState(slug);
-        const status = getExploreStatus(state?.exploreState, true);
-        if (status !== "needs_retry" && status !== "queued_retry") {
+        const status = getExploreStatus(state?.exploreState, true, hasConfigError(config));
+        if (shouldSkipExistingExplore(status)) {
           skippedUrls.push(url);
           continue;
         }
@@ -587,35 +640,82 @@ app.post("/api/explore", async (req, res) => {
 
   if (toExplore.length === 0) {
     res.status(400).json({
-      error: "All URLs already have config files. Clear skip or remove configs to re-explore.",
+      error: "All URLs already have completed configs or are currently running. Clear skip to force re-explore.",
       skippedUrls,
     });
     return;
   }
 
-  const id = crypto.randomUUID();
-  const normalizedParallelism = clampExploreParallelism(parallelism);
-  const job = createJobRecord({
-    id,
-    kind: "explore",
-    urls: toExplore,
-    meta: { parallelism: normalizedParallelism },
-  });
-  jobs.set(id, job);
-  await createPipelineJob(job);
-
-  processJob(job, skippedUrls.length > 0 ? skippedUrls : undefined).catch((err) => {
-    job.status = "error";
-    job.error = (err as Error).message;
-    persistJob(job);
-    console.error(`[processJob job=${job.id}] Error:`, err);
-  });
+  const jobInfo = await createExploreJob(toExplore, parallelism, skippedUrls);
 
   res.json({
-    jobId: id,
+    jobId: jobInfo.jobId,
     skippedUrls,
     skippedCount: skippedUrls.length,
-    parallelism: normalizedParallelism,
+    parallelism: jobInfo.parallelism,
+  });
+});
+
+app.post("/api/explore/retry", async (req, res) => {
+  const { retailers, parallelism } = req.body as {
+    retailers?: string[];
+    parallelism?: number | string;
+  };
+  if (!retailers || !Array.isArray(retailers) || retailers.length === 0) {
+    res.status(400).json({ error: "Provide a non-empty retailers array." });
+    return;
+  }
+
+  const uniqueRetailers = [...new Set(retailers.map((retailer) => String(retailer || "").trim()).filter(Boolean))];
+  const toExplore: string[] = [];
+  const acceptedRetailers: string[] = [];
+  const skippedRetailers: Array<{ retailer: string; reason: string }> = [];
+
+  for (const retailer of uniqueRetailers) {
+    const config = await loadStoredConfig(retailer);
+    const state = await getRetailerPipelineState(retailer);
+    const status = getExploreStatus(state?.exploreState, !!config, hasConfigError(config));
+    if (status === "completed") {
+      skippedRetailers.push({ retailer, reason: "Explore is already completed." });
+      continue;
+    }
+    if (status === "running") {
+      skippedRetailers.push({ retailer, reason: "Explore is already running." });
+      continue;
+    }
+
+    const rawBaseUrl =
+      typeof config?.baseUrl === "string"
+        ? config.baseUrl
+        : typeof state?.baseUrl === "string"
+          ? state.baseUrl
+          : "";
+    const cleanBaseUrl = rawBaseUrl ? cleanUrl(rawBaseUrl) : null;
+    if (!cleanBaseUrl) {
+      skippedRetailers.push({ retailer, reason: "No base URL is available to retry." });
+      continue;
+    }
+
+    acceptedRetailers.push(retailer);
+    toExplore.push(cleanBaseUrl);
+  }
+
+  if (toExplore.length === 0) {
+    res.status(400).json({
+      error: "No failed or non-completed retailers could be retried.",
+      skippedRetailers,
+    });
+    return;
+  }
+
+  const jobInfo = await createExploreJob(toExplore, parallelism);
+  res.json({
+    jobId: jobInfo.jobId,
+    parallelism: jobInfo.parallelism,
+    retailers: acceptedRetailers,
+    submittedCount: acceptedRetailers.length,
+    skippedRetailers,
+    skippedCount: skippedRetailers.length,
   });
 });
 
@@ -1485,10 +1585,11 @@ app.get("/api/retailers-overview", async (_req, res) => {
 
       const dq = config.dataQuality as { overallRecommendation?: string } | undefined;
       const state = stateRows.find((row) => row.retailer === retailer);
-      const recommendation = normalizeRecommendationValue(
+      const storedRecommendation = normalizeRecommendationValue(
         dq?.overallRecommendation ?? state?.exploreState?.recommendation,
       );
-      const exploreStatus = getExploreStatus(state?.exploreState, true);
+      const exploreStatus = getExploreStatus(state?.exploreState, true, hasConfigError(config));
+      const recommendation = getEffectiveRecommendation(storedRecommendation, exploreStatus);
       const exploreError =
         typeof state?.exploreState?.error === "string" ? state.exploreState.error : null;
       const retryAt =
@@ -1524,6 +1625,7 @@ app.get("/api/retailers-overview", async (_req, res) => {
         filename,
         config,
         recommendation,
+        storedRecommendation,
         exploreStatus,
         exploreError,
         retryAt,

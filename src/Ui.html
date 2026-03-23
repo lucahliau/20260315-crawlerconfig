@@ -693,7 +693,7 @@
     gap: 1rem;
   }
   .dashboard-toolbar {
-    padding: 0.85rem;
+    padding: 0.8rem 0.85rem;
     background: var(--card-subtle);
     border: 1px solid var(--border);
     border-radius: 14px;
@@ -717,6 +717,7 @@
     min-width: 9rem;
   }
   .dashboard-toolbar input[type="checkbox"] { accent-color: var(--accent); }
+  .dashboard-toolbar .toolbar-row + .toolbar-row { margin-top: 0.55rem; }
   .bulk-actions {
     display: flex;
     gap: 0.6rem;
@@ -725,36 +726,92 @@
   #dashboardBulkHint { color: var(--muted); font-size: 0.8rem; }
 
   .retailer-list {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--card);
+  }
+  .retailer-table-head,
+  .retailer-list-item {
+    display: grid;
+    grid-template-columns: minmax(180px, 2.2fr) minmax(120px, 1fr) minmax(150px, 1.15fr) minmax(120px, 0.95fr) minmax(120px, 1fr) minmax(180px, 1.35fr);
+    gap: 0.75rem;
+    align-items: center;
+  }
+  .retailer-table-head {
+    padding: 0.7rem 0.85rem;
+    background: var(--card-subtle);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.72rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 700;
+  }
+  .retailer-table-body {
     display: flex;
     flex-direction: column;
-    gap: 0.42rem;
   }
   .retailer-list-item {
     border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--card-subtle);
-    padding: 0.58rem 0.72rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.32rem;
+    border-radius: 0;
+    border-width: 0 0 1px;
+    background: var(--card);
+    padding: 0.68rem 0.85rem;
     cursor: pointer;
     transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
   }
+  .retailer-list-item:last-child { border-bottom: none; }
   .retailer-list-item.is-selected {
-    border-color: var(--accent);
-    box-shadow: inset 0 0 0 1px var(--accent);
+    background: var(--accent-soft);
+    box-shadow: inset 3px 0 0 var(--accent);
   }
   .retailer-list-item:hover {
-    border-color: var(--accent);
-    background: var(--card);
+    background: var(--card-subtle);
   }
   .retailer-list-item:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
-  .retailer-list-main {
-    flex: 1;
+  .retailer-cell {
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.22rem;
+  }
+  .retailer-cell-actions { align-items: flex-end; }
+  .retailer-cell-label { display: none; }
+  .retailer-cell-primary {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+  .retailer-cell-secondary,
+  .retailer-cell-meta {
+    color: var(--muted);
+    font-size: 0.77rem;
+  }
+  .retailer-cell-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+  }
+  .retailer-cell-meta .detail-chip,
+  .retailer-cell-meta .status-pill,
+  .retailer-cell-meta .badge {
+    max-width: 100%;
+  }
+  .retailer-cell-mono {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+  .retailer-row-summary {
+    color: var(--muted);
+    font-size: 0.76rem;
+    line-height: 1.45;
   }
   .retailer-list-subrow {
     display: flex;
@@ -768,6 +825,11 @@
   }
   .retailer-actions {
     flex-shrink: 0;
+  }
+  .retailer-actions.retailer-row-actions {
+    justify-content: flex-end;
+    gap: 0.45rem;
+    width: 100%;
   }
   .retailer-actions .btn-small {
     padding: 0.34rem 0.56rem;
@@ -918,7 +980,6 @@
     .workspace-header,
     .surface-card-header,
     .toolbar-row,
-    .retailer-list-header,
     .detail-header {
       flex-direction: column;
       align-items: stretch;
@@ -937,6 +998,32 @@
     .actions-row > * {
       width: 100%;
     }
+    .retailer-table-head { display: none; }
+    .retailer-list {
+      border: none;
+      background: transparent;
+    }
+    .retailer-table-body {
+      gap: 0.7rem;
+    }
+    .retailer-list-item {
+      grid-template-columns: 1fr;
+      gap: 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--card-subtle);
+      padding: 0.8rem;
+    }
+    .retailer-list-item:last-child { border-bottom: 1px solid var(--border); }
+    .retailer-cell-label {
+      display: block;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .retailer-cell-actions { align-items: stretch; }
   }
 </style>
 </head>
@@ -1129,6 +1216,17 @@
                   <option value="unknown">Unknown</option>
                 </select>
               </label>
+              <label>Explore status
+                <select id="filterExploreStatus">
+                  <option value="all">All</option>
+                  <option value="non_completed">Non-completed</option>
+                  <option value="completed">Completed</option>
+                  <option value="running">Running</option>
+                  <option value="queued_retry">Retry queued</option>
+                  <option value="needs_retry">Needs retry</option>
+                  <option value="failed">Failed</option>
+                </select>
+              </label>
               <label>Pipeline
                 <select id="filterPipeline">
                   <option value="all">All</option>
@@ -1154,6 +1252,7 @@
             </div>
             <div class="toolbar-row">
               <div class="bulk-actions">
+                <button type="button" class="btn-secondary" id="retryVisibleExploreBtn" disabled>Retry visible failed/non-completed</button>
                 <button type="button" class="btn-primary" id="crawlAllRecommendedBtn" disabled>Crawl visible recommended</button>
                 <button type="button" class="btn-primary upload-btn" id="uploadAllProductUrlsBtn" disabled>Upload visible product URLs</button>
               </div>
@@ -1220,6 +1319,7 @@ var discoverRunning = false;
 var e2eRunning = false;
 var e2eLastStatus = {};
 var crawlingRetailers = {};
+var exploringRetailers = {};
 var uploadingRetailers = {};
 var productUrlsCache = {};
 var productUrlsLoading = {};
@@ -1300,6 +1400,28 @@ function getExploreStatusSummary(row) {
     return row.exploreError || row.exploreFailureReason || "Explore failed.";
   }
   return meta.label;
+}
+
+function isExploreCompleted(row) {
+  return !!(row && row.exploreStatus === "completed");
+}
+
+function isExploreIncomplete(row) {
+  return !!(row && row.exploreStatus && row.exploreStatus !== "completed");
+}
+
+function getStoredRecommendation(row) {
+  if (row && row.storedRecommendation) return row.storedRecommendation;
+  return row && row.recommendation ? row.recommendation : "unknown";
+}
+
+function recommendationStatusNote(row) {
+  if (!row) return "";
+  var stored = getStoredRecommendation(row);
+  var effective = row.recommendation || "unknown";
+  if (!isExploreIncomplete(row) || stored === effective) return "";
+  var exploreMeta = getExploreStatusMeta(row);
+  return "Stored config says " + stored + ", but current explore status is " + exploreMeta.label.toLowerCase() + ", so this retailer is treated as not recommended until explore completes.";
 }
 
 function setSelectedProcess(id) {
@@ -2219,12 +2341,21 @@ function pipelineMatch(row, pipeline) {
   return true;
 }
 
+function exploreStatusMatch(row, filterValue) {
+  var status = row && row.exploreStatus ? row.exploreStatus : "idle";
+  if (filterValue === "all") return true;
+  if (filterValue === "non_completed") return status !== "completed";
+  return status === filterValue;
+}
+
 function getFilteredSortedRetailers() {
   var list = overviewRetailers.slice();
   var searchEl = document.getElementById("dashboardSearch");
   var search = (searchEl && searchEl.value || "").trim().toLowerCase();
   var filterRecEl = document.getElementById("filterRecommendation");
   var filterRec = filterRecEl ? filterRecEl.value : "all";
+  var filterExploreEl = document.getElementById("filterExploreStatus");
+  var filterExplore = filterExploreEl ? filterExploreEl.value : "all";
   var pipelineEl = document.getElementById("filterPipeline");
   var pipeline = pipelineEl ? pipelineEl.value : "all";
   var out = [];
@@ -2232,6 +2363,7 @@ function getFilteredSortedRetailers() {
   for (var i = 0; i < list.length; i++) {
     var row = list[i];
     if (filterRec !== "all" && row.recommendation !== filterRec) continue;
+    if (!exploreStatusMatch(row, filterExplore)) continue;
     if (!pipelineMatch(row, pipeline)) continue;
     if (search && !String(row.retailer).toLowerCase().includes(search)) continue;
     out.push(row);
@@ -2261,7 +2393,7 @@ function getFilteredSortedRetailers() {
 function wireDashboardToolbar() {
   if (dashboardToolbarWired) return;
   dashboardToolbarWired = true;
-  var ids = ["dashboardSearch", "filterRecommendation", "filterPipeline", "sortDashboard"];
+  var ids = ["dashboardSearch", "filterRecommendation", "filterExploreStatus", "filterPipeline", "sortDashboard"];
   for (var i = 0; i < ids.length; i++) {
     var el = document.getElementById(ids[i]);
     if (!el) continue;
@@ -2300,13 +2432,16 @@ function renderRetailerDetail() {
   var baseUrl = cfg.baseUrl || "";
   var method = cfg.discovery && cfg.discovery.method ? cfg.discovery.method : "unknown";
   var rec = row.recommendation || "unknown";
+  var storedRec = getStoredRecommendation(row);
   var badgeClass = recommendationBadgeClass(rec);
   var exploreMeta = getExploreStatusMeta(row);
   var exploreSummary = getExploreStatusSummary(row);
   var hasUrls = !!(row.crawl && row.crawl.totalUrls > 0);
+  var canUseConfig = isExploreCompleted(row);
   var crawlLabel = hasUrls ? "Re-crawl URLs" : "Crawl URLs";
   var currentProc = currentRetailerProcess(row.retailer);
   var recommendationSaving = !!recommendationSaveState[row.retailer];
+  var retryPending = !!exploringRetailers[row.retailer];
   var uploadSummary = row.upload
     ? (row.uploadMatchesCurrentCrawl ? "Uploaded for current crawl" : "Upload is stale against the latest crawl")
     : "No upload yet";
@@ -2314,10 +2449,11 @@ function renderRetailerDetail() {
     ? (row.crawl.totalUrls || 0) + " URLs found on " + new Date(row.crawl.crawledAt).toLocaleString()
     : "No crawl yet";
   var recommendationOptions =
-    '<option value=""' + (rec === "unknown" ? " selected" : "") + '>Choose recommendation</option>' +
-    '<option value="recommended"' + (rec === "recommended" ? " selected" : "") + '>Recommended</option>' +
-    '<option value="usable"' + (rec === "usable" ? " selected" : "") + '>Usable</option>' +
-    '<option value="not recommended"' + (rec === "not recommended" ? " selected" : "") + '>Not recommended</option>';
+    '<option value=""' + (storedRec === "unknown" ? " selected" : "") + '>Choose recommendation</option>' +
+    '<option value="recommended"' + (storedRec === "recommended" ? " selected" : "") + '>Recommended</option>' +
+    '<option value="usable"' + (storedRec === "usable" ? " selected" : "") + '>Usable</option>' +
+    '<option value="not recommended"' + (storedRec === "not recommended" ? " selected" : "") + '>Not recommended</option>';
+  var recommendationNote = recommendationStatusNote(row);
   var exploreErrorNote = "";
   if (row.exploreStatus === "queued_retry" || row.exploreStatus === "needs_retry" || row.exploreStatus === "failed") {
     exploreErrorNote =
@@ -2367,8 +2503,10 @@ function renderRetailerDetail() {
       '<div class="retailer-actions">' +
         (baseUrl ? '<a class="config-site-link" href="' + escHtml(baseUrl) + '" target="_blank" rel="noopener">Visit site</a>' : "") +
         '<button type="button" class="btn-primary btn-small" data-copy-json="' + escHtml(row.retailer) + '">Copy JSON</button>' +
-        '<button type="button" class="btn-primary btn-small crawl-btn" data-detail-crawl="' + escHtml(row.retailer) + '"' + (crawlingRetailers[row.retailer] ? " disabled" : "") + ">" + escHtml(crawlLabel) + "</button>" +
-        (hasUrls ? '<button type="button" class="btn-primary btn-small upload-btn" data-detail-upload="' + escHtml(row.retailer) + '"' + (uploadingRetailers[row.retailer] ? " disabled" : "") + '>Upload</button>' : "") +
+        (isExploreIncomplete(row)
+          ? '<button type="button" class="btn-secondary btn-small" data-detail-retry="' + escHtml(row.retailer) + '"' + (retryPending ? " disabled" : "") + ">" + escHtml(retryPending ? "Retrying..." : "Retry Explore") + "</button>"
+          : '<button type="button" class="btn-primary btn-small crawl-btn" data-detail-crawl="' + escHtml(row.retailer) + '"' + (crawlingRetailers[row.retailer] ? " disabled" : "") + ">" + escHtml(crawlLabel) + "</button>") +
+        (hasUrls && canUseConfig ? '<button type="button" class="btn-primary btn-small upload-btn" data-detail-upload="' + escHtml(row.retailer) + '"' + (uploadingRetailers[row.retailer] ? " disabled" : "") + '>Upload</button>' : "") +
       "</div>" +
     "</div>" +
     '<div class="detail-summary-grid">' +
@@ -2379,6 +2517,7 @@ function renderRetailerDetail() {
           "</select>" +
           '<button type="button" class="btn-secondary btn-small" data-save-recommendation="' + escHtml(row.retailer) + '"' + (recommendationSaving ? " disabled" : "") + ">" + escHtml(recommendationSaving ? "Saving..." : "Save") + "</button>" +
         "</div>" +
+        (recommendationNote ? '<div class="detail-note" style="margin-top: 0.55rem;">' + escHtml(recommendationNote) + "</div>" : "") +
       "</div>" +
       '<div class="detail-stat"><span>Explore status</span><strong><span class="detail-chip ' + processToneClass(exploreMeta.tone) + '">' + escHtml(exploreMeta.label) + "</span></strong></div>" +
       '<div class="detail-stat"><span>Discovery method</span><strong>' + escHtml(method) + "</strong></div>" +
@@ -2428,6 +2567,16 @@ function renderRetailerDetail() {
   if (detailCrawlBtn) {
     detailCrawlBtn.onclick = function () {
       startCrawl(this.getAttribute("data-detail-crawl"));
+    };
+  }
+  var detailRetryBtn = panel.querySelector("[data-detail-retry]");
+  if (detailRetryBtn) {
+    detailRetryBtn.onclick = function () {
+      retryExploreRetailers([this.getAttribute("data-detail-retry")], {
+        title: "Retry Explore",
+        processId: "explore:retry:" + this.getAttribute("data-detail-retry"),
+        hintText: "Retrying explore for 1 retailer."
+      });
     };
   }
   var detailUploadBtn = panel.querySelector("[data-detail-upload]");
@@ -2484,7 +2633,12 @@ function renderDashboardHint(rowsLength) {
     hint.textContent = bulkHintOverride;
     return;
   }
-  hint.textContent = "Showing " + rowsLength + " of " + overviewRetailers.length + " retailer(s). Select a retailer to inspect JSON and URLs.";
+  var filtered = getFilteredSortedRetailers();
+  var incomplete = 0;
+  for (var i = 0; i < filtered.length; i++) {
+    if (isExploreIncomplete(filtered[i])) incomplete++;
+  }
+  hint.textContent = "Showing " + rowsLength + " of " + overviewRetailers.length + " retailer(s)." + (incomplete ? " " + incomplete + " visible need explore attention." : " Select a retailer to inspect JSON and URLs.");
 }
 
 function renderDashboard() {
@@ -2493,6 +2647,7 @@ function renderDashboard() {
 
   if (overviewRetailers.length === 0) {
     container.innerHTML = '<div class="empty-state">No configs generated yet.</div>';
+    document.getElementById("retryVisibleExploreBtn").disabled = true;
     document.getElementById("crawlAllRecommendedBtn").disabled = true;
     document.getElementById("uploadAllProductUrlsBtn").disabled = true;
     uiState.selectedRetailer = null;
@@ -2505,6 +2660,7 @@ function renderDashboard() {
   var rows = getFilteredSortedRetailers();
   if (!rows.length) {
     container.innerHTML = '<div class="empty-state">No retailers match the current filters.</div>';
+    document.getElementById("retryVisibleExploreBtn").disabled = true;
     uiState.selectedRetailer = null;
     renderRetailerDetail();
     renderDashboardHint(0);
@@ -2514,25 +2670,40 @@ function renderDashboard() {
 
   var hasRecommendedVisible = false;
   var hasAnyUrlsVisible = false;
+  var hasRetryVisible = false;
   var selectedStillVisible = false;
   for (var i = 0; i < rows.length; i++) {
     if (rows[i].recommendation === "recommended") hasRecommendedVisible = true;
     if (rows[i].crawl && rows[i].crawl.totalUrls > 0) hasAnyUrlsVisible = true;
+    if (isExploreIncomplete(rows[i])) hasRetryVisible = true;
     if (rows[i].retailer === uiState.selectedRetailer) selectedStillVisible = true;
   }
   if (!selectedStillVisible) uiState.selectedRetailer = rows[0].retailer;
 
-  var html = [];
+  var html = [
+    '<div class="retailer-table-head">' +
+      '<div>Retailer</div>' +
+      '<div>Recommendation</div>' +
+      '<div>Explore</div>' +
+      '<div>Crawl</div>' +
+      '<div>Upload</div>' +
+      '<div>Actions</div>' +
+    "</div>",
+    '<div class="retailer-table-body">'
+  ];
   for (var j = 0; j < rows.length; j++) {
     var entry = rows[j];
     var cfg = entry.config || {};
     var rec = entry.recommendation || "unknown";
+    var storedRec = getStoredRecommendation(entry);
     var badgeClass = recommendationBadgeClass(rec);
     var exploreMeta = getExploreStatusMeta(entry);
     var method = cfg.discovery && cfg.discovery.method ? cfg.discovery.method : "unknown";
     var hasUrls = !!(entry.crawl && entry.crawl.totalUrls > 0);
     var urlCount = hasUrls ? entry.crawl.totalUrls : 0;
     var process = currentRetailerProcess(entry.retailer);
+    var retryPending = !!exploringRetailers[entry.retailer];
+    var canUseConfig = isExploreCompleted(entry);
     var uploadPill = "";
     if (hasUrls && entry.uploadMatchesCurrentCrawl) {
       uploadPill = '<span class="status-pill done">Uploaded</span>';
@@ -2546,29 +2717,53 @@ function renderDashboard() {
       : (entry.exploreStatus === "queued_retry" || entry.exploreStatus === "needs_retry" || entry.exploreStatus === "failed")
         ? getExploreStatusSummary(entry)
         : (hasUrls ? "Ready for upload review." : "Select to inspect config and next step.");
+    var crawlText = hasUrls
+      ? urlCount + " URLs" + (entry.crawl.crawledAt ? " on " + new Date(entry.crawl.crawledAt).toLocaleDateString() : "")
+      : (canUseConfig ? "No crawl yet" : "Blocked until explore completes");
+    var uploadText = hasUrls
+      ? (entry.uploadMatchesCurrentCrawl ? "Current upload complete" : entry.upload ? "Upload stale" : "Not uploaded")
+      : (canUseConfig ? "No product URLs yet" : "Waiting on explore");
 
     html.push(
       '<article class="retailer-list-item' + (uiState.selectedRetailer === entry.retailer ? " is-selected" : "") + '" data-select-retailer="' + escHtml(entry.retailer) + '" tabindex="0" role="button" aria-pressed="' + (uiState.selectedRetailer === entry.retailer ? "true" : "false") + '">' +
-        '<div class="retailer-list-header">' +
-          '<div class="retailer-list-main">' +
-            '<div class="retailer-name">' + escHtml(entry.retailer) + "</div>" +
-            '<div class="retailer-list-subrow" style="margin-top: 0.2rem;">' +
-              '<span class="badge ' + badgeClass + '">' + escHtml(rec) + "</span>" +
-              '<span class="detail-chip ' + processToneClass(exploreMeta.tone) + '">' + escHtml(exploreMeta.label) + "</span>" +
-              '<span class="method-tag">' + escHtml(method) + "</span>" +
-              (hasUrls ? '<span class="method-tag">' + urlCount + ' URLs</span>' : '<span class="method-tag">No URLs crawled yet</span>') +
-              uploadPill +
-            "</div>" +
-          "</div>" +
-          '<div class="retailer-actions">' +
-            '<button type="button" class="btn-primary btn-small crawl-btn" data-crawl-retailer="' + escHtml(entry.retailer) + '"' + (crawlingRetailers[entry.retailer] ? " disabled" : "") + ">" + escHtml(hasUrls ? "Re-crawl URLs" : "Crawl URLs") + "</button>" +
-            (hasUrls ? '<button type="button" class="btn-primary btn-small upload-btn" data-upload-retailer="' + escHtml(entry.retailer) + '"' + (uploadingRetailers[entry.retailer] ? " disabled" : "") + '>Upload</button>' : "") +
+        '<div class="retailer-cell">' +
+          '<div class="retailer-cell-label">Retailer</div>' +
+          '<div class="retailer-cell-primary"><span class="retailer-name">' + escHtml(entry.retailer) + '</span><span class="method-tag">' + escHtml(method) + "</span></div>" +
+          '<div class="retailer-cell-secondary">' + escHtml(cfg.baseUrl || "No base URL") + "</div>" +
+          '<div class="retailer-row-summary">' + escHtml(summaryText) + "</div>" +
+        "</div>" +
+        '<div class="retailer-cell">' +
+          '<div class="retailer-cell-label">Recommendation</div>' +
+          '<div class="retailer-cell-primary"><span class="badge ' + badgeClass + '">' + escHtml(rec) + "</span></div>" +
+          (storedRec !== rec ? '<div class="retailer-cell-secondary">Stored: ' + escHtml(storedRec) + "</div>" : "") +
+        "</div>" +
+        '<div class="retailer-cell">' +
+          '<div class="retailer-cell-label">Explore</div>' +
+          '<div class="retailer-cell-primary"><span class="detail-chip ' + processToneClass(exploreMeta.tone) + '">' + escHtml(exploreMeta.label) + "</span></div>" +
+          '<div class="retailer-cell-secondary">' + escHtml(getExploreStatusSummary(entry)) + "</div>" +
+        "</div>" +
+        '<div class="retailer-cell">' +
+          '<div class="retailer-cell-label">Crawl</div>' +
+          '<div class="retailer-cell-primary retailer-cell-mono">' + escHtml(crawlText) + "</div>" +
+        "</div>" +
+        '<div class="retailer-cell">' +
+          '<div class="retailer-cell-label">Upload</div>' +
+          '<div class="retailer-cell-primary retailer-cell-mono">' + escHtml(uploadText) + "</div>" +
+          (uploadPill ? '<div class="retailer-cell-meta">' + uploadPill + "</div>" : "") +
+        "</div>" +
+        '<div class="retailer-cell retailer-cell-actions">' +
+          '<div class="retailer-cell-label">Actions</div>' +
+          '<div class="retailer-actions retailer-row-actions">' +
+            (isExploreIncomplete(entry)
+              ? '<button type="button" class="btn-secondary btn-small" data-retry-retailer="' + escHtml(entry.retailer) + '"' + (retryPending ? " disabled" : "") + ">" + escHtml(retryPending ? "Retrying..." : "Retry Explore") + "</button>"
+              : '<button type="button" class="btn-primary btn-small crawl-btn" data-crawl-retailer="' + escHtml(entry.retailer) + '"' + (crawlingRetailers[entry.retailer] ? " disabled" : "") + ">" + escHtml(hasUrls ? "Re-crawl URLs" : "Crawl URLs") + "</button>") +
+            (hasUrls && canUseConfig ? '<button type="button" class="btn-primary btn-small upload-btn" data-upload-retailer="' + escHtml(entry.retailer) + '"' + (uploadingRetailers[entry.retailer] ? " disabled" : "") + '>Upload</button>' : "") +
           "</div>" +
         "</div>" +
-        '<div class="retailer-meta">' + escHtml(summaryText) + "</div>" +
       "</article>"
     );
   }
+  html.push("</div>");
   container.innerHTML = html.join("");
 
   var rowsToSelect = container.querySelectorAll("[data-select-retailer]");
@@ -2600,7 +2795,19 @@ function renderDashboard() {
       startUpload(this.getAttribute("data-upload-retailer"));
     };
   }
+  var retryBtns = container.querySelectorAll("[data-retry-retailer]");
+  for (var r = 0; r < retryBtns.length; r++) {
+    retryBtns[r].onclick = function (event) {
+      event.stopPropagation();
+      retryExploreRetailers([this.getAttribute("data-retry-retailer")], {
+        title: "Retry Explore",
+        processId: "explore:retry:" + this.getAttribute("data-retry-retailer"),
+        hintText: "Retrying explore for 1 retailer."
+      });
+    };
+  }
 
+  document.getElementById("retryVisibleExploreBtn").disabled = !hasRetryVisible;
   document.getElementById("crawlAllRecommendedBtn").disabled = !hasRecommendedVisible;
   document.getElementById("uploadAllProductUrlsBtn").disabled = !hasAnyUrlsVisible;
   renderDashboardHint(rows.length);
@@ -2652,6 +2859,7 @@ function loadOverview() {
       if (container) container.innerHTML = '<div class="empty-state">Could not load configs.</div>';
       renderRetailerDetail();
       renderIdentifiedBacklog();
+      document.getElementById("retryVisibleExploreBtn").disabled = true;
       document.getElementById("crawlAllRecommendedBtn").disabled = true;
       document.getElementById("uploadAllProductUrlsBtn").disabled = true;
     });
@@ -2712,6 +2920,173 @@ function addBacklogUrlToQueue(url) {
   queue.push(result.url);
   renderQueue();
   showStatus("Added to queue: " + result.url, "success", 3000);
+}
+
+function markRetailersExploring(retailers, isActive) {
+  for (var i = 0; i < retailers.length; i++) {
+    if (!retailers[i]) continue;
+    if (isActive) {
+      exploringRetailers[retailers[i]] = true;
+    } else {
+      delete exploringRetailers[retailers[i]];
+    }
+  }
+  renderDashboard();
+  renderRetailerDetail();
+}
+
+function retryExploreRetailers(retailers, options) {
+  var uniqueRetailers = [];
+  var seen = {};
+  for (var i = 0; i < retailers.length; i++) {
+    var retailer = retailers[i] ? String(retailers[i]).trim() : "";
+    if (!retailer || seen[retailer]) continue;
+    seen[retailer] = true;
+    uniqueRetailers.push(retailer);
+  }
+  if (!uniqueRetailers.length) {
+    showStatus("No retailers selected for explore retry.", "info", 4000);
+    return;
+  }
+
+  var parallelism = getExploreParallelism();
+  var processId = options && options.processId ? options.processId : "explore:retry:" + Date.now();
+  var title = options && options.title ? options.title : "Retry Explore";
+  var hintText = options && options.hintText ? options.hintText : "Retrying explore for " + uniqueRetailers.length + " retailer(s).";
+  markRetailersExploring(uniqueRetailers, true);
+  bulkHintOverride = hintText;
+  renderDashboard();
+
+  upsertProcess({
+    id: processId,
+    kind: "explore",
+    title: title,
+    subtitle: uniqueRetailers.length + " retailer(s)",
+    statusText: "Starting",
+    tone: "running",
+    summary: "Submitting explore retry…",
+    logs: [],
+    metrics: [
+      "Retailers: " + uniqueRetailers.length,
+      "Parallel explores: " + parallelism
+    ],
+    active: true,
+    percent: 0
+  });
+  setSelectedProcess(processId);
+
+  fetch("/api/explore/retry", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ retailers: uniqueRetailers, parallelism: parallelism })
+  })
+    .then(function (res) {
+      return res.json().then(function (data) {
+        if (!res.ok) throw new Error(data.error || "Explore retry request failed");
+        return data;
+      });
+    })
+    .then(function (data) {
+      if (!data.jobId) {
+        throw new Error(data.error || "No explore retry job was created.");
+      }
+      var accepted = Array.isArray(data.retailers) ? data.retailers : uniqueRetailers;
+      var skipped = Array.isArray(data.skippedRetailers) ? data.skippedRetailers : [];
+      var jobParallelism = data.parallelism || parallelism;
+      if (accepted.length !== uniqueRetailers.length) {
+        markRetailersExploring(uniqueRetailers, false);
+        markRetailersExploring(accepted, true);
+      }
+      upsertProcess({
+        id: processId,
+        statusText: "Running",
+        summary: "Explore retry started.",
+        metrics: [
+          accepted.length + " retailer(s) queued",
+          skipped.length ? skipped.length + " skipped" : "No skips",
+          "Parallel explores: " + jobParallelism
+        ],
+        jobId: data.jobId
+      });
+
+      var es = new EventSource("/api/progress/" + data.jobId);
+      es.onmessage = function (e) {
+        var msg = JSON.parse(e.data);
+        if (msg.type === "log") {
+          appendProcessLog(processId, msg.msg);
+        } else if (msg.type === "progress") {
+          var percent = msg.total ? Math.round((msg.current / msg.total) * 100) : null;
+          upsertProcess({
+            id: processId,
+            statusText: "Running",
+            tone: "running",
+            summary: "Completed " + msg.current + "/" + msg.total + ": " + msg.url,
+            percent: percent
+          });
+        } else if (msg.type === "done") {
+          es.close();
+          markRetailersExploring(accepted, false);
+          bulkHintOverride = "";
+          renderDashboard();
+          upsertProcess({
+            id: processId,
+            active: false,
+            tone: msg.error ? "error" : "success",
+            statusText: msg.error ? "Failed" : "Complete",
+            summary: msg.error ? msg.error : "Retried explore for " + accepted.length + " retailer(s).",
+            percent: 100
+          });
+          loadOverview();
+          refreshCostMetrics();
+        }
+      };
+      es.onerror = function () {
+        es.close();
+        markRetailersExploring(accepted, false);
+        bulkHintOverride = "";
+        renderDashboard();
+        upsertProcess({
+          id: processId,
+          active: false,
+          tone: "error",
+          statusText: "Disconnected",
+          summary: "Connection lost during explore retry."
+        });
+        loadOverview();
+      };
+    })
+    .catch(function (err) {
+      console.error("[retryExploreRetailers] Error:", err);
+      markRetailersExploring(uniqueRetailers, false);
+      bulkHintOverride = "";
+      renderDashboard();
+      upsertProcess({
+        id: processId,
+        active: false,
+        tone: "error",
+        statusText: "Failed",
+        summary: err.message
+      });
+      showStatus("Explore retry failed: " + err.message, "error", 5000);
+    });
+}
+
+function retryVisibleExplore() {
+  var rows = getFilteredSortedRetailers();
+  var retailers = [];
+  for (var i = 0; i < rows.length; i++) {
+    if (!isExploreIncomplete(rows[i])) continue;
+    retailers.push(rows[i].retailer);
+  }
+  if (!retailers.length) {
+    showStatus("No visible failed or non-completed retailers to retry.", "info", 4000);
+    return;
+  }
+  retryExploreRetailers(retailers, {
+    title: "Retry Visible Explore",
+    processId: "explore:retry-visible",
+    hintText: "Retrying visible failed/non-completed explore rows."
+  });
 }
 
 function crawlAllRecommended() {
@@ -3074,6 +3449,7 @@ document.getElementById("urlInput").addEventListener("keydown", function (e) {
 document.getElementById("csvInput").addEventListener("change", handleCsv);
 document.getElementById("clearBtn").addEventListener("click", clearQueue);
 document.getElementById("runBtn").addEventListener("click", runExplore);
+document.getElementById("retryVisibleExploreBtn").addEventListener("click", retryVisibleExplore);
 document.getElementById("crawlAllRecommendedBtn").addEventListener("click", crawlAllRecommended);
 document.getElementById("uploadAllProductUrlsBtn").addEventListener("click", uploadAllProductUrls);
 document.getElementById("historyBtn").addEventListener("click", showHistoryModal);
