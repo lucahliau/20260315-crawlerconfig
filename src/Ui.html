@@ -6,31 +6,37 @@
 <title>Crawler Config Generator</title>
 <style>
   :root {
-    --bg: #f8f9fa;
+    --bg: #f5f7fb;
     --card: #ffffff;
-    --border: #dee2e6;
-    --text: #212529;
-    --muted: #6c757d;
+    --card-subtle: #f8fafc;
+    --border: #dbe3ee;
+    --text: #0f172a;
+    --muted: #64748b;
     --accent: #2563eb;
     --accent-hover: #1d4ed8;
-    --danger: #dc3545;
-    --success: #198754;
-    --warn: #fd7e14;
-    --log-bg: #1e1e1e;
-    --log-text: #d4d4d4;
-    --json-bg: #f1f3f5;
-    --radius: 8px;
+    --accent-soft: #dbeafe;
+    --danger: #dc2626;
+    --success: #15803d;
+    --warn: #ea580c;
+    --log-bg: #0f172a;
+    --log-text: #dbe7ff;
+    --json-bg: #f8fafc;
+    --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+    --radius: 14px;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #111827;
-      --card: #1f2937;
-      --border: #374151;
-      --text: #f9fafb;
-      --muted: #9ca3af;
-      --json-bg: #111827;
-      --log-bg: #0d1117;
-      --log-text: #c9d1d9;
+      --bg: #0b1120;
+      --card: #111827;
+      --card-subtle: #0f172a;
+      --border: #253247;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent-soft: #172554;
+      --json-bg: #0f172a;
+      --log-bg: #020617;
+      --log-text: #dbeafe;
+      --shadow: 0 14px 30px rgba(2, 6, 23, 0.35);
     }
   }
 
@@ -41,310 +47,299 @@
     background: var(--bg);
     color: var(--text);
     line-height: 1.5;
-    padding: 2rem;
-    max-width: 1100px;
+    padding: 1.5rem;
+    max-width: 1500px;
     margin: 0 auto;
   }
 
-  h1 { font-size: 1.5rem; margin-bottom: 1.5rem; }
-  h2 { font-size: 1.15rem; margin-bottom: 0.75rem; color: var(--muted); font-weight: 500; }
+  a { color: var(--accent); }
+  h1 { font-size: 2rem; line-height: 1.1; margin: 0; }
+  h2 { font-size: 1.15rem; margin: 0; }
+  h3 { font-size: 1rem; margin: 0; }
+  p { margin: 0; }
 
-  section {
+  button {
+    padding: 0.6rem 0.95rem;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    transition: background 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
+  }
+  button:hover:not(:disabled) { transform: translateY(-1px); }
+  button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+  .btn-secondary { background: var(--card-subtle); color: var(--text); border: 1px solid var(--border); }
+  .btn-secondary:hover:not(:disabled) { background: var(--accent-soft); }
+  .btn-danger { background: transparent; color: var(--danger); font-size: 1.05rem; padding: 0.2rem 0.45rem; }
+  .btn-danger:hover:not(:disabled) { background: rgba(220, 38, 38, 0.12); }
+  .btn-small { padding: 0.42rem 0.7rem; font-size: 0.78rem; }
+  .upload-btn { background: var(--success); color: #fff; }
+  .upload-btn:hover:not(:disabled) { background: #166534; }
+
+  .app-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  .app-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+  .app-header-copy {
+    max-width: 760px;
+  }
+  .app-eyebrow {
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.74rem;
+    font-weight: 700;
+    margin-bottom: 0.35rem;
+  }
+  .app-subtitle {
+    margin-top: 0.45rem;
+    color: var(--muted);
+    font-size: 0.96rem;
+  }
+  .header-actions {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+
+  .overview-band,
+  .workspace-card,
+  .surface-card,
+  .history-modal-content {
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 1.25rem;
-    margin-bottom: 1.25rem;
+    box-shadow: var(--shadow);
+  }
+
+  .overview-band {
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .overview-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.85rem;
+  }
+  .overview-card {
+    background: var(--card-subtle);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.85rem 1rem;
+    min-height: 5.6rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 0.45rem;
+  }
+  .overview-card span {
+    color: var(--muted);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 700;
+  }
+  .overview-card strong {
+    font-size: 1.75rem;
+    line-height: 1;
+  }
+  .overview-card small {
+    color: var(--muted);
+    font-size: 0.84rem;
+  }
+
+  .cost-strip {
+    background: var(--card-subtle);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.75rem 0.9rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .cost-strip-inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.75rem 1.25rem;
+    row-gap: 0.35rem;
+  }
+  .cost-item { white-space: nowrap; }
+  .cost-item strong { color: var(--text); font-weight: 700; }
+  .cost-strip-note { width: 100%; font-size: 0.72rem; opacity: 0.9; margin-top: 0.35rem; }
+
+  .workspace-grid {
+    display: grid;
+    grid-template-columns: minmax(330px, 0.95fr) minmax(420px, 1.05fr);
+    gap: 1.25rem;
+    align-items: start;
+  }
+
+  .workspace-card {
+    padding: 1.1rem;
+  }
+  .workspace-card.retailer-workspace {
+    grid-column: 1 / -1;
+  }
+  .workspace-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  .workspace-copy p,
+  .section-hint,
+  .workspace-meta,
+  .dashboard-subsection-hint {
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .workspace-actions {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .surface-card {
+    padding: 1rem;
+  }
+  .surface-card + .surface-card {
+    margin-top: 0;
+  }
+  .surface-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+  }
+  .surface-card-header p {
+    color: var(--muted);
+    font-size: 0.88rem;
+    margin-top: 0.2rem;
   }
 
   .input-row {
     display: flex;
-    gap: 0.5rem;
-    margin-bottom: 0.75rem;
+    gap: 0.6rem;
+    flex-wrap: wrap;
   }
   .input-row input[type="text"] {
     flex: 1;
-    padding: 0.5rem 0.75rem;
+    min-width: 220px;
+    padding: 0.65rem 0.8rem;
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: 10px;
     font-size: 0.9rem;
     background: var(--bg);
     color: var(--text);
   }
-  .input-row input[type="text"]:focus { outline: 2px solid var(--accent); border-color: transparent; }
-
-  button {
-    padding: 0.5rem 1rem;
-    border: none;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 0.85rem;
-    font-weight: 500;
-    transition: background 0.15s;
+  .input-row input[type="text"]:focus,
+  .dashboard-toolbar input[type="search"]:focus,
+  .dashboard-toolbar select:focus {
+    outline: 2px solid var(--accent);
+    border-color: transparent;
   }
-  .btn-primary { background: var(--accent); color: #fff; }
-  .btn-primary:hover { background: var(--accent-hover); }
-  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-secondary { background: var(--border); color: var(--text); }
-  .btn-secondary:hover { background: var(--muted); color: #fff; }
-  .btn-danger { background: transparent; color: var(--danger); font-size: 1.1rem; padding: 0.25rem 0.5rem; }
-  .btn-danger:hover { background: var(--danger); color: #fff; }
-  .btn-small { padding: 0.3rem 0.6rem; font-size: 0.8rem; }
 
   .file-label {
-    display: inline-flex; align-items: center; gap: 0.35rem;
-    padding: 0.5rem 1rem; border-radius: var(--radius);
-    background: var(--border); color: var(--text);
-    cursor: pointer; font-size: 0.85rem; font-weight: 500;
-    transition: background 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.6rem 0.95rem;
+    border-radius: 10px;
+    background: var(--card-subtle);
+    color: var(--text);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
   }
-  .file-label:hover { background: var(--muted); color: #fff; }
+  .file-label:hover { background: var(--accent-soft); }
   .file-label input { display: none; }
 
   .queue-list {
     list-style: none;
-    margin-top: 0.5rem;
+    margin-top: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--card-subtle);
   }
   .queue-list li {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 0.35rem 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.6rem 0.75rem;
     border-bottom: 1px solid var(--border);
-    font-size: 0.85rem;
-    font-family: monospace;
+    font-size: 0.84rem;
+    font-family: "SF Mono", "Fira Code", monospace;
+    word-break: break-all;
   }
   .queue-list li:last-child { border-bottom: none; }
+  .queue-empty {
+    padding: 1rem;
+    color: var(--muted);
+    font-size: 0.86rem;
+    border: 1px dashed var(--border);
+    border-radius: 12px;
+    background: var(--card-subtle);
+    margin-top: 0.75rem;
+  }
 
   .actions-row {
-    display: flex; gap: 0.5rem; margin-top: 0.75rem; align-items: center;
+    display: flex;
+    gap: 0.6rem;
+    margin-top: 0.85rem;
+    align-items: center;
+    flex-wrap: wrap;
   }
-  .progress-text { font-size: 0.85rem; color: var(--muted); margin-left: auto; }
-
-  .log-area {
-    background: var(--log-bg);
-    color: var(--log-text);
-    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
-    font-size: 0.8rem;
-    padding: 1rem;
-    border-radius: var(--radius);
-    height: 320px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-    word-break: break-all;
-  }
-
-  .config-entry {
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    margin-bottom: 0.75rem;
-    overflow: hidden;
-  }
-  .config-header {
-    display: flex; align-items: center; gap: 0.75rem;
-    padding: 0.75rem 1rem;
-    cursor: pointer;
-    user-select: none;
-    background: var(--bg);
-  }
-  .config-header:hover { background: var(--border); }
-  .config-name { font-weight: 600; flex: 1; }
-  .config-site-link {
-    color: var(--accent); text-decoration: none; font-size: 1rem;
-    opacity: 0.8; cursor: pointer;
-  }
-  .config-site-link:hover { opacity: 1; text-decoration: underline; }
-  .badge {
-    font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
-    padding: 0.15rem 0.5rem; border-radius: 999px; letter-spacing: 0.03em;
-  }
-  .badge-recommended { background: #d1fae5; color: #065f46; }
-  .badge-usable { background: #fef3c7; color: #92400e; }
-  .badge-not-recommended { background: #fee2e2; color: #991b1b; }
-  @media (prefers-color-scheme: dark) {
-    .badge-recommended { background: #064e3b; color: #6ee7b7; }
-    .badge-usable { background: #78350f; color: #fcd34d; }
-    .badge-not-recommended { background: #7f1d1d; color: #fca5a5; }
-  }
-  .method-tag { font-size: 0.75rem; color: var(--muted); }
-
-  .config-body {
-    display: none;
-    padding: 0.75rem 1rem;
-    border-top: 1px solid var(--border);
-  }
-  .config-body.open { display: block; }
-  .config-json {
-    background: var(--json-bg);
-    padding: 0.75rem;
-    border-radius: var(--radius);
-    font-family: "SF Mono", "Fira Code", monospace;
-    font-size: 0.8rem;
-    white-space: pre-wrap;
-    word-break: break-all;
-    max-height: 400px;
-    overflow-y: auto;
-    position: relative;
-  }
-  .copy-btn {
-    position: absolute; top: 0.5rem; right: 0.5rem;
-  }
-  .copied-toast {
-    position: fixed; bottom: 1.5rem; right: 1.5rem;
-    background: var(--success); color: #fff;
-    padding: 0.5rem 1rem; border-radius: var(--radius);
-    font-size: 0.85rem; opacity: 0; transition: opacity 0.3s;
-    pointer-events: none;
-  }
-  .copied-toast.show { opacity: 1; }
-
-  .config-section-header {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;
-  }
-  .config-section-header h2 { margin: 0; }
-  .config-toolbar-spacer {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .dashboard-toolbar {
-    margin-bottom: 1rem;
-    padding: 0.75rem;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    font-size: 0.82rem;
-  }
-  .toolbar-row {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1rem;
-    margin-bottom: 0.5rem;
-  }
-  .toolbar-row:last-child { margin-bottom: 0; }
-  .dashboard-toolbar label { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--text); }
-  .dashboard-toolbar input[type="search"],
-  .dashboard-toolbar select {
-    padding: 0.35rem 0.5rem;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--card);
-    color: var(--text);
-    font-size: 0.82rem;
-    max-width: 12rem;
-  }
-  .dashboard-toolbar input[type="checkbox"] { accent-color: var(--accent); }
-  #dashboardBulkHint { font-size: 0.8rem; color: var(--muted); margin-top: 0.35rem; }
-  .status-pill {
-    font-size: 0.65rem; font-weight: 600; text-transform: uppercase;
-    padding: 0.1rem 0.4rem; border-radius: 4px; margin-left: 0.25rem;
-    background: var(--border); color: var(--muted);
-  }
-  .status-pill.done { background: #d1fae5; color: #065f46; }
-  @media (prefers-color-scheme: dark) {
-    .status-pill.done { background: #064e3b; color: #6ee7b7; }
-  }
-
+  .progress-text,
+  .input-status,
+  .discover-status,
+  .detail-subtext,
+  .process-empty-state,
   .empty-state {
-    text-align: center; color: var(--muted); padding: 2rem 0; font-size: 0.9rem;
+    color: var(--muted);
+    font-size: 0.84rem;
   }
-
   .input-status {
-    font-size: 0.82rem;
     min-height: 1.4em;
-    margin-top: 0.25rem;
-    padding: 0 0.25rem;
+    margin-top: 0.4rem;
+    padding: 0 0.1rem;
   }
   .input-status.error { color: var(--danger); }
   .input-status.success { color: var(--success); }
   .input-status.info { color: var(--muted); }
 
-  .crawl-btn, .upload-btn { white-space: nowrap; }
-  .crawl-btn:disabled, .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .upload-btn { background: var(--success); color: #fff; }
-  .upload-btn:hover:not(:disabled) { background: #157347; }
-
-  .crawl-status {
-    padding: 0.5rem 1rem;
-    font-size: 0.8rem;
-    color: var(--muted);
-    border-top: 1px solid var(--border);
-    display: none;
-  }
-  .crawl-status.active { display: block; }
-
-  .crawl-log {
-    background: var(--log-bg);
-    color: var(--log-text);
-    font-family: "SF Mono", "Fira Code", monospace;
-    font-size: 0.75rem;
-    padding: 0.5rem;
-    border-radius: var(--radius);
-    max-height: 160px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-    word-break: break-all;
-    margin-top: 0.4rem;
-  }
-
-  .product-urls-panel {
-    border-top: 1px solid var(--border);
-    padding: 0.75rem 1rem;
-    display: none;
-  }
-  .product-urls-panel.has-urls { display: block; }
-
-  .product-urls-header {
-    display: flex; align-items: center; gap: 0.5rem;
-    margin-bottom: 0.5rem;
-  }
-  .product-urls-header .url-count {
-    font-size: 0.85rem; font-weight: 600;
-  }
-  .product-urls-header .crawl-meta {
-    font-size: 0.75rem; color: var(--muted); margin-left: auto;
-  }
-
-  .product-urls-list {
-    background: var(--json-bg);
-    border-radius: var(--radius);
-    padding: 0.5rem 0.75rem;
-    max-height: 300px;
-    overflow-y: auto;
-    font-family: "SF Mono", "Fira Code", monospace;
-    font-size: 0.75rem;
-    line-height: 1.6;
-    position: relative;
-  }
-  .product-urls-list a {
-    color: var(--accent);
-    text-decoration: none;
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .product-urls-list a:hover { text-decoration: underline; }
-
-  .brand-search-focus-section label[for="brandSearchCategory"] {
-    display: block;
-    font-size: 0.9rem;
-    margin-bottom: 0.35rem;
-  }
-  .brand-search-focus-section .brand-search-focus-hint {
-    font-size: 0.85rem;
-    color: var(--muted);
-    margin-top: 0.35rem;
-  }
-
-  .discover-section { margin-bottom: 1.25rem; }
   .discover-progress-bar {
     height: 6px;
     background: var(--border);
-    border-radius: var(--radius);
+    border-radius: 999px;
     overflow: hidden;
-    margin-top: 0.5rem;
+    margin-top: 0.75rem;
     display: none;
   }
-  .discover-progress-bar.active {
-    display: block;
-  }
+  .discover-progress-bar.active { display: block; }
   .discover-progress-bar::after {
     content: "";
     display: block;
@@ -358,136 +353,434 @@
     100% { transform: translateX(400%); }
   }
   .discover-output {
-    margin-top: 0.75rem;
     display: none;
+    margin-top: 0.85rem;
   }
   .discover-output.active { display: block; }
-  .discover-log {
-    background: var(--log-bg);
-    color: var(--log-text);
-    font-family: "SF Mono", "Fira Code", monospace;
-    font-size: 0.75rem;
-    padding: 0.5rem;
-    border-radius: var(--radius);
-    max-height: 200px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-    word-break: break-all;
-    margin-top: 0.5rem;
-    display: none;
-  }
-  .discover-log.active { display: block; }
   .discover-brands-list {
-    background: var(--json-bg);
-    border-radius: var(--radius);
-    padding: 0.5rem 0.75rem;
+    margin-top: 0.65rem;
+    background: var(--card-subtle);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.7rem 0.85rem;
     max-height: 280px;
     overflow-y: auto;
     font-size: 0.85rem;
-    line-height: 1.6;
-    margin-top: 0.5rem;
+    line-height: 1.65;
   }
-  .discover-brands-list a {
+  .discover-brands-list div + div { margin-top: 0.35rem; }
+  .discover-brands-list .brand-name { font-weight: 600; color: var(--text); }
+  .discover-add-row { margin-top: 0.65rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+  .e2e-status {
+    margin-top: 0.85rem;
+    padding: 0.95rem;
+    background: var(--card-subtle);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    font-size: 0.85rem;
+    display: none;
+  }
+  .e2e-status.active { display: block; }
+  .e2e-step { font-weight: 700; margin-bottom: 0.5rem; }
+  .e2e-counts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+    color: var(--muted);
+  }
+  .e2e-counts span { font-size: 0.8rem; }
+  .e2e-progress-bar,
+  .process-progress-bar {
+    height: 8px;
+    background: var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+    margin: 0.45rem 0;
+  }
+  .e2e-progress-bar-fill,
+  .process-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.2s ease;
+  }
+  .e2e-meta { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; }
+
+  .active-processes-layout {
+    display: grid;
+    grid-template-columns: minmax(230px, 300px) minmax(0, 1fr);
+    gap: 1rem;
+    min-height: 520px;
+  }
+  .process-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+  .process-card {
+    background: var(--card-subtle);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.8rem;
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+  .process-card.is-selected {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  .process-card-header,
+  .detail-header,
+  .retailer-list-header,
+  .toolbar-row,
+  .retailer-actions,
+  .product-urls-header,
+  .history-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  .process-card-title,
+  .retailer-name {
+    font-weight: 700;
+    font-size: 0.95rem;
+  }
+  .process-card-subtitle,
+  .retailer-meta,
+  .process-card-summary,
+  .detail-meta,
+  .detail-stat span,
+  .detail-note,
+  .history-modal-desc {
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+
+  .process-state,
+  .status-pill,
+  .backlog-badge,
+  .detail-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    padding: 0.22rem 0.55rem;
+    font-size: 0.69rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .process-state.running,
+  .detail-chip.running {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .process-state.success,
+  .status-pill.done,
+  .detail-chip.success {
+    background: #dcfce7;
+    color: #166534;
+  }
+  .process-state.error,
+  .detail-chip.error {
+    background: #fee2e2;
+    color: #991b1b;
+  }
+  .process-state.idle,
+  .status-pill,
+  .detail-chip.idle {
+    background: var(--card-subtle);
+    color: var(--muted);
+    border: 1px solid var(--border);
+  }
+  .badge {
+    font-size: 0.69rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    letter-spacing: 0.03em;
+  }
+  .badge-recommended { background: #dcfce7; color: #166534; }
+  .badge-usable { background: #fef3c7; color: #92400e; }
+  .badge-not-recommended { background: #fee2e2; color: #991b1b; }
+  @media (prefers-color-scheme: dark) {
+    .badge-recommended,
+    .process-state.success,
+    .status-pill.done,
+    .detail-chip.success { background: #14532d; color: #86efac; }
+    .badge-usable { background: #78350f; color: #fcd34d; }
+    .badge-not-recommended,
+    .process-state.error,
+    .detail-chip.error { background: #7f1d1d; color: #fca5a5; }
+  }
+
+  .process-detail-panel,
+  .retailer-detail-panel,
+  .backlog-panel {
+    height: 100%;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--card-subtle);
+    padding: 1rem;
+  }
+  .process-empty-state,
+  .detail-empty-state,
+  .empty-state {
+    border: 1px dashed var(--border);
+    border-radius: 12px;
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.02);
+  }
+  .process-meta-grid,
+  .process-metrics,
+  .detail-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 0.6rem;
+    margin-top: 0.85rem;
+  }
+  .detail-stat,
+  .metric-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.75rem;
+  }
+  .detail-stat strong,
+  .metric-card strong {
+    display: block;
+    font-size: 1rem;
+    margin-top: 0.25rem;
+    color: var(--text);
+  }
+  .process-log {
+    background: var(--log-bg);
+    color: var(--log-text);
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 0.78rem;
+    padding: 0.9rem;
+    border-radius: 12px;
+    max-height: 320px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin-top: 0.85rem;
+  }
+  .detail-disclosure,
+  .model-response-panel {
+    margin-top: 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--card);
+    overflow: hidden;
+  }
+  .detail-disclosure summary,
+  .model-response-panel summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 0.8rem 0.95rem;
+    font-weight: 700;
+  }
+  .detail-disclosure summary::-webkit-details-marker,
+  .model-response-panel summary::-webkit-details-marker { display: none; }
+  .detail-disclosure-body {
+    padding: 0 0.95rem 0.95rem;
+  }
+  .config-json,
+  .product-urls-list,
+  .model-response-pre {
+    background: var(--json-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.85rem;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.78rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 360px;
+    overflow-y: auto;
+  }
+  .model-response-pre { margin-top: 0.75rem; }
+  .product-urls-list a {
+    display: block;
     color: var(--accent);
     text-decoration: none;
-    display: block;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .product-urls-list a + a { margin-top: 0.35rem; }
+  .product-urls-list a:hover,
+  .history-modal-list a:hover,
   .discover-brands-list a:hover { text-decoration: underline; }
-  .discover-brands-list .brand-name { font-weight: 500; color: var(--text); }
-  .discover-add-row { margin-top: 0.5rem; }
-
-  .model-response-panel {
-    margin-top: 0.5rem;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.35rem 0.5rem;
-    background: var(--json-bg);
-    font-size: 0.8rem;
+  .product-urls-list.is-loading {
+    color: var(--muted);
+    font-family: inherit;
   }
-  .model-response-panel summary {
-    cursor: pointer;
-    font-weight: 500;
+
+  .retailer-ops-layout {
+    display: grid;
+    grid-template-columns: minmax(360px, 0.95fr) minmax(400px, 1.05fr);
+    gap: 1rem;
+  }
+  .retailer-list-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .dashboard-toolbar {
+    padding: 0.85rem;
+    background: var(--card-subtle);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    font-size: 0.82rem;
+  }
+  .dashboard-toolbar label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
     color: var(--text);
-    user-select: none;
+    flex-wrap: wrap;
   }
-  .model-response-panel summary:hover { color: var(--accent); }
-  .model-response-pre {
-    margin: 0.5rem 0 0;
-    padding: 0.5rem;
-    max-height: 320px;
-    overflow: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
-    font-family: "SF Mono", "Fira Code", monospace;
-    font-size: 0.72rem;
-    line-height: 1.45;
-    background: var(--log-bg);
-    color: var(--log-text);
-    border-radius: calc(var(--radius) - 2px);
-  }
-  .e2e-section .model-response-panel {
-    margin-top: 0.75rem;
-  }
-
-  .app-header {
-    display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 0.75rem;
-  }
-  .app-header h1 { margin: 0; }
-
-  .cost-strip {
-    background: var(--card);
+  .dashboard-toolbar input[type="search"],
+  .dashboard-toolbar select {
+    padding: 0.45rem 0.55rem;
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.5rem 0.75rem;
-    margin-bottom: 1.25rem;
-    font-size: 0.8rem;
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--text);
+    font-size: 0.82rem;
+    min-width: 9rem;
+  }
+  .dashboard-toolbar input[type="checkbox"] { accent-color: var(--accent); }
+  .bulk-actions {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  #dashboardBulkHint { color: var(--muted); font-size: 0.8rem; }
+
+  .retailer-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+  .retailer-list-item {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--card-subtle);
+    padding: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+  .retailer-list-item.is-selected {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  .retailer-list-subrow {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+  }
+  .method-tag {
+    font-size: 0.76rem;
     color: var(--muted);
   }
-  .cost-strip-inner {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 0.75rem 1.25rem;
-    row-gap: 0.35rem;
+  .config-site-link {
+    color: var(--accent);
+    text-decoration: none;
+    font-weight: 600;
   }
-  .cost-strip .cost-item { white-space: nowrap; }
-  .cost-strip .cost-item strong { color: var(--text); font-weight: 600; }
-  .cost-strip-note {
-    width: 100%;
-    font-size: 0.72rem;
-    opacity: 0.9;
-    margin-top: 0.25rem;
+
+  .backlog-badge {
+    min-width: 1.55rem;
+    height: 1.55rem;
+    padding: 0 0.45rem;
+    background: var(--warn);
+    color: #fff;
+    line-height: 1;
+  }
+  .backlog-badge.is-zero {
+    background: var(--card-subtle);
+    color: var(--muted);
+    border: 1px solid var(--border);
+  }
+  .backlog-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    margin-top: 0.85rem;
+  }
+  .backlog-entry {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    flex-wrap: wrap;
+    padding: 0.7rem 0.75rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    font-size: 0.84rem;
+  }
+  .backlog-name { font-weight: 700; flex: 1; min-width: 120px; }
+  .backlog-url {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.78rem;
+    color: var(--muted);
+    word-break: break-all;
+    flex: 2;
+    min-width: 180px;
+  }
+  .backlog-empty {
+    font-size: 0.84rem;
+    color: var(--muted);
+    padding: 0.4rem 0;
   }
 
   .history-modal {
-    position: fixed; inset: 0; z-index: 100;
-    display: flex; align-items: center; justify-content: center;
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     padding: 2rem;
   }
   .history-modal-backdrop {
-    position: absolute; inset: 0;
-    background: rgba(0,0,0,0.5);
+    position: absolute;
+    inset: 0;
+    background: rgba(2, 6, 23, 0.58);
   }
   .history-modal-content {
-    position: relative; background: var(--card); border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 1.25rem; max-width: 500px; width: 100%; max-height: 80vh; overflow: hidden;
-    display: flex; flex-direction: column;
+    position: relative;
+    padding: 1.25rem;
+    max-width: 560px;
+    width: 100%;
+    max-height: 80vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
   }
-  .history-modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
   .history-modal-summary {
     font-size: 0.95rem;
     margin-bottom: 0.75rem;
-    padding: 0.6rem 0.75rem;
+    padding: 0.7rem 0.8rem;
     background: var(--json-bg);
-    border-radius: var(--radius);
+    border-radius: 12px;
     border: 1px solid var(--border);
   }
-  .history-modal-summary strong { color: var(--text); font-weight: 600; }
+  .history-modal-summary strong { color: var(--text); font-weight: 700; }
   .history-snapshots {
     font-size: 0.78rem;
     color: var(--muted);
@@ -505,334 +798,312 @@
   }
   .history-snapshot-row { padding: 0.15rem 0; border-bottom: 1px solid var(--border); }
   .history-snapshot-row:last-child { border-bottom: none; }
-  .history-snapshot-delta { font-weight: 600; color: var(--accent); }
+  .history-snapshot-delta { font-weight: 700; color: var(--accent); }
   .history-snapshot-delta.flat { color: var(--muted); font-weight: 500; }
-  .history-modal-desc { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.75rem; }
   .history-modal-list {
-    overflow-y: auto; font-size: 0.85rem; line-height: 1.6;
+    overflow-y: auto;
+    font-size: 0.85rem;
+    line-height: 1.6;
     flex: 1;
     min-height: 0;
   }
-  .history-modal-list a { color: var(--accent); text-decoration: none; }
-  .history-modal-list a:hover { text-decoration: underline; }
 
-  .e2e-section { margin-bottom: 1.25rem; }
-  .e2e-status {
-    margin-top: 1rem;
-    padding: 1rem;
-    background: var(--json-bg);
-    border-radius: var(--radius);
-    font-size: 0.85rem;
-    display: none;
-  }
-  .e2e-status.active { display: block; }
-  .e2e-step { font-weight: 600; margin-bottom: 0.5rem; }
-  .e2e-counts {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 0.5rem;
-    margin-bottom: 0.5rem;
-    color: var(--muted);
-  }
-  .e2e-counts span { font-size: 0.8rem; }
-  .e2e-progress-bar {
-    height: 8px;
-    background: var(--border);
-    border-radius: var(--radius);
-    overflow: hidden;
-    margin: 0.5rem 0;
-  }
-  .e2e-progress-bar-fill {
-    height: 100%;
-    background: var(--accent);
-    transition: width 0.2s ease;
-  }
-  .e2e-meta { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; }
-
-  .workflow-lede {
-    font-size: 0.9rem;
-    color: var(--muted);
-    margin-bottom: 1rem;
-    line-height: 1.45;
-  }
-  .workflow-subsection {
-    margin-bottom: 1.25rem;
-    padding-bottom: 1rem;
-    border-bottom: 1px solid var(--border);
-  }
-  .workflow-subsection:last-of-type {
-    margin-bottom: 0;
-    padding-bottom: 0;
-    border-bottom: none;
-  }
-  .workflow-subsection h3 {
-    font-size: 1rem;
-    margin-bottom: 0.5rem;
-    color: var(--text);
-    font-weight: 600;
-  }
-  .workflow-discovery .discover-section { margin-bottom: 0; }
-  .dashboard-subsection {
-    margin-top: 1.5rem;
-  }
-  .dashboard-subsection:first-of-type {
-    margin-top: 0;
-  }
-  .dashboard-subsection h3 {
-    font-size: 1rem;
-    margin-bottom: 0.5rem;
-    color: var(--text);
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-  .dashboard-subsection-hint {
-    font-size: 0.82rem;
-    color: var(--muted);
-    margin-bottom: 0.75rem;
-    line-height: 1.4;
-  }
-  .dashboard-subsection-hint code {
-    font-size: 0.78rem;
-    padding: 0.1rem 0.25rem;
-    background: var(--json-bg);
-    border-radius: 4px;
-  }
-  .backlog-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 1.5rem;
-    height: 1.5rem;
-    padding: 0 0.45rem;
-    font-size: 0.75rem;
-    font-weight: 700;
-    border-radius: 999px;
-    background: var(--warn);
+  .copied-toast {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    background: var(--success);
     color: #fff;
-    line-height: 1;
-  }
-  .backlog-badge.is-zero {
-    background: var(--border);
-    color: var(--muted);
-  }
-  .backlog-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  .backlog-entry {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-    padding: 0.6rem 0.75rem;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    padding: 0.6rem 1rem;
+    border-radius: 10px;
     font-size: 0.85rem;
+    opacity: 0;
+    transition: opacity 0.25s;
+    pointer-events: none;
+    z-index: 150;
   }
-  .backlog-name {
-    font-weight: 600;
-    flex: 1;
-    min-width: 120px;
+  .copied-toast.show { opacity: 1; }
+
+  @media (max-width: 1180px) {
+    .workspace-grid,
+    .retailer-ops-layout,
+    .active-processes-layout {
+      grid-template-columns: 1fr;
+    }
+    .overview-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
-  .backlog-url {
-    font-family: "SF Mono", "Fira Code", monospace;
-    font-size: 0.78rem;
-    color: var(--muted);
-    word-break: break-all;
-    flex: 2;
-    min-width: 180px;
-  }
-  .backlog-entry .btn-small {
-    flex-shrink: 0;
-  }
-  .backlog-empty {
-    font-size: 0.85rem;
-    color: var(--muted);
-    padding: 0.35rem 0;
+
+  @media (max-width: 720px) {
+    body { padding: 1rem; }
+    .overview-grid { grid-template-columns: 1fr; }
+    .app-header,
+    .workspace-header,
+    .surface-card-header,
+    .toolbar-row,
+    .retailer-list-header,
+    .detail-header {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .header-actions,
+    .workspace-actions,
+    .retailer-actions,
+    .bulk-actions,
+    .actions-row {
+      width: 100%;
+    }
+    .header-actions > *,
+    .workspace-actions > *,
+    .retailer-actions > *,
+    .bulk-actions > *,
+    .actions-row > * {
+      width: 100%;
+    }
   }
 </style>
 </head>
 <body>
+<div class="app-shell">
+  <header class="app-header">
+    <div class="app-header-copy">
+      <div class="app-eyebrow">Crawler Operations</div>
+      <h1>Crawler Config Dashboard</h1>
+      <p class="app-subtitle">Discovery, active jobs, and retailer operations are separated into clearer workspaces so you can stay oriented while the pipeline runs.</p>
+    </div>
+    <div class="header-actions">
+      <button type="button" class="btn-secondary" id="historyBtn">History</button>
+    </div>
+  </header>
 
-<header class="app-header">
-  <h1>Crawler Config Generator</h1>
-  <button type="button" class="btn-secondary" id="historyBtn">History</button>
-</header>
+  <section class="overview-band" aria-label="Overview">
+    <div class="overview-grid">
+      <div class="overview-card">
+        <span>Queued URLs</span>
+        <strong id="queueCount">0</strong>
+        <small id="queueSummary">Add URLs or discovered brands to explore.</small>
+      </div>
+      <div class="overview-card">
+        <span>Active Processes</span>
+        <strong id="activeCount">0</strong>
+        <small id="activeSummary">No jobs are currently running.</small>
+      </div>
+      <div class="overview-card">
+        <span>Backlog</span>
+        <strong id="backlogCount">0</strong>
+        <small id="backlogSummary">Brands identified without configs yet.</small>
+      </div>
+      <div class="overview-card">
+        <span>Visible Retailers</span>
+        <strong id="visibleRetailerCount">0</strong>
+        <small id="retailerSummary">0 total configs loaded.</small>
+      </div>
+    </div>
 
-<div class="cost-strip" id="costStrip" aria-label="Usage cost estimates">
-  <div class="cost-strip-inner" id="costStripInner">
-    <span class="cost-item">Loading usage…</span>
-  </div>
-  <div class="cost-strip-note">
-    Estimates from measured token usage in this app (Gemini API + Stagehand). Not official Google invoices.
-  </div>
+    <div class="cost-strip" id="costStrip" aria-label="Usage cost estimates">
+      <div class="cost-strip-inner" id="costStripInner">
+        <span class="cost-item">Loading usage…</span>
+      </div>
+      <div class="cost-strip-note">
+        Estimates from measured token usage in this app (Gemini API + Stagehand). Not official Google invoices.
+      </div>
+    </div>
+  </section>
+
+  <main class="workspace-grid">
+    <section class="workspace-card">
+      <div class="workspace-header">
+        <div class="workspace-copy">
+          <h2>Discovery &amp; Queue</h2>
+          <p>Use this workspace to set the search focus, discover new brands, and prepare URLs for explore runs.</p>
+        </div>
+      </div>
+
+      <div class="stack">
+        <div class="surface-card brand-search-focus-section">
+          <div class="surface-card-header">
+            <div>
+              <h3>Brand search focus</h3>
+              <p>Optional theme, region, or niche to guide both brand discovery and end-to-end runs.</p>
+            </div>
+          </div>
+          <label for="brandSearchCategory" class="section-hint">Optional search category or focus</label>
+          <div class="input-row" style="margin-top: 0.5rem;">
+            <input type="text" id="brandSearchCategory" placeholder="e.g. San Diego surf brands" autocomplete="off" />
+          </div>
+          <p class="section-hint" style="margin-top: 0.45rem;">Applies to <strong>Run End-to-End</strong> and <strong>Discover Brands</strong>.</p>
+        </div>
+
+        <div class="surface-card">
+          <div class="surface-card-header">
+            <div>
+              <h3>Discover brands</h3>
+              <p>Find 15–20 relevant brands, review the results, then add any or all URLs to the explore queue.</p>
+            </div>
+            <button type="button" class="btn-primary" id="discoverBtn">Discover Brands</button>
+          </div>
+          <div class="discover-progress-bar" id="discoverProgressBar"></div>
+          <div class="discover-output" id="discoverOutput">
+            <div class="discover-status" id="discoverStatus"></div>
+            <div class="discover-brands-list" id="discoverBrandsList"></div>
+            <div class="discover-add-row">
+              <button type="button" class="btn-primary btn-small" id="discoverAddToQueueBtn" style="display:none">Add to Queue</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="surface-card">
+          <div class="surface-card-header">
+            <div>
+              <h3>Explore queue</h3>
+              <p>Queue URLs manually or by CSV, then run explore when you are ready.</p>
+            </div>
+          </div>
+          <div class="input-row">
+            <input type="text" id="urlInput" placeholder="https://www.example.com" />
+            <button type="button" class="btn-primary" id="addUrlBtn">Add URL</button>
+            <label class="file-label">
+              Upload CSV
+              <input type="file" id="csvInput" accept=".csv,.txt" />
+            </label>
+          </div>
+          <div id="inputStatus" class="input-status"></div>
+          <ul class="queue-list" id="queueList"></ul>
+          <div class="actions-row">
+            <button type="button" class="btn-primary" id="runBtn" disabled>Run Explore</button>
+            <button type="button" class="btn-secondary btn-small" id="clearBtn" style="display:none">Clear queue</button>
+            <span class="progress-text" id="progressText">Ready.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="workspace-card">
+      <div class="workspace-header">
+        <div class="workspace-copy">
+          <h2>Active Processes</h2>
+          <p>Every running or recent process appears here with a clear label so logs, status, and results stay tied to the right job.</p>
+        </div>
+      </div>
+
+      <div class="surface-card">
+        <div class="surface-card-header">
+          <div>
+            <h3>End-to-end pipeline</h3>
+            <p>Discover brands, generate configs, crawl product URLs, then extract and upload.</p>
+          </div>
+          <button type="button" class="btn-primary" id="runE2eBtn">Run End-to-End</button>
+        </div>
+        <div class="e2e-status" id="e2eStatus">
+          <div class="e2e-step" id="e2eStepLabel">Step 1/4: Discovering brands</div>
+          <div class="e2e-counts" id="e2eCounts">
+            <span id="e2eBrands">Brands: 0</span>
+            <span id="e2eConfigs">Configs: 0 / 0</span>
+            <span id="e2eRecommended">Recommended: 0</span>
+            <span id="e2eUrls">Product URLs: 0</span>
+            <span id="e2eUploaded">Uploaded: 0 / 0</span>
+          </div>
+          <div class="e2e-progress-bar">
+            <div class="e2e-progress-bar-fill" id="e2eProgressFill" style="width: 0%"></div>
+          </div>
+          <div class="e2e-meta" id="e2eMeta">0% complete</div>
+        </div>
+      </div>
+
+      <div class="surface-card" style="margin-top: 1rem;">
+        <div class="surface-card-header">
+          <div>
+            <h3>Process monitor</h3>
+            <p>Select a process to inspect its logs, progress, and any model response or retailer-specific context.</p>
+          </div>
+        </div>
+        <div class="active-processes-layout">
+          <div id="activeProcessList" class="process-list"></div>
+          <div id="processDetailPanel" class="process-detail-panel">
+            <div class="process-empty-state">No process selected yet.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="workspace-card retailer-workspace">
+      <div class="workspace-header">
+        <div class="workspace-copy">
+          <h2>Retailer Operations</h2>
+          <p>Filter the retailer list on the left, then inspect JSON, URL data, and next actions for a selected retailer on the right.</p>
+        </div>
+      </div>
+
+      <div class="retailer-ops-layout">
+        <div class="retailer-list-stack">
+          <div class="dashboard-toolbar" id="dashboardToolbar">
+            <div class="toolbar-row">
+              <label>Search <input type="search" id="dashboardSearch" placeholder="Retailer name" autocomplete="off" /></label>
+              <label>Recommendation
+                <select id="filterRecommendation">
+                  <option value="all">All</option>
+                  <option value="recommended">Recommended</option>
+                  <option value="usable">Usable</option>
+                  <option value="not recommended">Not recommended</option>
+                  <option value="unknown">Unknown</option>
+                </select>
+              </label>
+              <label>Pipeline
+                <select id="filterPipeline">
+                  <option value="all">All</option>
+                  <option value="need_crawl">Needs crawl</option>
+                  <option value="need_upload">Needs upload</option>
+                  <option value="upload_done">Upload complete</option>
+                </select>
+              </label>
+              <label>Sort
+                <select id="sortDashboard">
+                  <option value="rec">Recommendation</option>
+                  <option value="name">Name A–Z</option>
+                  <option value="crawled">Crawled date</option>
+                  <option value="uploaded">Upload date</option>
+                  <option value="urls">URL count</option>
+                </select>
+              </label>
+            </div>
+            <div class="toolbar-row">
+              <label title="When off, re-crawl sites that already have product URLs"><input type="checkbox" id="crawlIncludeCrawled" /> Include already crawled</label>
+              <label title="When off, skip uploads already done for this crawl snapshot"><input type="checkbox" id="uploadIncludeUploaded" /> Include already uploaded</label>
+              <label title="Skip explore when configs/&lt;slug&gt;.json exists"><input type="checkbox" id="skipExploreExisting" checked /> Skip existing configs (Run)</label>
+            </div>
+            <div class="toolbar-row">
+              <div class="bulk-actions">
+                <button type="button" class="btn-primary" id="crawlAllRecommendedBtn" disabled>Crawl visible recommended</button>
+                <button type="button" class="btn-primary upload-btn" id="uploadAllProductUrlsBtn" disabled>Upload visible product URLs</button>
+              </div>
+              <div id="dashboardBulkHint"></div>
+            </div>
+          </div>
+
+          <div id="configList" class="retailer-list">
+            <div class="empty-state">No configs generated yet.</div>
+          </div>
+
+          <div class="backlog-panel">
+            <div class="retailer-list-header">
+              <div>
+                <h3>Identified, no config yet</h3>
+                <p class="dashboard-subsection-hint">Brands from discovery that do not yet match a saved config by normalized <code>baseUrl</code>.</p>
+              </div>
+              <span id="identifiedBacklogBadge" class="backlog-badge is-zero">0</span>
+            </div>
+            <div id="identifiedBacklogList" class="backlog-list"></div>
+          </div>
+        </div>
+
+        <div id="retailerDetailPanel" class="retailer-detail-panel">
+          <div class="detail-empty-state">Select a retailer to inspect its config, product URLs, and current crawl or upload state.</div>
+        </div>
+      </div>
+    </section>
+  </main>
 </div>
-
-<section class="workflow-discovery">
-  <h2>Discovery &amp; intake</h2>
-  <p class="workflow-lede">
-    Set an optional search theme, discover brands, then add URLs to the queue or run Explore.
-  </p>
-
-  <div class="workflow-subsection brand-search-focus-section">
-    <h3>Brand search focus</h3>
-    <p style="font-size: 0.9rem; color: var(--muted); margin-bottom: 0.5rem;">
-      Optional theme, region, or focus for the 15–20 brand web search.
-    </p>
-    <label for="brandSearchCategory">Optional search category or focus</label>
-    <div class="input-row">
-      <input type="text" id="brandSearchCategory" placeholder="e.g. San Diego surf brands" autocomplete="off" />
-    </div>
-    <p class="brand-search-focus-hint">
-      Applies to <strong>Run End-to-End</strong> (step 1) and <strong>Discover Brands</strong>.
-    </p>
-  </div>
-
-  <div class="workflow-subsection discover-section">
-    <h3>Discover brands</h3>
-    <p style="font-size: 0.9rem; color: var(--muted); margin-bottom: 0.75rem;">
-      Uses Gemini 3 Flash with Google Search to find 15–20 men's/unisex clothing brands that are not commoditized mass-market fashion (e.g. still skip ASOS; specialty labels like Wilson tennis are OK). Results are added to a master list so future searches avoid duplicates.
-    </p>
-    <button type="button" class="btn-primary" id="discoverBtn">Discover Brands</button>
-    <div class="discover-progress-bar" id="discoverProgressBar"></div>
-    <div class="discover-output" id="discoverOutput">
-      <span class="discover-status" id="discoverStatus"></span>
-      <details class="model-response-panel" id="discoverModelPanel" hidden>
-        <summary>Model response (15–20 brand search)</summary>
-        <pre class="model-response-pre" id="discoverModelPre"></pre>
-      </details>
-      <div class="discover-log" id="discoverLog"></div>
-      <div class="discover-brands-list" id="discoverBrandsList"></div>
-      <div class="discover-add-row">
-        <button type="button" class="btn-primary btn-small" id="discoverAddToQueueBtn" style="display:none">Add to Queue</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="workflow-subsection">
-    <h3>Add URLs</h3>
-    <div class="input-row">
-      <input type="text" id="urlInput" placeholder="https://www.example.com" />
-      <button type="button" class="btn-primary" id="addUrlBtn">Add URL</button>
-      <label class="file-label">
-        Upload CSV
-        <input type="file" id="csvInput" accept=".csv,.txt" />
-      </label>
-    </div>
-    <div id="inputStatus" class="input-status"></div>
-    <ul class="queue-list" id="queueList"></ul>
-    <div class="actions-row">
-      <button type="button" class="btn-primary" id="runBtn" disabled>Run</button>
-      <button type="button" class="btn-secondary btn-small" id="clearBtn" style="display:none">Clear</button>
-      <span class="progress-text" id="progressText"></span>
-    </div>
-  </div>
-</section>
-
-<section class="workflow-active-runs">
-  <h2>Active runs</h2>
-  <p class="workflow-lede">
-    Long-running jobs: end-to-end pipeline and per-URL explore. Monitor progress here.
-  </p>
-
-  <div class="workflow-subsection e2e-section">
-    <h3>End-to-end</h3>
-    <p style="font-size: 0.9rem; color: var(--muted); margin-bottom: 0.75rem;">
-      Discover brands → Generate configs → Crawl product URLs → Extract &amp; upload. Saves after each brand completes.
-    </p>
-    <button type="button" class="btn-primary" id="runE2eBtn">Run End-to-End</button>
-    <div class="e2e-status" id="e2eStatus">
-      <div class="e2e-step" id="e2eStepLabel">Step 1/4: Discovering brands</div>
-      <div class="e2e-counts" id="e2eCounts">
-        <span id="e2eBrands">Brands: 0</span>
-        <span id="e2eConfigs">Configs: 0 / 0</span>
-        <span id="e2eRecommended">Recommended: 0</span>
-        <span id="e2eUrls">Product URLs: 0</span>
-        <span id="e2eUploaded">Uploaded: 0 / 0</span>
-      </div>
-      <div class="e2e-progress-bar">
-        <div class="e2e-progress-bar-fill" id="e2eProgressFill" style="width: 0%"></div>
-      </div>
-      <div class="e2e-meta" id="e2eMeta">0% complete</div>
-      <details class="model-response-panel" id="e2eModelPanel" hidden>
-        <summary>Model response (15–20 brand search)</summary>
-        <pre class="model-response-pre" id="e2eModelPre"></pre>
-      </details>
-    </div>
-  </div>
-
-  <div class="workflow-subsection" id="progressSection" style="display:none">
-    <h3>Explore progress</h3>
-    <div class="log-area" id="logArea"></div>
-  </div>
-</section>
-
-<section class="config-dashboard-section">
-  <h2>Config dashboard</h2>
-  <p class="workflow-lede">
-    Configured retailers (crawl/upload) and the discovery backlog that still needs a config file.
-  </p>
-
-  <div class="dashboard-subsection">
-    <h3>Configured retailers</h3>
-    <div class="config-section-header">
-      <span class="config-toolbar-spacer"></span>
-      <button type="button" class="btn-primary" id="crawlAllRecommendedBtn" disabled>Crawl All Recommended URLs</button>
-      <button type="button" class="btn-primary upload-btn" id="uploadAllProductUrlsBtn" disabled>Upload All Product URLs</button>
-    </div>
-    <div class="dashboard-toolbar" id="dashboardToolbar">
-      <div class="toolbar-row">
-        <label>Search <input type="search" id="dashboardSearch" placeholder="Retailer name" autocomplete="off" /></label>
-        <label>Recommendation
-          <select id="filterRecommendation">
-            <option value="all">All</option>
-            <option value="recommended">Recommended</option>
-            <option value="usable">Usable</option>
-            <option value="not recommended">Not recommended</option>
-            <option value="unknown">Unknown</option>
-          </select>
-        </label>
-        <label>Pipeline
-          <select id="filterPipeline">
-            <option value="all">All</option>
-            <option value="need_crawl">Needs crawl (recommended, no URLs)</option>
-            <option value="need_upload">Needs upload</option>
-            <option value="upload_done">Upload complete (current crawl)</option>
-          </select>
-        </label>
-        <label>Sort
-          <select id="sortDashboard">
-            <option value="rec">Recommendation</option>
-            <option value="name">Name A–Z</option>
-            <option value="crawled">Crawled date</option>
-            <option value="uploaded">Upload date</option>
-            <option value="urls">URL count</option>
-          </select>
-        </label>
-      </div>
-      <div class="toolbar-row">
-        <label title="When off, re-crawl sites that already have product URLs"><input type="checkbox" id="crawlIncludeCrawled" /> Include already crawled</label>
-        <label title="When off, skip uploads already done for this crawl snapshot"><input type="checkbox" id="uploadIncludeUploaded" /> Include already uploaded</label>
-        <label title="Skip explore when configs/&lt;slug&gt;.json exists"><input type="checkbox" id="skipExploreExisting" checked /> Skip existing configs (Run)</label>
-      </div>
-      <div id="dashboardBulkHint"></div>
-    </div>
-    <div id="configList"><div class="empty-state">No configs generated yet.</div></div>
-  </div>
-
-  <div class="dashboard-subsection">
-    <h3>Identified — no config yet <span id="identifiedBacklogBadge" class="backlog-badge is-zero">0</span></h3>
-    <p class="dashboard-subsection-hint">
-      Brands from discovery that are not yet represented by a config file (matched by normalized <code>baseUrl</code>). Add to queue to run Explore.
-    </p>
-    <div id="identifiedBacklogList" class="backlog-list"></div>
-  </div>
-</section>
 
 <div class="history-modal" id="historyModal" style="display:none">
   <div class="history-modal-backdrop" id="historyModalBackdrop"></div>
@@ -853,22 +1124,39 @@
 <script>
 "use strict";
 
-// ── Global error handler ────────────────────────────────────────────────
 window.onerror = function (msg, src, line, col) {
   var errorMsg = "JS Error: " + msg + " (line " + line + ", col " + col + ")";
   console.error(errorMsg);
   showStatus(errorMsg, "error", 0);
 };
 
-// ── State ───────────────────────────────────────────────────────────────
 var queue = [];
 var running = false;
 var statusTimer = null;
+var DISCOVER_JOB_KEY = "discoverJobId";
+var E2E_JOB_KEY = "e2eJobId";
+var lastDiscoveredBrands = [];
+var discoverRunning = false;
+var e2eRunning = false;
+var e2eLastStatus = {};
+var crawlingRetailers = {};
+var uploadingRetailers = {};
+var productUrlsCache = {};
+var productUrlsLoading = {};
+var overviewRetailers = [];
+var identifiedWithoutConfig = [];
+var dashboardToolbarWired = false;
+var bulkHintOverride = "";
+var processMap = {};
+var processOrder = [];
+var uiState = {
+  selectedRetailer: null,
+  selectedProcessId: null
+};
 
-// ── Status helper ───────────────────────────────────────────────────────
 function showStatus(msg, type, autoHideMs) {
   var el = document.getElementById("inputStatus");
-  if (!el) { console.warn("[showStatus] #inputStatus not found"); return; }
+  if (!el) return;
   el.textContent = msg;
   el.className = "input-status " + (type || "info");
   if (statusTimer) clearTimeout(statusTimer);
@@ -880,41 +1168,187 @@ function showStatus(msg, type, autoHideMs) {
   }
 }
 
-// ── Queue rendering ─────────────────────────────────────────────────────
+function showToast(msg) {
+  var toast = document.getElementById("copiedToast");
+  if (!toast) return;
+  toast.textContent = msg || "Copied to clipboard";
+  toast.classList.add("show");
+  setTimeout(function () {
+    toast.classList.remove("show");
+    toast.textContent = "Copied to clipboard";
+  }, 1500);
+}
+
+function escHtml(s) {
+  var d = document.createElement("div");
+  d.textContent = s == null ? "" : String(s);
+  return d.innerHTML;
+}
+
+function processToneClass(tone) {
+  if (tone === "success" || tone === "error" || tone === "running") return tone;
+  return "idle";
+}
+
+function setSelectedProcess(id) {
+  uiState.selectedProcessId = id;
+  renderActiveProcesses();
+}
+
+function upsertProcess(data) {
+  if (!data || !data.id) return null;
+  var isNew = !processMap[data.id];
+  var existing = processMap[data.id] || {
+    id: data.id,
+    logs: [],
+    metrics: [],
+    modelResponse: "",
+    kind: "generic",
+    active: false,
+    tone: "idle",
+    statusText: "Idle",
+    summary: "",
+    subtitle: "",
+    percent: null,
+    retailer: null
+  };
+  var next = {};
+  for (var key in existing) next[key] = existing[key];
+  for (var patchKey in data) {
+    if (data[patchKey] !== undefined) next[patchKey] = data[patchKey];
+  }
+  if (!Array.isArray(next.logs)) next.logs = [];
+  if (!Array.isArray(next.metrics)) next.metrics = [];
+  processMap[data.id] = next;
+  if (processOrder.indexOf(data.id) === -1) processOrder.unshift(data.id);
+  if (!uiState.selectedProcessId || (isNew && next.active)) uiState.selectedProcessId = data.id;
+  renderActiveProcesses();
+  updateOverviewCards();
+  return next;
+}
+
+function appendProcessLog(id, msg) {
+  var proc = upsertProcess({ id: id });
+  proc.logs.push(String(msg || ""));
+  if (proc.logs.length > 500) {
+    proc.logs.splice(0, proc.logs.length - 500);
+  }
+  processMap[id] = proc;
+  renderActiveProcesses();
+}
+
+function getProcess(id) {
+  return id ? processMap[id] || null : null;
+}
+
+function getProcesses() {
+  var out = [];
+  for (var i = 0; i < processOrder.length; i++) {
+    if (processMap[processOrder[i]]) out.push(processMap[processOrder[i]]);
+  }
+  return out;
+}
+
+function countActiveProcesses() {
+  var count = 0;
+  var items = getProcesses();
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].active) count++;
+  }
+  return count;
+}
+
+function findRetailerRow(retailer) {
+  for (var i = 0; i < overviewRetailers.length; i++) {
+    if (overviewRetailers[i].retailer === retailer) return overviewRetailers[i];
+  }
+  return null;
+}
+
+function getFilteredCount() {
+  try {
+    return getFilteredSortedRetailers().length;
+  } catch (err) {
+    return overviewRetailers.length;
+  }
+}
+
+function updateOverviewCards() {
+  var queueCount = document.getElementById("queueCount");
+  var queueSummary = document.getElementById("queueSummary");
+  var activeCount = document.getElementById("activeCount");
+  var activeSummary = document.getElementById("activeSummary");
+  var backlogCount = document.getElementById("backlogCount");
+  var backlogSummary = document.getElementById("backlogSummary");
+  var visibleRetailerCount = document.getElementById("visibleRetailerCount");
+  var retailerSummary = document.getElementById("retailerSummary");
+
+  if (queueCount) queueCount.textContent = String(queue.length);
+  if (queueSummary) {
+    queueSummary.textContent = queue.length
+      ? queue.length + " URL(s) ready for explore."
+      : (running ? "Explore run is in progress." : "Add URLs or discovered brands to explore.");
+  }
+
+  var active = countActiveProcesses();
+  if (activeCount) activeCount.textContent = String(active);
+  if (activeSummary) activeSummary.textContent = active ? active + " process(es) still running." : "No jobs are currently running.";
+
+  if (backlogCount) backlogCount.textContent = String(identifiedWithoutConfig.length);
+  if (backlogSummary) backlogSummary.textContent = identifiedWithoutConfig.length ? "Queue missing configs directly from backlog." : "No discovered retailers are waiting for configs.";
+
+  var filteredCount = getFilteredCount();
+  if (visibleRetailerCount) visibleRetailerCount.textContent = String(filteredCount);
+  if (retailerSummary) retailerSummary.textContent = overviewRetailers.length + " total configs loaded.";
+}
+
 function renderQueue() {
   var list = document.getElementById("queueList");
   var runBtn = document.getElementById("runBtn");
   var clearBtn = document.getElementById("clearBtn");
-  if (!list || !runBtn) return;
+  var progressText = document.getElementById("progressText");
+  if (!list || !runBtn || !clearBtn) return;
 
-  list.innerHTML = "";
-  for (var i = 0; i < queue.length; i++) {
-    (function (idx) {
-      var li = document.createElement("li");
-      li.textContent = queue[idx];
-      var btn = document.createElement("button");
-      btn.className = "btn-danger";
-      btn.textContent = "\u00D7"; // ×
-      btn.onclick = function () { queue.splice(idx, 1); renderQueue(); };
-      li.appendChild(btn);
-      list.appendChild(li);
-    })(i);
+  if (queue.length === 0) {
+    list.innerHTML = '<li class="queue-empty">No URLs queued yet.</li>';
+  } else {
+    list.innerHTML = "";
+    for (var i = 0; i < queue.length; i++) {
+      (function (idx) {
+        var li = document.createElement("li");
+        var text = document.createElement("span");
+        text.textContent = queue[idx];
+        var btn = document.createElement("button");
+        btn.className = "btn-danger";
+        btn.textContent = "\u00D7";
+        btn.setAttribute("type", "button");
+        btn.onclick = function () {
+          queue.splice(idx, 1);
+          renderQueue();
+        };
+        li.appendChild(text);
+        li.appendChild(btn);
+        list.appendChild(li);
+      })(i);
+    }
   }
+
   runBtn.disabled = queue.length === 0 || running;
   clearBtn.style.display = queue.length > 0 && !running ? "" : "none";
+  if (!running && progressText && !progressText.textContent) {
+    progressText.textContent = "Ready.";
+  }
+  updateOverviewCards();
 }
 
-// ── URL normalisation ───────────────────────────────────────────────────
 function normalizeUrl(raw) {
   var s = raw.trim().replace(/^["'<]+|["'>]+$/g, "");
   if (!s) return { url: null, reason: "Input is empty." };
-
   if (s.indexOf("//") === 0) {
     s = "https:" + s;
   } else if (s.indexOf("http://") !== 0 && s.indexOf("https://") !== 0) {
     s = "https://" + s;
   }
-
   try {
     var u = new URL(s);
     if (!u.pathname || u.pathname === "/") u.pathname = "/";
@@ -924,45 +1358,31 @@ function normalizeUrl(raw) {
   }
 }
 
-// ── Add URL handler ─────────────────────────────────────────────────────
 function addUrl() {
-  console.log("[addUrl] called");
   var input = document.getElementById("urlInput");
-  if (!input) {
-    showStatus("Bug: #urlInput not found.", "error", 0);
-    return;
-  }
-
+  if (!input) return;
   var raw = input.value.trim();
-  console.log("[addUrl] raw:", raw);
-
   if (!raw) {
     showStatus("Please enter a URL first.", "error", 4000);
     return;
   }
-
   var result = normalizeUrl(raw);
-  console.log("[addUrl] normalizeUrl:", JSON.stringify(result));
-
   if (!result.url) {
     showStatus(result.reason, "error", 6000);
     return;
   }
-
   for (var i = 0; i < queue.length; i++) {
     if (queue[i] === result.url) {
       showStatus("URL already in queue.", "error", 4000);
       return;
     }
   }
-
   queue.push(result.url);
   input.value = "";
   showStatus("Added: " + result.url, "success", 3000);
   renderQueue();
 }
 
-// Parse a CSV line into cells (handles quoted fields with commas inside)
 function parseCsvLine(line) {
   var cells = [];
   var cur = "";
@@ -982,7 +1402,6 @@ function parseCsvLine(line) {
   return cells;
 }
 
-// Check if a URL has a proper domain (hostname contains a dot)
 function hasValidDomain(urlStr) {
   try {
     var u = new URL(urlStr);
@@ -992,7 +1411,6 @@ function hasValidDomain(urlStr) {
   }
 }
 
-// ── CSV handler ─────────────────────────────────────────────────────────
 function handleCsv(e) {
   var file = e.target.files[0];
   if (!file) return;
@@ -1000,7 +1418,8 @@ function handleCsv(e) {
   reader.onload = function () {
     var text = reader.result;
     var lines = text.split(/\r?\n/).filter(function (l) { return l.trim(); });
-    var added = 0, skipped = 0;
+    var added = 0;
+    var skipped = 0;
     for (var i = 0; i < lines.length; i++) {
       var cells = parseCsvLine(lines[i]);
       var result = null;
@@ -1013,12 +1432,15 @@ function handleCsv(e) {
           break;
         }
       }
-      if (!result || !result.url) { skipped++; continue; }
+      if (!result || !result.url) {
+        skipped++;
+        continue;
+      }
       queue.push(result.url);
       added++;
     }
     if (added > 0) {
-      showStatus("Added " + added + " URL(s) from CSV" + (skipped > 0 ? " (" + skipped + " skipped)" : ""), "success", 5000);
+      showStatus("Added " + added + " URL(s) from CSV" + (skipped ? " (" + skipped + " skipped)" : ""), "success", 5000);
     } else {
       showStatus("No valid URLs found in CSV.", "error", 5000);
     }
@@ -1028,24 +1450,127 @@ function handleCsv(e) {
   e.target.value = "";
 }
 
-// ── Clear queue ─────────────────────────────────────────────────────────
 function clearQueue() {
   queue.length = 0;
   renderQueue();
 }
 
-// ── Run exploration ─────────────────────────────────────────────────────
+function renderProcessMetrics(metrics) {
+  if (!metrics || !metrics.length) return "";
+  var parts = [];
+  for (var i = 0; i < metrics.length; i++) {
+    parts.push('<div class="metric-card"><strong>' + escHtml(metrics[i]) + "</strong></div>");
+  }
+  return '<div class="process-metrics">' + parts.join("") + "</div>";
+}
+
+function renderActiveProcesses() {
+  var list = document.getElementById("activeProcessList");
+  var detail = document.getElementById("processDetailPanel");
+  if (!list || !detail) return;
+
+  var items = getProcesses();
+  if (items.length === 0) {
+    list.innerHTML = '<div class="process-empty-state">No running or recent processes yet.</div>';
+    detail.innerHTML = '<div class="process-empty-state">Select a process once a discover, explore, crawl, upload, or end-to-end run starts.</div>';
+    updateOverviewCards();
+    return;
+  }
+
+  if (!uiState.selectedProcessId || !processMap[uiState.selectedProcessId]) {
+    uiState.selectedProcessId = items[0].id;
+  }
+
+  var listHtml = [];
+  for (var i = 0; i < items.length; i++) {
+    var proc = items[i];
+    listHtml.push(
+      '<button type="button" class="process-card' + (uiState.selectedProcessId === proc.id ? " is-selected" : "") + '" data-process-id="' + escHtml(proc.id) + '">' +
+        '<div class="process-card-header">' +
+          '<span class="process-card-title">' + escHtml(proc.title || proc.id) + "</span>" +
+          '<span class="process-state ' + processToneClass(proc.tone) + '">' + escHtml(proc.statusText || "Idle") + "</span>" +
+        "</div>" +
+        (proc.subtitle ? '<div class="process-card-subtitle">' + escHtml(proc.subtitle) + "</div>" : "") +
+        (proc.summary ? '<div class="process-card-summary">' + escHtml(proc.summary) + "</div>" : "") +
+      "</button>"
+    );
+  }
+  list.innerHTML = listHtml.join("");
+
+  var buttons = list.querySelectorAll("[data-process-id]");
+  for (var b = 0; b < buttons.length; b++) {
+    buttons[b].onclick = function () {
+      setSelectedProcess(this.getAttribute("data-process-id"));
+    };
+  }
+
+  var selected = getProcess(uiState.selectedProcessId) || items[0];
+  var retailerLink = "";
+  if (selected.retailer) {
+    retailerLink = '<button type="button" class="btn-secondary btn-small" data-open-retailer="' + escHtml(selected.retailer) + '">Open retailer</button>';
+  }
+  detail.innerHTML =
+    '<div class="detail-header">' +
+      '<div>' +
+        '<h3>' + escHtml(selected.title || selected.id) + "</h3>" +
+        (selected.subtitle ? '<div class="detail-subtext" style="margin-top: 0.25rem;">' + escHtml(selected.subtitle) + "</div>" : "") +
+      "</div>" +
+      '<div class="workspace-actions">' +
+        '<span class="process-state ' + processToneClass(selected.tone) + '">' + escHtml(selected.statusText || "Idle") + "</span>" +
+        retailerLink +
+      "</div>" +
+    "</div>" +
+    (selected.summary ? '<div class="detail-note" style="margin-top: 0.7rem;">' + escHtml(selected.summary) + "</div>" : "") +
+    (selected.percent != null ? '<div class="process-progress-bar"><div class="process-progress-fill" style="width:' + Math.max(0, Math.min(100, selected.percent)) + '%"></div></div>' : "") +
+    renderProcessMetrics(selected.metrics) +
+    (selected.modelResponse
+      ? '<details class="model-response-panel"><summary>Model response</summary><pre class="model-response-pre">' + escHtml(selected.modelResponse) + "</pre></details>"
+      : "") +
+    '<div class="process-log">' + escHtml((selected.logs && selected.logs.length ? selected.logs.join("\n") : "No logs yet.")) + "</div>";
+
+  var logEl = detail.querySelector(".process-log");
+  if (logEl && selected.active) {
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  var openRetailerBtn = detail.querySelector("[data-open-retailer]");
+  if (openRetailerBtn) {
+    openRetailerBtn.onclick = function () {
+      var retailer = this.getAttribute("data-open-retailer");
+      uiState.selectedRetailer = retailer;
+      renderDashboard();
+      renderRetailerDetail();
+    };
+  }
+}
+
+function registerRetailerProcess(id, title, retailer, subtitle) {
+  upsertProcess({
+    id: id,
+    title: title,
+    retailer: retailer,
+    kind: id.indexOf("crawl:") === 0 ? "crawl" : "upload",
+    subtitle: subtitle,
+    statusText: "Starting",
+    tone: "running",
+    summary: "Connecting to job…",
+    logs: [],
+    metrics: [],
+    active: true,
+    percent: null
+  });
+  setSelectedProcess(id);
+}
+
 function runExplore() {
   if (queue.length === 0 || running) return;
   running = true;
-  document.getElementById("runBtn").disabled = true;
-  document.getElementById("clearBtn").style.display = "none";
-  var section = document.getElementById("progressSection");
-  section.style.display = "";
-  var logArea = document.getElementById("logArea");
-  logArea.textContent = "";
+  var runBtn = document.getElementById("runBtn");
+  var clearBtn = document.getElementById("clearBtn");
   var progressText = document.getElementById("progressText");
-  progressText.textContent = "Starting...";
+  if (runBtn) runBtn.disabled = true;
+  if (clearBtn) clearBtn.style.display = "none";
+  if (progressText) progressText.textContent = "Submitting explore job…";
 
   var urls = queue.slice();
   var submittedCount = urls.length;
@@ -1054,11 +1579,26 @@ function runExplore() {
 
   var skipEl = document.getElementById("skipExploreExisting");
   var skipExisting = skipEl ? skipEl.checked : true;
+  var processId = "explore:queue";
+  upsertProcess({
+    id: processId,
+    kind: "explore",
+    title: "Explore Queue",
+    subtitle: submittedCount + " URL(s) submitted",
+    statusText: "Starting",
+    tone: "running",
+    summary: "Submitting explore run…",
+    logs: [],
+    metrics: [skipExisting ? "Skip existing configs" : "Include existing configs"],
+    active: true,
+    percent: 0
+  });
+  setSelectedProcess(processId);
 
   fetch("/api/explore", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ urls: urls, skipExisting: skipExisting }),
+    body: JSON.stringify({ urls: urls, skipExisting: skipExisting })
   })
     .then(function (res) {
       return res.json().then(function (data) {
@@ -1072,18 +1612,44 @@ function runExplore() {
       var skippedN = data.skippedCount || 0;
       var toProcess = submittedCount - skippedN;
 
+      upsertProcess({
+        id: processId,
+        statusText: "Running",
+        summary: "Explore job started.",
+        metrics: [
+          submittedCount + " URL(s) queued",
+          skippedN ? skippedN + " skipped" : toProcess + " to process"
+        ],
+        jobId: jobId
+      });
+
       var es = new EventSource("/api/progress/" + jobId);
       es.onmessage = function (e) {
         var msg = JSON.parse(e.data);
         if (msg.type === "log") {
-          logArea.textContent += msg.msg + "\n";
-          logArea.scrollTop = logArea.scrollHeight;
+          appendProcessLog(processId, msg.msg);
         } else if (msg.type === "progress") {
-          progressText.textContent = "Processing " + msg.current + "/" + msg.total + ": " + msg.url;
+          var percent = msg.total ? Math.round((msg.current / msg.total) * 100) : null;
+          upsertProcess({
+            id: processId,
+            statusText: "Running",
+            tone: "running",
+            summary: "Processing " + msg.current + "/" + msg.total + ": " + msg.url,
+            percent: percent
+          });
+          if (progressText) progressText.textContent = "Processing " + msg.current + "/" + msg.total + ": " + msg.url;
         } else if (msg.type === "done") {
           es.close();
-          progressText.textContent = "Done \u2014 " + toProcess + " URL(s) explored" + (skippedN ? " (" + skippedN + " skipped, already had config)" : "") + ".";
           running = false;
+          if (progressText) progressText.textContent = "Done — " + toProcess + " URL(s) explored" + (skippedN ? " (" + skippedN + " skipped)" : "") + ".";
+          upsertProcess({
+            id: processId,
+            active: false,
+            tone: msg.error ? "error" : "success",
+            statusText: msg.error ? "Failed" : "Complete",
+            summary: msg.error ? msg.error : "Explored " + toProcess + " URL(s)." + (skippedN ? " " + skippedN + " skipped." : ""),
+            percent: 100
+          });
           renderQueue();
           loadOverview();
           refreshCostMetrics();
@@ -1091,87 +1657,128 @@ function runExplore() {
       };
       es.onerror = function () {
         es.close();
-        progressText.textContent = "Connection lost.";
         running = false;
+        if (progressText) progressText.textContent = "Connection lost.";
+        upsertProcess({
+          id: processId,
+          active: false,
+          tone: "error",
+          statusText: "Disconnected",
+          summary: "Connection lost during explore."
+        });
         renderQueue();
         loadOverview();
       };
     })
     .catch(function (err) {
       console.error("[runExplore] Error:", err);
-      progressText.textContent = "Error: " + err.message;
       running = false;
+      if (progressText) progressText.textContent = "Error: " + err.message;
+      upsertProcess({
+        id: processId,
+        active: false,
+        tone: "error",
+        statusText: "Failed",
+        summary: err.message
+      });
       renderQueue();
     });
 }
 
-// ── Discover brands state ─────────────────────────────────────────────
-var DISCOVER_JOB_KEY = "discoverJobId";
-var lastDiscoveredBrands = [];
-var discoverRunning = false;
-
-/** prefix: "discover" | "e2e" — element ids {prefix}ModelPanel / {prefix}ModelPre */
-function fillDiscoverModelPanel(prefix, body) {
-  var pre = document.getElementById(prefix + "ModelPre");
-  var panel = document.getElementById(prefix + "ModelPanel");
-  var text = typeof body === "string" ? body : "";
-  if (pre) pre.textContent = text;
-  if (panel) panel.hidden = !text;
+function renderDiscoveredBrands(brands) {
+  var list = document.getElementById("discoverBrandsList");
+  if (!list) return;
+  if (!brands || !brands.length) {
+    list.innerHTML = '<div class="detail-subtext">No brands found yet.</div>';
+    return;
+  }
+  var html = [];
+  for (var i = 0; i < brands.length; i++) {
+    html.push('<div><span class="brand-name">' + escHtml(brands[i].name || "") + '</span> — <a href="' + escHtml(brands[i].url || "") + '" target="_blank" rel="noopener">' + escHtml(brands[i].url || "") + "</a></div>");
+  }
+  list.innerHTML = html.join("");
 }
 
-function discoverConnectToJob(jobId) {
+function discoverConnectToJob(jobId, category) {
   discoverRunning = true;
-
   var discoverBtn = document.getElementById("discoverBtn");
   var progressBar = document.getElementById("discoverProgressBar");
   var discoverOutput = document.getElementById("discoverOutput");
   var discoverStatus = document.getElementById("discoverStatus");
-  var discoverLog = document.getElementById("discoverLog");
-  var discoverBrandsList = document.getElementById("discoverBrandsList");
   var addToQueueBtn = document.getElementById("discoverAddToQueueBtn");
+  var processId = "discover:" + jobId;
 
-  discoverBtn.disabled = true;
-  progressBar.classList.add("active");
-  discoverOutput.classList.add("active");
-  discoverLog.classList.add("active");
-  discoverStatus.textContent = "Searching the web for brands...";
-  discoverStatus.className = "discover-status";
-  if (!discoverLog.textContent) discoverBrandsList.innerHTML = "";
-  addToQueueBtn.style.display = "none";
+  if (discoverBtn) discoverBtn.disabled = true;
+  if (progressBar) progressBar.classList.add("active");
+  if (discoverOutput) discoverOutput.classList.add("active");
+  if (discoverStatus) {
+    discoverStatus.textContent = "Searching the web for brands…";
+    discoverStatus.className = "discover-status";
+  }
+  if (addToQueueBtn) addToQueueBtn.style.display = "none";
+
+  upsertProcess({
+    id: processId,
+    kind: "discover",
+    title: "Discover Brands",
+    subtitle: category ? "Focus: " + category : "Brand discovery job",
+    statusText: "Running",
+    tone: "running",
+    summary: "Searching the web for brands…",
+    logs: [],
+    metrics: category ? ["Focus: " + category] : [],
+    active: true
+  });
+  setSelectedProcess(processId);
 
   var es = new EventSource("/api/progress/" + jobId);
   es.onmessage = function (e) {
     var msg = JSON.parse(e.data);
     if (msg.type === "log") {
-      discoverLog.textContent += msg.msg + "\n";
-      discoverLog.scrollTop = discoverLog.scrollHeight;
+      appendProcessLog(processId, msg.msg);
     } else if (msg.type === "model-response" && msg.phase === "discover" && msg.body != null) {
-      fillDiscoverModelPanel("discover", msg.body);
+      upsertProcess({ id: processId, modelResponse: msg.body });
     } else if (msg.type === "progress" && msg.message) {
-      discoverStatus.textContent = msg.message;
+      if (discoverStatus) discoverStatus.textContent = msg.message;
+      upsertProcess({ id: processId, summary: msg.message });
     } else if (msg.type === "brands" && msg.brands) {
       lastDiscoveredBrands = msg.brands;
-      discoverStatus.textContent = "Found " + msg.brands.length + " brands.";
-      discoverBrandsList.innerHTML = "";
-      for (var i = 0; i < msg.brands.length; i++) {
-        var b = msg.brands[i];
-        var div = document.createElement("div");
-        div.innerHTML = '<span class="brand-name">' + escHtml(b.name) + '</span> \u2014 <a href="' + escHtml(b.url) + '" target="_blank" rel="noopener">' + escHtml(b.url) + '</a>';
-        discoverBrandsList.appendChild(div);
-      }
-      addToQueueBtn.style.display = "";
+      renderDiscoveredBrands(msg.brands);
+      if (discoverStatus) discoverStatus.textContent = "Found " + msg.brands.length + " brands.";
+      if (addToQueueBtn) addToQueueBtn.style.display = "";
+      upsertProcess({
+        id: processId,
+        summary: "Found " + msg.brands.length + " brands.",
+        metrics: [msg.brands.length + " brands found"]
+      });
     } else if (msg.type === "done") {
       es.close();
       discoverRunning = false;
-      discoverBtn.disabled = false;
-      progressBar.classList.remove("active");
+      if (discoverBtn) discoverBtn.disabled = false;
+      if (progressBar) progressBar.classList.remove("active");
       try { localStorage.removeItem(DISCOVER_JOB_KEY); } catch (err) {}
       if (msg.error) {
-        discoverStatus.textContent = "Error: " + msg.error;
-        discoverStatus.className = "discover-status input-status error";
-      } else if (msg.brands) {
-        lastDiscoveredBrands = msg.brands;
-        discoverStatus.textContent = "Done \u2014 " + msg.brands.length + " brands found.";
+        if (discoverStatus) discoverStatus.textContent = "Error: " + msg.error;
+        upsertProcess({
+          id: processId,
+          active: false,
+          tone: "error",
+          statusText: "Failed",
+          summary: msg.error
+        });
+      } else {
+        if (msg.brands) {
+          lastDiscoveredBrands = msg.brands;
+          renderDiscoveredBrands(msg.brands);
+        }
+        if (discoverStatus) discoverStatus.textContent = "Done — " + lastDiscoveredBrands.length + " brands found.";
+        upsertProcess({
+          id: processId,
+          active: false,
+          tone: "success",
+          statusText: "Complete",
+          summary: "Found " + lastDiscoveredBrands.length + " brand(s)."
+        });
       }
       refreshCostMetrics();
       loadOverview();
@@ -1180,9 +1787,16 @@ function discoverConnectToJob(jobId) {
   es.onerror = function () {
     es.close();
     discoverRunning = false;
-    discoverBtn.disabled = false;
-    progressBar.classList.remove("active");
-    discoverStatus.textContent = "Connection lost. Refresh to reconnect.";
+    if (discoverBtn) discoverBtn.disabled = false;
+    if (progressBar) progressBar.classList.remove("active");
+    if (discoverStatus) discoverStatus.textContent = "Connection lost. Refresh to reconnect.";
+    upsertProcess({
+      id: processId,
+      active: false,
+      tone: "error",
+      statusText: "Disconnected",
+      summary: "Connection lost during brand discovery."
+    });
   };
 }
 
@@ -1194,18 +1808,20 @@ function discoverTryResume() {
       .then(function (res) {
         if (!res.ok) {
           localStorage.removeItem(DISCOVER_JOB_KEY);
-          return;
+          return null;
         }
         return res.json();
       })
       .then(function (data) {
         if (data && data.exists) {
-          discoverConnectToJob(jobId);
+          discoverConnectToJob(jobId, "");
         } else {
           localStorage.removeItem(DISCOVER_JOB_KEY);
         }
       })
-      .catch(function () { localStorage.removeItem(DISCOVER_JOB_KEY); });
+      .catch(function () {
+        localStorage.removeItem(DISCOVER_JOB_KEY);
+      });
   } catch (err) {}
 }
 
@@ -1217,40 +1833,44 @@ function runDiscover() {
   var discoverBtn = document.getElementById("discoverBtn");
   var progressBar = document.getElementById("discoverProgressBar");
   var discoverOutput = document.getElementById("discoverOutput");
-  var discoverLog = document.getElementById("discoverLog");
-  discoverBtn.disabled = true;
-  progressBar.classList.add("active");
-  discoverOutput.classList.add("active");
-  discoverLog.textContent = "";
-  discoverLog.classList.add("active");
-  fillDiscoverModelPanel("discover", "");
-  document.getElementById("discoverBrandsList").innerHTML = "";
-  document.getElementById("discoverAddToQueueBtn").style.display = "none";
-
-  var discoverBody = {};
+  var discoverStatus = document.getElementById("discoverStatus");
+  var addToQueueBtn = document.getElementById("discoverAddToQueueBtn");
   var catRaw = document.getElementById("brandSearchCategory");
   var catVal = catRaw && catRaw.value ? String(catRaw.value).trim() : "";
+  var discoverBody = {};
   if (catVal) discoverBody.category = catVal;
+
+  if (discoverBtn) discoverBtn.disabled = true;
+  if (progressBar) progressBar.classList.add("active");
+  if (discoverOutput) discoverOutput.classList.add("active");
+  if (discoverStatus) {
+    discoverStatus.textContent = "Starting discovery…";
+    discoverStatus.className = "discover-status";
+  }
+  if (addToQueueBtn) addToQueueBtn.style.display = "none";
+  renderDiscoveredBrands([]);
 
   fetch("/api/discover-brands", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(discoverBody),
+    body: JSON.stringify(discoverBody)
   })
     .then(function (res) { return res.json(); })
     .then(function (data) {
       if (data.error) throw new Error(data.error);
       var jobId = data.jobId;
       try { localStorage.setItem(DISCOVER_JOB_KEY, jobId); } catch (err) {}
-      discoverConnectToJob(jobId);
+      discoverConnectToJob(jobId, catVal);
     })
     .catch(function (err) {
       console.error("[runDiscover] Error:", err);
       discoverRunning = false;
-      document.getElementById("discoverBtn").disabled = false;
-      document.getElementById("discoverProgressBar").classList.remove("active");
-      document.getElementById("discoverStatus").textContent = "Error: " + err.message;
-      document.getElementById("discoverStatus").className = "discover-status input-status error";
+      if (discoverBtn) discoverBtn.disabled = false;
+      if (progressBar) progressBar.classList.remove("active");
+      if (discoverStatus) {
+        discoverStatus.textContent = "Error: " + err.message;
+        discoverStatus.className = "discover-status input-status error";
+      }
     });
 }
 
@@ -1263,16 +1883,14 @@ function addDiscoveredToQueue() {
   showStatus("Added " + lastDiscoveredBrands.length + " URL(s) from discovery.", "success", 4000);
 }
 
-// ── End-to-end run ──────────────────────────────────────────────────────
-var E2E_JOB_KEY = "e2eJobId";
-var e2eRunning = false;
-var e2eLastStatus = {};
-
 function updateE2eStatus(p) {
-  for (var k in p) { if (p[k] !== undefined) e2eLastStatus[k] = p[k]; }
+  for (var k in p) {
+    if (p[k] !== undefined) e2eLastStatus[k] = p[k];
+  }
   var s = e2eLastStatus;
   var stepLabels = ["", "Discovering brands", "Generating configs", "Crawling product URLs", "Extracting & uploading"];
   var label = s.stepLabel || stepLabels[s.step] || "Complete";
+  document.getElementById("e2eStatus").classList.add("active");
   document.getElementById("e2eStepLabel").textContent = "Step " + (s.step || 1) + "/4: " + label;
   document.getElementById("e2eBrands").textContent = "Brands: " + (s.brandsDiscovered || 0);
   document.getElementById("e2eConfigs").textContent = "Configs: " + (s.configsSuccessful || 0) + " / " + (s.configsTotal || 0);
@@ -1282,44 +1900,88 @@ function updateE2eStatus(p) {
   document.getElementById("e2eProgressFill").style.width = (s.percentComplete || 0) + "%";
   var meta = (s.percentComplete || 0) + "% complete";
   if (s.etaSeconds && s.etaSeconds > 0) {
-    var mins = Math.ceil(s.etaSeconds / 60);
-    meta += " \u2014 ~" + mins + " min remaining";
+    meta += " — ~" + Math.ceil(s.etaSeconds / 60) + " min remaining";
   }
   document.getElementById("e2eMeta").textContent = meta;
 }
 
+function syncE2eProcess(jobId) {
+  var s = e2eLastStatus;
+  upsertProcess({
+    id: "e2e:" + jobId,
+    kind: "e2e",
+    title: "End-to-End Run",
+    subtitle: "Discover → config → crawl → upload",
+    statusText: e2eRunning ? "Running" : "Complete",
+    tone: e2eRunning ? "running" : "success",
+    summary: "Step " + (s.step || 1) + "/4: " + (s.stepLabel || ""),
+    percent: s.percentComplete || 0,
+    metrics: [
+      "Brands: " + (s.brandsDiscovered || 0),
+      "Configs: " + (s.configsSuccessful || 0) + " / " + (s.configsTotal || 0),
+      "Recommended: " + (s.configsRecommended || 0),
+      "URLs: " + (s.productUrlsCrawled || 0),
+      "Uploaded: " + (s.uploadedSuccess || 0) + " / " + (s.uploadedTotal || 0)
+    ],
+    active: e2eRunning
+  });
+}
+
 function e2eConnectToJob(jobId) {
   e2eRunning = true;
-  var runE2eBtn = document.getElementById("runE2eBtn");
-  var e2eStatus = document.getElementById("e2eStatus");
-  var progressSection = document.getElementById("progressSection");
-  var logArea = document.getElementById("logArea");
-
-  runE2eBtn.disabled = true;
-  e2eStatus.classList.add("active");
-  progressSection.style.display = "";
-  if (!logArea.textContent) e2eLastStatus = {};
+  document.getElementById("runE2eBtn").disabled = true;
+  document.getElementById("e2eStatus").classList.add("active");
+  upsertProcess({
+    id: "e2e:" + jobId,
+    kind: "e2e",
+    title: "End-to-End Run",
+    subtitle: "Discover → config → crawl → upload",
+    statusText: "Running",
+    tone: "running",
+    summary: "Connecting to end-to-end job…",
+    logs: [],
+    metrics: [],
+    active: true,
+    percent: 0
+  });
+  setSelectedProcess("e2e:" + jobId);
 
   var es = new EventSource("/api/progress/" + jobId);
   es.onmessage = function (e) {
     var msg = JSON.parse(e.data);
     if (msg.type === "log") {
-      logArea.textContent += msg.msg + "\n";
-      logArea.scrollTop = logArea.scrollHeight;
+      appendProcessLog("e2e:" + jobId, msg.msg);
     } else if (msg.type === "model-response" && msg.phase === "discover" && msg.body != null) {
-      fillDiscoverModelPanel("e2e", msg.body);
+      upsertProcess({ id: "e2e:" + jobId, modelResponse: msg.body });
     } else if (msg.type === "e2e-progress") {
       updateE2eStatus(msg);
+      syncE2eProcess(jobId);
     } else if (msg.type === "done") {
       es.close();
       e2eRunning = false;
-      runE2eBtn.disabled = false;
+      document.getElementById("runE2eBtn").disabled = false;
       try { localStorage.removeItem(E2E_JOB_KEY); } catch (err) {}
       if (msg.error) {
         updateE2eStatus({ step: 4, percentComplete: 100 });
         document.getElementById("e2eMeta").textContent = "Error: " + msg.error;
+        upsertProcess({
+          id: "e2e:" + jobId,
+          active: false,
+          tone: "error",
+          statusText: "Failed",
+          summary: msg.error,
+          percent: 100
+        });
       } else {
         updateE2eStatus({ step: 4, stepLabel: "Complete", percentComplete: 100 });
+        upsertProcess({
+          id: "e2e:" + jobId,
+          active: false,
+          tone: "success",
+          statusText: "Complete",
+          summary: "End-to-end run finished.",
+          percent: 100
+        });
       }
       loadOverview();
       refreshCostMetrics();
@@ -1328,8 +1990,15 @@ function e2eConnectToJob(jobId) {
   es.onerror = function () {
     es.close();
     e2eRunning = false;
-    runE2eBtn.disabled = false;
+    document.getElementById("runE2eBtn").disabled = false;
     document.getElementById("e2eMeta").textContent = "Connection lost. Refresh to reconnect.";
+    upsertProcess({
+      id: "e2e:" + jobId,
+      active: false,
+      tone: "error",
+      statusText: "Disconnected",
+      summary: "Connection lost during end-to-end run."
+    });
   };
 }
 
@@ -1341,7 +2010,7 @@ function e2eTryResume() {
       .then(function (res) {
         if (!res.ok) {
           localStorage.removeItem(E2E_JOB_KEY);
-          return;
+          return null;
         }
         return res.json();
       })
@@ -1352,26 +2021,17 @@ function e2eTryResume() {
           localStorage.removeItem(E2E_JOB_KEY);
         }
       })
-      .catch(function () { localStorage.removeItem(E2E_JOB_KEY); });
+      .catch(function () {
+        localStorage.removeItem(E2E_JOB_KEY);
+      });
   } catch (err) {}
 }
 
 function runE2e() {
   if (e2eRunning) return;
   e2eRunning = true;
-
-  var runE2eBtn = document.getElementById("runE2eBtn");
-  var e2eStatus = document.getElementById("e2eStatus");
-  var progressSection = document.getElementById("progressSection");
-  var logArea = document.getElementById("logArea");
-
-  runE2eBtn.disabled = true;
-  e2eStatus.classList.add("active");
-  progressSection.style.display = "";
-  logArea.textContent = "";
-  fillDiscoverModelPanel("e2e", "");
   e2eLastStatus = {};
-
+  document.getElementById("runE2eBtn").disabled = true;
   updateE2eStatus({
     step: 1,
     brandsDiscovered: 0,
@@ -1392,7 +2052,7 @@ function runE2e() {
   fetch("/api/run-e2e", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(e2eBody),
+    body: JSON.stringify(e2eBody)
   })
     .then(function (res) { return res.json(); })
     .then(function (data) {
@@ -1404,19 +2064,10 @@ function runE2e() {
     .catch(function (err) {
       console.error("[runE2e] Error:", err);
       e2eRunning = false;
-      runE2eBtn.disabled = false;
+      document.getElementById("runE2eBtn").disabled = false;
       document.getElementById("e2eMeta").textContent = "Error: " + err.message;
     });
 }
-
-// ── Crawl & upload state per retailer ────────────────────────────────────
-var crawlingRetailers = {};
-var uploadingRetailers = {};
-var productUrlsCache = {};
-var overviewRetailers = [];
-/** From /api/retailers-overview: discovered brands with no matching config file yet. */
-var identifiedWithoutConfig = [];
-var dashboardToolbarWired = false;
 
 function recommendationRank(rec) {
   if (rec === "recommended") return 0;
@@ -1429,15 +2080,9 @@ function pipelineMatch(row, pipeline) {
   if (pipeline === "all") return true;
   var hasCrawl = row.crawl && row.crawl.totalUrls > 0;
   var up = row.uploadMatchesCurrentCrawl;
-  if (pipeline === "need_crawl") {
-    return row.recommendation === "recommended" && !hasCrawl;
-  }
-  if (pipeline === "need_upload") {
-    return hasCrawl && !up;
-  }
-  if (pipeline === "upload_done") {
-    return hasCrawl && up;
-  }
+  if (pipeline === "need_crawl") return row.recommendation === "recommended" && !hasCrawl;
+  if (pipeline === "need_upload") return hasCrawl && !up;
+  if (pipeline === "upload_done") return hasCrawl && up;
   return true;
 }
 
@@ -1449,8 +2094,8 @@ function getFilteredSortedRetailers() {
   var filterRec = filterRecEl ? filterRecEl.value : "all";
   var pipelineEl = document.getElementById("filterPipeline");
   var pipeline = pipelineEl ? pipelineEl.value : "all";
-
   var out = [];
+
   for (var i = 0; i < list.length; i++) {
     var row = list[i];
     if (filterRec !== "all" && row.recommendation !== filterRec) continue;
@@ -1462,23 +2107,15 @@ function getFilteredSortedRetailers() {
   var sortEl = document.getElementById("sortDashboard");
   var sortKey = sortEl ? sortEl.value : "rec";
   out.sort(function (a, b) {
-    if (sortKey === "name") {
-      return String(a.retailer).localeCompare(String(b.retailer));
-    }
+    if (sortKey === "name") return String(a.retailer).localeCompare(String(b.retailer));
     if (sortKey === "crawled") {
-      var ca = a.crawl ? new Date(a.crawl.crawledAt).getTime() : 0;
-      var cb = b.crawl ? new Date(b.crawl.crawledAt).getTime() : 0;
-      return cb - ca;
+      return (b.crawl ? new Date(b.crawl.crawledAt).getTime() : 0) - (a.crawl ? new Date(a.crawl.crawledAt).getTime() : 0);
     }
     if (sortKey === "uploaded") {
-      var ua = a.upload ? new Date(a.upload.uploadedAt).getTime() : 0;
-      var ub = b.upload ? new Date(b.upload.uploadedAt).getTime() : 0;
-      return ub - ua;
+      return (b.upload ? new Date(b.upload.uploadedAt).getTime() : 0) - (a.upload ? new Date(a.upload.uploadedAt).getTime() : 0);
     }
     if (sortKey === "urls") {
-      var na = a.crawl ? a.crawl.totalUrls : 0;
-      var nb = b.crawl ? b.crawl.totalUrls : 0;
-      return nb - na;
+      return (b.crawl ? b.crawl.totalUrls : 0) - (a.crawl ? a.crawl.totalUrls : 0);
     }
     var ra = recommendationRank(a.recommendation);
     var rb = recommendationRank(b.recommendation);
@@ -1500,120 +2137,263 @@ function wireDashboardToolbar() {
   }
 }
 
+function currentRetailerProcess(retailer) {
+  for (var i = 0; i < processOrder.length; i++) {
+    var proc = processMap[processOrder[i]];
+    if (proc && proc.retailer === retailer && proc.active) return proc;
+  }
+  for (var j = 0; j < processOrder.length; j++) {
+    var recent = processMap[processOrder[j]];
+    if (recent && recent.retailer === retailer) return recent;
+  }
+  return null;
+}
+
+function renderRetailerDetail() {
+  var panel = document.getElementById("retailerDetailPanel");
+  if (!panel) return;
+  if (!uiState.selectedRetailer) {
+    panel.innerHTML = '<div class="detail-empty-state">Select a retailer to inspect its config, product URLs, and current crawl or upload state.</div>';
+    return;
+  }
+
+  var row = findRetailerRow(uiState.selectedRetailer);
+  if (!row) {
+    panel.innerHTML = '<div class="detail-empty-state">The selected retailer is not visible with the current filters.</div>';
+    return;
+  }
+
+  var cfg = row.config || {};
+  var baseUrl = cfg.baseUrl || "";
+  var method = cfg.discovery && cfg.discovery.method ? cfg.discovery.method : "unknown";
+  var rec = row.recommendation || "unknown";
+  var badgeClass = rec === "recommended" ? "badge-recommended" : (rec === "usable" ? "badge-usable" : "badge-not-recommended");
+  var hasUrls = !!(row.crawl && row.crawl.totalUrls > 0);
+  var crawlLabel = hasUrls ? "Re-crawl URLs" : "Crawl URLs";
+  var currentProc = currentRetailerProcess(row.retailer);
+  var uploadSummary = row.upload
+    ? (row.uploadMatchesCurrentCrawl ? "Uploaded for current crawl" : "Upload is stale against the latest crawl")
+    : "No upload yet";
+  var crawlSummary = row.crawl
+    ? (row.crawl.totalUrls || 0) + " URLs found on " + new Date(row.crawl.crawledAt).toLocaleString()
+    : "No crawl yet";
+
+  if (hasUrls && !productUrlsCache[row.retailer] && !productUrlsLoading[row.retailer]) {
+    loadProductUrlsForRetailer(row.retailer);
+  }
+
+  var urlsMarkup = "";
+  if (hasUrls) {
+    var data = productUrlsCache[row.retailer];
+    if (productUrlsLoading[row.retailer]) {
+      urlsMarkup = '<div class="product-urls-list is-loading">Loading product URLs…</div>';
+    } else if (data && data.urls && data.urls.length) {
+      var links = [];
+      for (var i = 0; i < data.urls.length; i++) {
+        links.push('<a href="' + escHtml(data.urls[i]) + '" target="_blank" rel="noopener">' + escHtml(data.urls[i]) + "</a>");
+      }
+      urlsMarkup =
+        '<div class="product-urls-header">' +
+          '<span class="detail-note">' + data.totalUrls + ' URLs</span>' +
+          '<button type="button" class="btn-primary btn-small" data-copy-urls="' + escHtml(row.retailer) + '">Copy all URLs</button>' +
+        "</div>" +
+        '<div class="product-urls-list">' + links.join("") + "</div>";
+    } else {
+      urlsMarkup = '<div class="product-urls-list is-loading">No product URLs were returned for this retailer.</div>';
+    }
+  }
+
+  panel.innerHTML =
+    '<div class="detail-header">' +
+      '<div>' +
+        '<h3>' + escHtml(row.retailer) + "</h3>" +
+        '<div class="detail-meta" style="margin-top: 0.25rem;">' + escHtml(baseUrl || "No base URL") + "</div>" +
+      "</div>" +
+      '<div class="retailer-actions">' +
+        (baseUrl ? '<a class="config-site-link" href="' + escHtml(baseUrl) + '" target="_blank" rel="noopener">Visit site</a>' : "") +
+        '<button type="button" class="btn-primary btn-small" data-copy-json="' + escHtml(row.retailer) + '">Copy JSON</button>' +
+        '<button type="button" class="btn-primary btn-small crawl-btn" data-detail-crawl="' + escHtml(row.retailer) + '"' + (crawlingRetailers[row.retailer] ? " disabled" : "") + ">" + escHtml(crawlLabel) + "</button>" +
+        (hasUrls ? '<button type="button" class="btn-primary btn-small upload-btn" data-detail-upload="' + escHtml(row.retailer) + '"' + (uploadingRetailers[row.retailer] ? " disabled" : "") + '>Upload</button>' : "") +
+      "</div>" +
+    "</div>" +
+    '<div class="detail-summary-grid">' +
+      '<div class="detail-stat"><span>Recommendation</span><strong><span class="badge ' + badgeClass + '">' + escHtml(rec) + "</span></strong></div>" +
+      '<div class="detail-stat"><span>Discovery method</span><strong>' + escHtml(method) + "</strong></div>" +
+      '<div class="detail-stat"><span>Last crawl</span><strong>' + escHtml(crawlSummary) + "</strong></div>" +
+      '<div class="detail-stat"><span>Last upload</span><strong>' + escHtml(uploadSummary) + "</strong></div>" +
+    "</div>" +
+    (currentProc
+      ? '<div class="detail-disclosure" style="margin-top: 0.85rem; padding: 0.8rem 0.95rem;">' +
+          '<div class="detail-header">' +
+            '<div><strong>Current process</strong><div class="detail-subtext" style="margin-top: 0.2rem;">' + escHtml(currentProc.summary || "") + "</div></div>" +
+            '<button type="button" class="btn-secondary btn-small" data-open-process="' + escHtml(currentProc.id) + '">View process logs</button>' +
+          "</div>" +
+        "</div>"
+      : "") +
+    '<details class="detail-disclosure">' +
+      '<summary>Config JSON</summary>' +
+      '<div class="detail-disclosure-body"><pre class="config-json">' + escHtml(JSON.stringify(cfg, null, 2)) + "</pre></div>" +
+    "</details>" +
+    (hasUrls
+      ? '<details class="detail-disclosure">' +
+          '<summary>Product URLs (' + (row.crawl.totalUrls || 0) + ')</summary>' +
+          '<div class="detail-disclosure-body">' + urlsMarkup + "</div>" +
+        "</details>"
+      : "");
+
+  var copyJsonBtn = panel.querySelector("[data-copy-json]");
+  if (copyJsonBtn) {
+    copyJsonBtn.onclick = function () {
+      navigator.clipboard.writeText(JSON.stringify(cfg, null, 2)).then(function () {
+        showToast("Copied config JSON");
+      });
+    };
+  }
+  var copyUrlsBtn = panel.querySelector("[data-copy-urls]");
+  if (copyUrlsBtn) {
+    copyUrlsBtn.onclick = function () {
+      var retailer = this.getAttribute("data-copy-urls");
+      var data = productUrlsCache[retailer];
+      if (!data || !data.urls) return;
+      navigator.clipboard.writeText(data.urls.join("\n")).then(function () {
+        showToast("Copied " + data.totalUrls + " URLs");
+      });
+    };
+  }
+  var detailCrawlBtn = panel.querySelector("[data-detail-crawl]");
+  if (detailCrawlBtn) {
+    detailCrawlBtn.onclick = function () {
+      startCrawl(this.getAttribute("data-detail-crawl"));
+    };
+  }
+  var detailUploadBtn = panel.querySelector("[data-detail-upload]");
+  if (detailUploadBtn) {
+    detailUploadBtn.onclick = function () {
+      startUpload(this.getAttribute("data-detail-upload"));
+    };
+  }
+  var openProcessBtn = panel.querySelector("[data-open-process]");
+  if (openProcessBtn) {
+    openProcessBtn.onclick = function () {
+      setSelectedProcess(this.getAttribute("data-open-process"));
+    };
+  }
+}
+
+function renderDashboardHint(rowsLength) {
+  var hint = document.getElementById("dashboardBulkHint");
+  if (!hint) return;
+  if (bulkHintOverride) {
+    hint.textContent = bulkHintOverride;
+    return;
+  }
+  hint.textContent = "Showing " + rowsLength + " of " + overviewRetailers.length + " retailer(s). Select a retailer to inspect JSON and URLs.";
+}
+
 function renderDashboard() {
   var container = document.getElementById("configList");
   if (!container) return;
 
   if (overviewRetailers.length === 0) {
     container.innerHTML = '<div class="empty-state">No configs generated yet.</div>';
-    var crawlAllBtn = document.getElementById("crawlAllRecommendedBtn");
-    var uploadAllBtn = document.getElementById("uploadAllProductUrlsBtn");
-    if (crawlAllBtn) crawlAllBtn.disabled = true;
-    if (uploadAllBtn) uploadAllBtn.disabled = true;
+    document.getElementById("crawlAllRecommendedBtn").disabled = true;
+    document.getElementById("uploadAllProductUrlsBtn").disabled = true;
+    uiState.selectedRetailer = null;
+    renderRetailerDetail();
+    renderDashboardHint(0);
+    updateOverviewCards();
     return;
   }
 
   var rows = getFilteredSortedRetailers();
-  container.innerHTML = "";
-
-  var hasRecommendedGlobal = false;
-  var hasAnyUrlsGlobal = false;
-  for (var g = 0; g < overviewRetailers.length; g++) {
-    var gr = overviewRetailers[g];
-    if (gr.recommendation === "recommended") hasRecommendedGlobal = true;
-    if (gr.crawl && gr.crawl.totalUrls > 0) hasAnyUrlsGlobal = true;
+  if (!rows.length) {
+    container.innerHTML = '<div class="empty-state">No retailers match the current filters.</div>';
+    uiState.selectedRetailer = null;
+    renderRetailerDetail();
+    renderDashboardHint(0);
+    updateOverviewCards();
+    return;
   }
 
+  var hasRecommendedVisible = false;
+  var hasAnyUrlsVisible = false;
+  var selectedStillVisible = false;
   for (var i = 0; i < rows.length; i++) {
-    var entry = rows[i];
-    var cfg = entry.config;
-    var rec = entry.recommendation || "unknown";
-    var method = (cfg && cfg.discovery && cfg.discovery.method) || "unknown";
-    var badgeClass = rec === "recommended" ? "badge-recommended"
-      : rec === "usable" ? "badge-usable" : "badge-not-recommended";
+    if (rows[i].recommendation === "recommended") hasRecommendedVisible = true;
+    if (rows[i].crawl && rows[i].crawl.totalUrls > 0) hasAnyUrlsVisible = true;
+    if (rows[i].retailer === uiState.selectedRetailer) selectedStillVisible = true;
+  }
+  if (!selectedStillVisible) uiState.selectedRetailer = rows[0].retailer;
 
+  var html = [];
+  for (var j = 0; j < rows.length; j++) {
+    var entry = rows[j];
+    var cfg = entry.config || {};
+    var rec = entry.recommendation || "unknown";
+    var badgeClass = rec === "recommended" ? "badge-recommended" : (rec === "usable" ? "badge-usable" : "badge-not-recommended");
+    var method = cfg.discovery && cfg.discovery.method ? cfg.discovery.method : "unknown";
     var hasUrls = !!(entry.crawl && entry.crawl.totalUrls > 0);
     var urlCount = hasUrls ? entry.crawl.totalUrls : 0;
-    var crawlLabel = hasUrls ? "Re-crawl URLs" : "Crawl URLs";
-    var baseUrl = (cfg && cfg.baseUrl) || "";
-    var siteLink = baseUrl
-      ? '<a href="' + escHtml(baseUrl) + '" target="_blank" rel="noopener" class="config-site-link" title="Visit website">\u2197</a>'
-      : "";
-
+    var process = currentRetailerProcess(entry.retailer);
     var uploadPill = "";
     if (hasUrls && entry.uploadMatchesCurrentCrawl) {
-      uploadPill = '<span class="status-pill done" title="Upload done for this crawl snapshot">Uploaded</span>';
+      uploadPill = '<span class="status-pill done">Uploaded</span>';
     } else if (hasUrls && entry.upload && !entry.uploadMatchesCurrentCrawl) {
-      uploadPill = '<span class="status-pill" title="Re-crawl changed URLs; upload again">Upload stale</span>';
+      uploadPill = '<span class="status-pill">Upload stale</span>';
     }
+    if (crawlingRetailers[entry.retailer]) uploadPill += '<span class="detail-chip running">Crawl running</span>';
+    if (uploadingRetailers[entry.retailer]) uploadPill += '<span class="detail-chip running">Upload running</span>';
 
-    var div = document.createElement("div");
-    div.className = "config-entry";
-    div.setAttribute("data-retailer", entry.retailer);
-    div.innerHTML =
-      '<div class="config-header">' +
-        '<span class="config-name">' + escHtml(entry.retailer) + '</span>' + siteLink +
-        '<span class="badge ' + badgeClass + '">' + escHtml(rec) + '</span>' +
-        '<span class="method-tag">' + escHtml(method) + '</span>' +
-        (hasUrls ? '<span class="method-tag">' + urlCount + ' URLs</span>' : '') +
-        uploadPill +
-        '<button class="btn-primary btn-small crawl-btn" data-retailer="' + escHtml(entry.retailer) + '">' + crawlLabel + '</button>' +
-        (hasUrls ? '<button class="btn-primary btn-small upload-btn" data-retailer="' + escHtml(entry.retailer) + '">Upload</button>' : '') +
-      '</div>' +
-      '<div class="crawl-status" data-crawl-status="' + escHtml(entry.retailer) + '">' +
-        '<span class="crawl-progress-text"></span>' +
-        '<div class="crawl-log"></div>' +
-      '</div>' +
-      '<div class="config-body">' +
-        '<div class="config-json" style="position:relative">' +
-          '<button class="btn-primary btn-small copy-btn">Copy JSON</button>' +
-          '<pre style="margin:0">' + escHtml(JSON.stringify(cfg, null, 2)) + '</pre>' +
-        '</div>' +
-      '</div>' +
-      '<div class="product-urls-panel" data-urls-panel="' + escHtml(entry.retailer) + '"></div>';
+    html.push(
+      '<article class="retailer-list-item' + (uiState.selectedRetailer === entry.retailer ? " is-selected" : "") + '">' +
+        '<div class="retailer-list-header">' +
+          '<div>' +
+            '<div class="retailer-name">' + escHtml(entry.retailer) + "</div>" +
+            '<div class="retailer-list-subrow" style="margin-top: 0.35rem;">' +
+              '<span class="badge ' + badgeClass + '">' + escHtml(rec) + "</span>" +
+              '<span class="method-tag">' + escHtml(method) + "</span>" +
+              (hasUrls ? '<span class="method-tag">' + urlCount + ' URLs</span>' : '<span class="method-tag">No URLs crawled yet</span>') +
+              uploadPill +
+            "</div>" +
+          "</div>" +
+          '<div class="retailer-actions">' +
+            '<button type="button" class="btn-secondary btn-small" data-view-retailer="' + escHtml(entry.retailer) + '">View details</button>' +
+            '<button type="button" class="btn-primary btn-small crawl-btn" data-crawl-retailer="' + escHtml(entry.retailer) + '"' + (crawlingRetailers[entry.retailer] ? " disabled" : "") + ">" + escHtml(hasUrls ? "Re-crawl URLs" : "Crawl URLs") + "</button>" +
+            (hasUrls ? '<button type="button" class="btn-primary btn-small upload-btn" data-upload-retailer="' + escHtml(entry.retailer) + '"' + (uploadingRetailers[entry.retailer] ? " disabled" : "") + '>Upload</button>' : "") +
+          "</div>" +
+        "</div>" +
+        '<div class="retailer-meta">' + escHtml(process ? process.summary || process.statusText : (hasUrls ? "Ready for upload review." : "Select to inspect config and next step.")) + "</div>" +
+      "</article>"
+    );
+  }
+  container.innerHTML = html.join("");
 
-    (function (el, retailer) {
-      el.querySelector(".config-header").onclick = function (e) {
-        if (e.target.classList.contains("crawl-btn") || e.target.classList.contains("upload-btn") || e.target.classList.contains("config-site-link")) return;
-        el.querySelector(".config-body").classList.toggle("open");
-      };
-      el.querySelector(".copy-btn").onclick = function (e) {
-        e.stopPropagation();
-        copyJson(el);
-      };
-      el.querySelector(".crawl-btn").onclick = function (e) {
-        e.stopPropagation();
-        startCrawl(retailer);
-      };
-      var uploadBtn = el.querySelector(".upload-btn");
-      if (uploadBtn) {
-        uploadBtn.onclick = function (e) {
-          e.stopPropagation();
-          startUpload(retailer);
-        };
-      }
-    })(div, entry.retailer);
-
-    container.appendChild(div);
-
-    if (hasUrls) {
-      loadProductUrlsForRetailer(entry.retailer);
-    }
+  var viewBtns = container.querySelectorAll("[data-view-retailer]");
+  for (var v = 0; v < viewBtns.length; v++) {
+    viewBtns[v].onclick = function () {
+      uiState.selectedRetailer = this.getAttribute("data-view-retailer");
+      renderDashboard();
+      renderRetailerDetail();
+    };
+  }
+  var crawlBtns = container.querySelectorAll("[data-crawl-retailer]");
+  for (var c = 0; c < crawlBtns.length; c++) {
+    crawlBtns[c].onclick = function () {
+      startCrawl(this.getAttribute("data-crawl-retailer"));
+    };
+  }
+  var uploadBtns = container.querySelectorAll("[data-upload-retailer]");
+  for (var u = 0; u < uploadBtns.length; u++) {
+    uploadBtns[u].onclick = function () {
+      startUpload(this.getAttribute("data-upload-retailer"));
+    };
   }
 
-  if (rows.length === 0) {
-    container.innerHTML = '<div class="empty-state">No retailers match the current filters.</div>';
-  }
-
-  var crawlAllBtn = document.getElementById("crawlAllRecommendedBtn");
-  var uploadAllBtn = document.getElementById("uploadAllProductUrlsBtn");
-  if (crawlAllBtn) crawlAllBtn.disabled = !hasRecommendedGlobal;
-  if (uploadAllBtn) uploadAllBtn.disabled = !hasAnyUrlsGlobal;
-
-  var hint = document.getElementById("dashboardBulkHint");
-  if (hint) {
-    hint.textContent = "Showing " + rows.length + " of " + overviewRetailers.length + " retailer(s). Bulk actions use the same filters + checkboxes below.";
-  }
+  document.getElementById("crawlAllRecommendedBtn").disabled = !hasRecommendedVisible;
+  document.getElementById("uploadAllProductUrlsBtn").disabled = !hasAnyUrlsVisible;
+  renderDashboardHint(rows.length);
+  renderRetailerDetail();
+  updateOverviewCards();
 }
 
 function fmtUsd(x) {
@@ -1657,12 +2437,11 @@ function loadOverview() {
       console.error("[loadOverview] Error:", err);
       overviewRetailers = [];
       identifiedWithoutConfig = [];
-      container.innerHTML = '<div class="empty-state">Could not load configs.</div>';
+      if (container) container.innerHTML = '<div class="empty-state">Could not load configs.</div>';
+      renderRetailerDetail();
       renderIdentifiedBacklog();
-      var crawlAllBtn = document.getElementById("crawlAllRecommendedBtn");
-      var uploadAllBtn = document.getElementById("uploadAllProductUrlsBtn");
-      if (crawlAllBtn) crawlAllBtn.disabled = true;
-      if (uploadAllBtn) uploadAllBtn.disabled = true;
+      document.getElementById("crawlAllRecommendedBtn").disabled = true;
+      document.getElementById("uploadAllProductUrlsBtn").disabled = true;
     });
 }
 
@@ -1670,14 +2449,12 @@ function renderIdentifiedBacklog() {
   var listEl = document.getElementById("identifiedBacklogList");
   var badge = document.getElementById("identifiedBacklogBadge");
   if (!listEl || !badge) return;
-
   var n = identifiedWithoutConfig.length;
   badge.textContent = String(n);
   badge.className = "backlog-badge" + (n === 0 ? " is-zero" : "");
-
   if (n === 0) {
-    listEl.innerHTML =
-      '<div class="backlog-empty">No brands waiting for a config (all discovered URLs match a config, or the discovery list is empty).</div>';
+    listEl.innerHTML = '<div class="backlog-empty">No brands waiting for a config.</div>';
+    updateOverviewCards();
     return;
   }
 
@@ -1690,25 +2467,22 @@ function renderIdentifiedBacklog() {
       '<div class="backlog-entry">' +
         '<span class="backlog-name">' + escHtml(name) + "</span>" +
         '<span class="backlog-url">' + escHtml(url) + "</span>" +
-        '<button type="button" class="btn-primary btn-small backlog-add-btn" data-backlog-idx="' +
-        i +
-        '">Add to queue</button>' +
-        "</div>"
+        '<button type="button" class="btn-primary btn-small backlog-add-btn" data-backlog-idx="' + i + '">Add to queue</button>' +
+      "</div>"
     );
   }
   listEl.innerHTML = html.join("");
 
   var btns = listEl.querySelectorAll(".backlog-add-btn");
   for (var b = 0; b < btns.length; b++) {
-    (function (btn) {
-      btn.onclick = function () {
-        var idx = parseInt(btn.getAttribute("data-backlog-idx"), 10);
-        if (!isNaN(idx) && identifiedWithoutConfig[idx] && identifiedWithoutConfig[idx].url) {
-          addBacklogUrlToQueue(identifiedWithoutConfig[idx].url);
-        }
-      };
-    })(btns[b]);
+    btns[b].onclick = function () {
+      var idx = parseInt(this.getAttribute("data-backlog-idx"), 10);
+      if (!isNaN(idx) && identifiedWithoutConfig[idx] && identifiedWithoutConfig[idx].url) {
+        addBacklogUrlToQueue(identifiedWithoutConfig[idx].url);
+      }
+    };
   }
+  updateOverviewCards();
 }
 
 function addBacklogUrlToQueue(url) {
@@ -1724,11 +2498,10 @@ function addBacklogUrlToQueue(url) {
     }
   }
   queue.push(result.url);
-  showStatus("Added to queue: " + result.url, "success", 3000);
   renderQueue();
+  showStatus("Added to queue: " + result.url, "success", 3000);
 }
 
-// ── Crawl all recommended retailers in parallel ────────────────────────
 function crawlAllRecommended() {
   var includeCrawled = document.getElementById("crawlIncludeCrawled") && document.getElementById("crawlIncludeCrawled").checked;
   var rows = getFilteredSortedRetailers();
@@ -1743,111 +2516,110 @@ function crawlAllRecommended() {
     }
     if (r.retailer && !crawlingRetailers[r.retailer]) recommended.push(r.retailer);
   }
-  if (recommended.length === 0) {
-    showStatus("No recommended configs to crawl for current filters (or all already crawling). " + (skipped ? "(" + skipped + " skipped: already crawled)" : ""), "info", 5000);
+  if (!recommended.length) {
+    showStatus("No recommended configs to crawl for current filters." + (skipped ? " (" + skipped + " already crawled)" : ""), "info", 5000);
     return;
   }
-  var btn = document.getElementById("crawlAllRecommendedBtn");
-  if (btn) btn.disabled = true;
-
-  var hint = document.getElementById("dashboardBulkHint");
-  if (hint) {
-    hint.textContent = "Crawling " + recommended.length + " retailer(s)" + (skipped ? "; skipped " + skipped + " already crawled" : "") + ".";
-  }
-
+  bulkHintOverride = "Crawling " + recommended.length + " retailer(s)" + (skipped ? "; skipped " + skipped + " already crawled" : "") + ".";
+  renderDashboard();
   var completed = 0;
-  var total = recommended.length;
   function onOneComplete() {
     completed++;
-    if (completed >= total) {
-      if (btn) btn.disabled = false;
-      if (hint) {
-        hint.textContent = "Showing " + getFilteredSortedRetailers().length + " of " + overviewRetailers.length + " retailer(s). Bulk actions use the same filters + checkboxes below.";
-      }
+    if (completed >= recommended.length) {
+      bulkHintOverride = "";
+      renderDashboard();
     }
   }
-
   for (var j = 0; j < recommended.length; j++) {
     startCrawl(recommended[j], onOneComplete);
   }
 }
 
-// ── Start crawl for a retailer ──────────────────────────────────────────
 function startCrawl(retailer, onComplete) {
   if (crawlingRetailers[retailer]) return;
   crawlingRetailers[retailer] = true;
-
-  var entry = document.querySelector('[data-retailer="' + retailer + '"]');
-  if (!entry) {
-    crawlingRetailers[retailer] = false;
-    if (typeof onComplete === "function") onComplete();
-    return;
-  }
-
-  var btn = entry.querySelector(".crawl-btn");
-  btn.disabled = true;
-  btn.textContent = "Crawling...";
-
-  var statusDiv = entry.querySelector('[data-crawl-status="' + retailer + '"]');
-  statusDiv.classList.add("active");
-  var progressText = statusDiv.querySelector(".crawl-progress-text");
-  var logDiv = statusDiv.querySelector(".crawl-log");
-  progressText.textContent = "Starting crawl...";
-  logDiv.textContent = "";
+  var processId = "crawl:" + retailer;
+  registerRetailerProcess(processId, "Crawl: " + retailer, retailer, "Product URL discovery");
+  renderDashboard();
+  renderRetailerDetail();
 
   fetch("/api/crawl/" + encodeURIComponent(retailer), { method: "POST" })
     .then(function (res) { return res.json(); })
     .then(function (data) {
       if (data.error) throw new Error(data.error);
-
       var es = new EventSource("/api/progress/" + data.jobId);
       es.onmessage = function (e) {
         var msg = JSON.parse(e.data);
         if (msg.type === "log") {
-          logDiv.textContent += msg.msg + "\n";
-          logDiv.scrollTop = logDiv.scrollHeight;
+          appendProcessLog(processId, msg.msg);
         } else if (msg.type === "crawl-progress") {
-          progressText.textContent = "Crawling... " + msg.count + " product URLs found";
+          upsertProcess({
+            id: processId,
+            statusText: "Running",
+            tone: "running",
+            summary: "Crawling… " + msg.count + " product URLs found",
+            metrics: [msg.count + " product URLs found so far"]
+          });
         } else if (msg.type === "done") {
           es.close();
           crawlingRetailers[retailer] = false;
-          btn.disabled = false;
-
+          delete productUrlsCache[retailer];
+          delete productUrlsLoading[retailer];
           if (msg.error) {
-            progressText.textContent = "Crawl failed: " + msg.error;
-            btn.textContent = "Retry Crawl";
+            upsertProcess({
+              id: processId,
+              active: false,
+              tone: "error",
+              statusText: "Failed",
+              summary: "Crawl failed: " + msg.error
+            });
           } else {
-            progressText.textContent = "Done \u2014 " + (msg.totalUrls || 0) + " product URLs found";
-            btn.textContent = "Re-crawl URLs";
+            upsertProcess({
+              id: processId,
+              active: false,
+              tone: "success",
+              statusText: "Complete",
+              summary: "Done — " + (msg.totalUrls || 0) + " product URLs found",
+              metrics: [(msg.totalUrls || 0) + " product URLs found"]
+            });
             loadOverview();
           }
-
-          setTimeout(function () {
-            statusDiv.classList.remove("active");
-          }, 5000);
+          renderDashboard();
+          renderRetailerDetail();
           if (typeof onComplete === "function") onComplete();
         }
       };
       es.onerror = function () {
         es.close();
         crawlingRetailers[retailer] = false;
-        btn.disabled = false;
-        btn.textContent = "Retry Crawl";
-        progressText.textContent = "Connection lost during crawl.";
+        upsertProcess({
+          id: processId,
+          active: false,
+          tone: "error",
+          statusText: "Disconnected",
+          summary: "Connection lost during crawl."
+        });
+        renderDashboard();
+        renderRetailerDetail();
         if (typeof onComplete === "function") onComplete();
       };
     })
     .catch(function (err) {
       console.error("[startCrawl] Error:", err);
       crawlingRetailers[retailer] = false;
-      btn.disabled = false;
-      btn.textContent = "Retry Crawl";
-      progressText.textContent = "Error: " + err.message;
+      upsertProcess({
+        id: processId,
+        active: false,
+        tone: "error",
+        statusText: "Failed",
+        summary: err.message
+      });
+      renderDashboard();
+      renderRetailerDetail();
       if (typeof onComplete === "function") onComplete();
     });
 }
 
-// ── Upload all product URLs (limited concurrency — avoids too many SSE connections per host) ──
 var BULK_UPLOAD_CONCURRENCY = 3;
 
 function uploadAllProductUrls() {
@@ -1864,192 +2636,152 @@ function uploadAllProductUrls() {
     }
     if (r.retailer && !uploadingRetailers[r.retailer]) withUrls.push(r.retailer);
   }
-  if (withUrls.length === 0) {
-    showStatus("No retailers need upload for current filters (or all already uploading). " + (skipped ? "(" + skipped + " skipped: already uploaded for this crawl)" : ""), "info", 5000);
+  if (!withUrls.length) {
+    showStatus("No retailers need upload for current filters." + (skipped ? " (" + skipped + " already uploaded)" : ""), "info", 5000);
     return;
   }
-  var btn = document.getElementById("uploadAllProductUrlsBtn");
-  if (btn) btn.disabled = true;
-
-  var hint = document.getElementById("dashboardBulkHint");
-  if (hint) {
-    hint.textContent = "Uploading " + withUrls.length + " retailer(s)" + (skipped ? "; skipped " + skipped + " already done" : "") + " (up to " + BULK_UPLOAD_CONCURRENCY + " at a time).";
-  }
+  bulkHintOverride = "Uploading " + withUrls.length + " retailer(s)" + (skipped ? "; skipped " + skipped + " already done" : "") + " (up to " + BULK_UPLOAD_CONCURRENCY + " at a time).";
+  renderDashboard();
 
   var completed = 0;
-  var total = withUrls.length;
   var idx = 0;
   var active = 0;
-
-  function maybeFinishBulk() {
-    if (completed >= total) {
-      if (btn) btn.disabled = false;
-      if (hint) {
-        hint.textContent = "Showing " + getFilteredSortedRetailers().length + " of " + overviewRetailers.length + " retailer(s). Bulk actions use the same filters + checkboxes below.";
-      }
+  function finishOne() {
+    active--;
+    completed++;
+    if (completed >= withUrls.length) {
+      bulkHintOverride = "";
+      renderDashboard();
+    } else {
+      scheduleNext();
     }
   }
-
   function scheduleNext() {
     while (active < BULK_UPLOAD_CONCURRENCY && idx < withUrls.length) {
       active++;
-      var retailer = withUrls[idx++];
-      startUpload(retailer, function () {
-        active--;
-        completed++;
-        maybeFinishBulk();
-        scheduleNext();
-      });
+      startUpload(withUrls[idx++], finishOne);
     }
   }
-
   scheduleNext();
 }
 
-// ── Start upload for a retailer ──────────────────────────────────────────
 function startUpload(retailer, onComplete) {
   if (uploadingRetailers[retailer]) return;
   uploadingRetailers[retailer] = true;
-
-  var entry = document.querySelector('[data-retailer="' + retailer + '"]');
-  if (!entry) {
-    uploadingRetailers[retailer] = false;
-    if (typeof onComplete === "function") onComplete();
-    return;
-  }
-
-  var btn = entry.querySelector(".upload-btn");
-  btn.disabled = true;
-  btn.textContent = "Uploading...";
-
-  var statusDiv = entry.querySelector('[data-crawl-status="' + retailer + '"]');
-  statusDiv.classList.add("active");
-  var progressText = statusDiv.querySelector(".crawl-progress-text");
-  var logDiv = statusDiv.querySelector(".crawl-log");
-  progressText.textContent = "Starting upload...";
-  logDiv.textContent = "";
+  var processId = "upload:" + retailer;
+  registerRetailerProcess(processId, "Upload: " + retailer, retailer, "Product URL upload");
+  renderDashboard();
+  renderRetailerDetail();
 
   fetch("/api/upload/" + encodeURIComponent(retailer), { method: "POST" })
     .then(function (res) { return res.json(); })
     .then(function (data) {
       if (data.error) throw new Error(data.error);
-
       var es = new EventSource("/api/progress/" + data.jobId);
       es.onmessage = function (e) {
         var msg = JSON.parse(e.data);
         if (msg.type === "log") {
-          logDiv.textContent += msg.msg + "\n";
-          logDiv.scrollTop = logDiv.scrollHeight;
+          appendProcessLog(processId, msg.msg);
         } else if (msg.type === "upload-progress") {
-          progressText.textContent = "Uploading... " + msg.uploaded + " done, " + msg.skipped + " skipped, " + msg.failed + " failed / " + msg.total + " total";
+          upsertProcess({
+            id: processId,
+            statusText: "Running",
+            tone: "running",
+            summary: "Uploading… " + msg.uploaded + " uploaded, " + msg.skipped + " skipped, " + msg.failed + " failed",
+            metrics: [
+              "Uploaded: " + msg.uploaded,
+              "Skipped: " + msg.skipped,
+              "Failed: " + msg.failed,
+              "Total: " + msg.total
+            ]
+          });
         } else if (msg.type === "done") {
           es.close();
           uploadingRetailers[retailer] = false;
-          btn.disabled = false;
-          btn.textContent = "Upload";
-
           if (msg.error) {
-            progressText.textContent = "Upload failed: " + msg.error;
+            upsertProcess({
+              id: processId,
+              active: false,
+              tone: "error",
+              statusText: "Failed",
+              summary: "Upload failed: " + msg.error
+            });
           } else {
-            progressText.textContent = "Done \u2014 " + (msg.uploaded || 0) + " uploaded, " + (msg.skipped || 0) + " skipped, " + (msg.failed || 0) + " failed";
+            upsertProcess({
+              id: processId,
+              active: false,
+              tone: "success",
+              statusText: "Complete",
+              summary: "Done — " + (msg.uploaded || 0) + " uploaded, " + (msg.skipped || 0) + " skipped, " + (msg.failed || 0) + " failed",
+              metrics: [
+                "Uploaded: " + (msg.uploaded || 0),
+                "Skipped: " + (msg.skipped || 0),
+                "Failed: " + (msg.failed || 0)
+              ]
+            });
             loadOverview();
           }
-
-          setTimeout(function () {
-            statusDiv.classList.remove("active");
-          }, 8000);
+          renderDashboard();
+          renderRetailerDetail();
           if (typeof onComplete === "function") onComplete();
         }
       };
       es.onerror = function () {
         es.close();
         uploadingRetailers[retailer] = false;
-        btn.disabled = false;
-        btn.textContent = "Upload";
-        progressText.textContent = "Connection lost during upload.";
+        upsertProcess({
+          id: processId,
+          active: false,
+          tone: "error",
+          statusText: "Disconnected",
+          summary: "Connection lost during upload."
+        });
+        renderDashboard();
+        renderRetailerDetail();
         if (typeof onComplete === "function") onComplete();
       };
     })
     .catch(function (err) {
       console.error("[startUpload] Error:", err);
       uploadingRetailers[retailer] = false;
-      btn.disabled = false;
-      btn.textContent = "Upload";
-      progressText.textContent = "Error: " + err.message;
+      upsertProcess({
+        id: processId,
+        active: false,
+        tone: "error",
+        statusText: "Failed",
+        summary: err.message
+      });
+      renderDashboard();
+      renderRetailerDetail();
       if (typeof onComplete === "function") onComplete();
     });
 }
 
-// ── Load product URLs for a retailer ────────────────────────────────────
 function loadProductUrlsForRetailer(retailer) {
+  if (productUrlsLoading[retailer]) return;
+  productUrlsLoading[retailer] = true;
+  renderRetailerDetail();
   fetch("/api/product-urls/" + encodeURIComponent(retailer))
     .then(function (res) {
       if (!res.ok) return null;
       return res.json();
     })
     .then(function (data) {
-      if (!data || !data.urls || data.urls.length === 0) return;
-
-      productUrlsCache[retailer] = data;
-      var panel = document.querySelector('[data-urls-panel="' + retailer + '"]');
-      if (!panel) return;
-
-      panel.classList.add("has-urls");
-
-      var crawledDate = data.crawledAt ? new Date(data.crawledAt).toLocaleString() : "";
-
-      panel.innerHTML =
-        '<div class="product-urls-header">' +
-          '<span class="url-count">' + data.totalUrls + ' Product URLs</span>' +
-          '<button class="btn-primary btn-small copy-urls-btn">Copy All URLs</button>' +
-          '<span class="crawl-meta">Crawled ' + escHtml(crawledDate) + ' via ' + escHtml(data.method) + '</span>' +
-        '</div>' +
-        '<div class="product-urls-list"></div>';
-
-      var listDiv = panel.querySelector(".product-urls-list");
-      for (var i = 0; i < data.urls.length; i++) {
-        var a = document.createElement("a");
-        a.href = data.urls[i];
-        a.target = "_blank";
-        a.rel = "noopener";
-        a.textContent = data.urls[i];
-        listDiv.appendChild(a);
+      if (data && data.urls && data.urls.length) {
+        productUrlsCache[retailer] = data;
+      } else {
+        delete productUrlsCache[retailer];
       }
-
-      panel.querySelector(".copy-urls-btn").onclick = function (e) {
-        e.stopPropagation();
-        navigator.clipboard.writeText(data.urls.join("\n")).then(function () {
-          var toast = document.getElementById("copiedToast");
-          toast.textContent = "Copied " + data.totalUrls + " URLs";
-          toast.classList.add("show");
-          setTimeout(function () {
-            toast.classList.remove("show");
-            toast.textContent = "Copied to clipboard";
-          }, 1500);
-        });
-      };
+      delete productUrlsLoading[retailer];
+      renderRetailerDetail();
     })
     .catch(function (err) {
       console.error("[loadProductUrls] Error for " + retailer + ":", err);
+      delete productUrlsLoading[retailer];
+      renderRetailerDetail();
     });
 }
 
-function copyJson(entry) {
-  var pre = entry.querySelector("pre");
-  navigator.clipboard.writeText(pre.textContent).then(function () {
-    var toast = document.getElementById("copiedToast");
-    toast.classList.add("show");
-    setTimeout(function () { toast.classList.remove("show"); }, 1500);
-  });
-}
-
-function escHtml(s) {
-  var d = document.createElement("div");
-  d.textContent = s == null ? "" : String(s);
-  return d.innerHTML;
-}
-
-// ── History modal (discovery master list) ────────────────────────────────
 function showHistoryModal() {
   var modal = document.getElementById("historyModal");
   var listEl = document.getElementById("historyModalList");
@@ -2069,20 +2801,17 @@ function showHistoryModal() {
         var b = data.brands[i];
         if (b && b.url && !seen.has(b.url)) {
           seen.add(b.url);
-          items.push('<div><span class="brand-name">' + escHtml(b.name || "") + '</span> \u2014 <a href="' + escHtml(b.url) + '" target="_blank" rel="noopener">' + escHtml(b.url) + '</a></div>');
+          items.push('<div><span class="brand-name">' + escHtml(b.name || "") + '</span> — <a href="' + escHtml(b.url) + '" target="_blank" rel="noopener">' + escHtml(b.url) + "</a></div>");
         }
       }
       for (var j = 0; j < (data.urls || []).length; j++) {
         var u = data.urls[j];
         if (u && !seen.has(u)) {
           seen.add(u);
-          items.push('<div><a href="' + escHtml(u) + '" target="_blank" rel="noopener">' + escHtml(u) + '</a></div>');
+          items.push('<div><a href="' + escHtml(u) + '" target="_blank" rel="noopener">' + escHtml(u) + "</a></div>");
         }
       }
-      var total = seen.size;
-      summaryEl.innerHTML =
-        "<strong>" + total + "</strong> retailer" + (total === 1 ? "" : "s") +
-        " in the exclusion list (unique URLs).";
+      summaryEl.innerHTML = "<strong>" + seen.size + "</strong> retailer" + (seen.size === 1 ? "" : "s") + " in the exclusion list (unique URLs).";
 
       var hist = data.history || [];
       if (hist.length > 0) {
@@ -2105,15 +2834,7 @@ function showHistoryModal() {
             deltaStr = '<span class="history-snapshot-delta flat">no change</span>';
           }
           var when = row.at ? new Date(row.at).toLocaleString() : "";
-          snapParts.push(
-            '<div class="history-snapshot-row">' +
-              escHtml(when) +
-              " \u2014 <strong>" +
-              row.count +
-              "</strong> " +
-              deltaStr +
-              "</div>"
-          );
+          snapParts.push('<div class="history-snapshot-row">' + escHtml(when) + " — <strong>" + row.count + "</strong> " + deltaStr + "</div>");
         }
         snapsEl.innerHTML = snapParts.join("");
         snapsEl.style.display = "block";
@@ -2131,7 +2852,6 @@ function hideHistoryModal() {
   document.getElementById("historyModal").style.display = "none";
 }
 
-// ── Attach all event listeners ──────────────────────────────────────────
 document.getElementById("runE2eBtn").addEventListener("click", runE2e);
 document.getElementById("discoverBtn").addEventListener("click", runDiscover);
 document.getElementById("discoverAddToQueueBtn").addEventListener("click", addDiscoveredToQueue);
@@ -2148,7 +2868,9 @@ document.getElementById("historyBtn").addEventListener("click", showHistoryModal
 document.getElementById("historyModalClose").addEventListener("click", hideHistoryModal);
 document.getElementById("historyModalBackdrop").addEventListener("click", hideHistoryModal);
 
-// ── Initial load ────────────────────────────────────────────────────────
+renderQueue();
+renderActiveProcesses();
+renderRetailerDetail();
 refreshCostMetrics();
 setInterval(refreshCostMetrics, 60000);
 loadOverview();
