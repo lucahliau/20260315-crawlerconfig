@@ -2393,7 +2393,7 @@ function getFilteredSortedRetailers() {
 function wireDashboardToolbar() {
   if (dashboardToolbarWired) return;
   dashboardToolbarWired = true;
-  var ids = ["dashboardSearch", "filterRecommendation", "filterExploreStatus", "filterPipeline", "sortDashboard"];
+  var ids = ["dashboardSearch", "filterRecommendation", "filterExploreStatus", "filterPipeline", "sortDashboard", "crawlIncludeCrawled"];
   for (var i = 0; i < ids.length; i++) {
     var el = document.getElementById(ids[i]);
     if (!el) continue;
@@ -2668,12 +2668,13 @@ function renderDashboard() {
     return;
   }
 
+  var includeCrawled = document.getElementById("crawlIncludeCrawled") && document.getElementById("crawlIncludeCrawled").checked;
   var hasRecommendedVisible = false;
   var hasAnyUrlsVisible = false;
   var hasRetryVisible = false;
   var selectedStillVisible = false;
   for (var i = 0; i < rows.length; i++) {
-    if (rows[i].recommendation === "recommended") hasRecommendedVisible = true;
+    if (isCrawlAllRecommendedCandidate(rows[i], includeCrawled)) hasRecommendedVisible = true;
     if (rows[i].crawl && rows[i].crawl.totalUrls > 0) hasAnyUrlsVisible = true;
     if (isExploreIncomplete(rows[i])) hasRetryVisible = true;
     if (rows[i].retailer === uiState.selectedRetailer) selectedStillVisible = true;
@@ -3087,6 +3088,13 @@ function retryVisibleExplore() {
     processId: "explore:retry-visible",
     hintText: "Retrying visible failed/non-completed explore rows."
   });
+}
+
+function isCrawlAllRecommendedCandidate(row, includeCrawled) {
+  if (!row || row.recommendation !== "recommended") return false;
+  if (!row.retailer || crawlingRetailers[row.retailer]) return false;
+  if (!includeCrawled && row.crawl && row.crawl.totalUrls > 0) return false;
+  return true;
 }
 
 function crawlAllRecommended() {
