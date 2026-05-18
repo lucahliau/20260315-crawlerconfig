@@ -10,3 +10,4 @@ logs/
 exploration-artifacts/
 upload-status/
 .DS_Store
+.claude/

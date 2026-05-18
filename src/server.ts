@@ -25,15 +25,19 @@ import {
   ensurePipelinePersistenceSchema,
   getPipelineJob,
   getRetailerPipelineState,
+  getScrapeErrorCounts,
   getSuccessfulUploadUrls,
+  listRecentScrapeErrors,
   listRetailerPipelineStates,
   listPipelineEvents,
   markRunningJobsInterrupted,
+  recordScrapeError,
   recordUploadUrlResult,
   savePipelineJob,
   upsertRetailerPipelineState,
   type PipelineJobRecord,
 } from "./pipelineStore.js";
+import { ErrorCodes, classifyError, type ErrorCode } from "./errorCodes.js";
 import { safeParseConfig } from "./schemas/config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -185,6 +189,47 @@ function pushLog(jobId: string, msg: string, err?: Error) {
     const data = `data: ${JSON.stringify({ type: "log", msg: full })}\n\n`;
     for (const res of clients) res.write(data);
   }
+}
+
+/**
+ * Record a structured error into scrape_errors AND surface it in the live job
+ * log/SSE feed so the dashboard sees it without polling a separate endpoint.
+ * Never throws — error reporting must not break the calling job.
+ */
+function logScrapeError(
+  jobId: string,
+  stage: "explore" | "crawl" | "upload" | "discover" | "e2e",
+  err: unknown,
+  context: { retailer?: string | null; url?: string | null; code?: ErrorCode; attempt?: number; metadata?: Record<string, unknown> } = {},
+) {
+  const code = context.code ?? classifyError(err, ErrorCodes.UNKNOWN);
+  const detail = err instanceof Error ? err.message : String(err ?? "");
+  // Persist (fire-and-forget; pipelineStore swallows its own errors).
+  void recordScrapeError({
+    code,
+    detail,
+    retailer: context.retailer ?? null,
+    stage,
+    url: context.url ?? null,
+    attempt: context.attempt ?? 1,
+    jobId,
+    metadata: context.metadata,
+  });
+  // Mirror to the live log so users see it in the SSE stream too.
+  const labelParts = [`[${code}]`];
+  if (context.retailer) labelParts.push(context.retailer);
+  if (context.url) labelParts.push(context.url);
+  const label = labelParts.join(" ");
+  const e = err instanceof Error ? err : new Error(detail);
+  pushLog(jobId, `${label} ${detail}`, e);
+  pushEvent(jobId, {
+    type: "scrape-error",
+    code,
+    stage,
+    retailer: context.retailer ?? null,
+    url: context.url ?? null,
+    detail,
+  });
 }
 
 function pushEvent(jobId: string, event: Record<string, unknown>) {
@@ -426,6 +471,17 @@ async function exploreRetailerWithRecovery(
         `${retryable ? "Retryable" : "Terminal"} explore failure for ${args.displayName}: ${lastError.message}\n`,
         lastError,
       );
+      logScrapeError(job.id, "explore", lastError, {
+        retailer: args.retailer,
+        url: args.url,
+        code: classifyError(lastError, ErrorCodes.EXPLORE_UNCAUGHT),
+        attempt,
+        metadata: {
+          retryable,
+          failureCode: lastFailureInfo?.code,
+          failureReason: lastFailureInfo?.reason,
+        },
+      });
 
       await upsertRetailerPipelineState({
         retailer: args.retailer,
@@ -772,7 +828,9 @@ app.post("/api/discover-brands", async (req, res) => {
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
       console.error(`[discover-brands job=${job.id}] Error:`, err);
-      pushLog(job.id, `ERROR: ${e.message}`, e);
+      logScrapeError(job.id, "discover", e, {
+        code: classifyError(e, ErrorCodes.DISCOVER_UNCAUGHT),
+      });
       job.status = "error";
       job.error = e.message;
       persistJob(job);
@@ -1163,6 +1221,11 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
               });
             },
             onError: async (partial, error) => {
+              logScrapeError(jobId, "crawl", error, {
+                retailer,
+                code: classifyError(error, ErrorCodes.CRAWL_UNCAUGHT),
+                metadata: { method: partial.method, totalUrls: partial.totalUrls, recoverable: true },
+              });
               await upsertRetailerPipelineState({
                 retailer,
                 latestJobId: jobId,
@@ -1174,6 +1237,7 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
                   crawledAt: partial.crawledAt,
                   urls: partial.urls,
                   error: error.message,
+                  errorCode: classifyError(error, ErrorCodes.CRAWL_UNCAUGHT),
                   resumable: true,
                   resumedFromCheckpoint: partial.resumedFromCheckpoint,
                 },
@@ -1206,7 +1270,10 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
         return result;
       } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
-        pushLog(jobId, `Crawl failed for ${retailer}: ${e.message}\n`, e);
+        logScrapeError(jobId, "crawl", e, {
+          retailer,
+          code: classifyError(e, ErrorCodes.CRAWL_UNCAUGHT),
+        });
         await upsertRetailerPipelineState({
           retailer,
           latestJobId: jobId,
@@ -1214,6 +1281,7 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
             status: "failed",
             failedAt: new Date().toISOString(),
             error: e.message,
+            errorCode: classifyError(e, ErrorCodes.CRAWL_UNCAUGHT),
             resumable: true,
           },
         });
@@ -1315,6 +1383,14 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
                 error: itemResult.error,
                 metadata: itemResult.metadata,
               });
+              if (itemResult.status === "failed" && itemResult.error) {
+                logScrapeError(jobId, "upload", itemResult.error, {
+                  retailer,
+                  url: itemResult.url,
+                  code: classifyError(itemResult.error, ErrorCodes.UPLOAD_UNCAUGHT),
+                  metadata: { itemName: itemResult.itemName, imageCount: itemResult.imageCount },
+                });
+              }
             },
           },
         );
@@ -1362,7 +1438,10 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
       } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
         uploadState.retailersDone += 1;
-        pushLog(jobId, `Upload failed for ${retailer}: ${e.message}\n`, e);
+        logScrapeError(jobId, "upload", e, {
+          retailer,
+          code: classifyError(e, ErrorCodes.UPLOAD_UNCAUGHT),
+        });
         await upsertRetailerPipelineState({
           retailer,
           latestJobId: jobId,
@@ -1370,6 +1449,7 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
             status: "failed",
             failedAt: new Date().toISOString(),
             error: e.message,
+            errorCode: classifyError(e, ErrorCodes.UPLOAD_UNCAUGHT),
           },
         });
         pushEvent(jobId, {
@@ -1418,7 +1498,9 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
     job.status = "error";
     job.error = e.message;
     persistJob(job);
-    pushLog(jobId, `ERROR: ${e.message}`, e);
+    logScrapeError(jobId, "e2e", e, {
+      code: classifyError(e, ErrorCodes.UNKNOWN),
+    });
     pushEvent(jobId, { type: "done", error: e.message });
   }
 
@@ -1526,6 +1608,38 @@ app.get("/api/cost-metrics", (_req, res) => {
   } catch (err) {
     console.error("[api/cost-metrics] Error:", err);
     res.status(500).json({ error: "Failed to load cost metrics." });
+  }
+});
+
+/**
+ * Unified errors feed — every pipeline failure across explore / crawl / upload /
+ * discover lands here. Used by the dashboard's Errors panel.
+ *
+ * Query params: ?limit=200&since=60&retailer=foo&stage=upload&code=UPLOAD_FETCH_FAILED
+ */
+app.get("/api/errors", async (req, res) => {
+  try {
+    const limitParam = Number.parseInt(String(req.query.limit ?? "200"), 10);
+    const sinceParam = Number.parseInt(String(req.query.since ?? "1440"), 10);
+    const errors = await listRecentScrapeErrors({
+      limit: Number.isFinite(limitParam) ? limitParam : 200,
+      sinceMinutes: Number.isFinite(sinceParam) ? sinceParam : 1440,
+      retailer: typeof req.query.retailer === "string" ? req.query.retailer : undefined,
+      stage: typeof req.query.stage === "string" ? req.query.stage : undefined,
+      code: typeof req.query.code === "string" ? req.query.code : undefined,
+    });
+    const counts = await getScrapeErrorCounts({
+      sinceMinutes: Number.isFinite(sinceParam) ? sinceParam : 1440,
+    });
+    res.json({ errors, counts });
+  } catch (err) {
+    console.error("[api/errors] Error:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to load errors.",
+      // Surface the failure of the errors endpoint itself so the dashboard can
+      // show "errors API is down" rather than silently rendering an empty list.
+      code: "ERRORS_API_FAILED",
+    });
   }
 });
 
@@ -1852,6 +1966,11 @@ app.post("/api/crawl/:retailer", async (req, res) => {
             });
           },
           onError: async (partial, error) => {
+            logScrapeError(job.id, "crawl", error, {
+              retailer,
+              code: classifyError(error, ErrorCodes.CRAWL_UNCAUGHT),
+              metadata: { method: partial.method, totalUrls: partial.totalUrls },
+            });
             await upsertRetailerPipelineState({
               retailer,
               latestJobId: job.id,
@@ -1863,6 +1982,7 @@ app.post("/api/crawl/:retailer", async (req, res) => {
                 method: partial.method,
                 urls: partial.urls,
                 error: error.message,
+                errorCode: classifyError(error, ErrorCodes.CRAWL_UNCAUGHT),
                 resumable: true,
                 resumedFromCheckpoint: partial.resumedFromCheckpoint,
               },
@@ -1886,7 +2006,10 @@ app.post("/api/crawl/:retailer", async (req, res) => {
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
       console.error(`[crawl job=${job.id}] Error crawling ${retailer}:`, err);
-      pushLog(job.id, `ERROR: ${e.message}`, e);
+      logScrapeError(job.id, "crawl", e, {
+        retailer,
+        code: classifyError(e, ErrorCodes.CRAWL_UNCAUGHT),
+      });
       job.status = "error";
       job.error = e.message;
       persistJob(job);
@@ -2037,6 +2160,14 @@ app.post("/api/upload/:retailer", async (req, res) => {
               error: itemResult.error,
               metadata: itemResult.metadata,
             });
+            if (itemResult.status === "failed" && itemResult.error) {
+              logScrapeError(job.id, "upload", itemResult.error, {
+                retailer,
+                url: itemResult.url,
+                code: classifyError(itemResult.error, ErrorCodes.UPLOAD_UNCAUGHT),
+                metadata: { itemName: itemResult.itemName, imageCount: itemResult.imageCount },
+              });
+            }
           },
         },
       );
@@ -2074,7 +2205,10 @@ app.post("/api/upload/:retailer", async (req, res) => {
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
       console.error(`[upload job=${job.id}] Error uploading ${retailer}:`, err);
-      pushLog(job.id, `ERROR: ${e.message}`, e);
+      logScrapeError(job.id, "upload", e, {
+        retailer,
+        code: classifyError(e, ErrorCodes.UPLOAD_UNCAUGHT),
+      });
       job.status = "error";
       job.error = e.message;
       persistJob(job);
@@ -2085,6 +2219,7 @@ app.post("/api/upload/:retailer", async (req, res) => {
           status: "failed",
           failedAt: new Date().toISOString(),
           error: e.message,
+          errorCode: classifyError(e, ErrorCodes.UPLOAD_UNCAUGHT),
           crawlSourceCrawledAt: urlsData.crawledAt,
         },
       });

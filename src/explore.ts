@@ -264,16 +264,22 @@ async function dismissOverlays(
     return;
   }
 
-  // Fallback: use Stagehand LLM (costs tokens, but only once per domain)
-  try {
-    await stagehand.act(
-      "If there is a cookie consent banner, popup overlay, newsletter signup, country/region selector, or any modal dialog visible, dismiss or accept it. If nothing is visible, do nothing.",
-    );
-    session.overlaysDismissed.add(domain);
-  } catch {
-    // Non-fatal — mark as done so we don't retry
-    session.overlaysDismissed.add(domain);
+  // Cost optimization: the DOM-heuristics list above covers the vast majority of
+  // banners (cookies / modals / newsletters / region pickers). We used to fall
+  // back to a Gemini-powered `stagehand.act(...)` call here, but it fires once
+  // per retailer domain on every explore run and added measurable Gemini spend
+  // for marginal benefit. Opt back in by setting OVERLAY_LLM_FALLBACK=1 if a
+  // specific retailer truly needs it.
+  if (process.env.OVERLAY_LLM_FALLBACK === "1") {
+    try {
+      await stagehand.act(
+        "If there is a cookie consent banner, popup overlay, newsletter signup, country/region selector, or any modal dialog visible, dismiss or accept it. If nothing is visible, do nothing.",
+      );
+    } catch {
+      // Non-fatal — mark as done so we don't retry
+    }
   }
+  session.overlaysDismissed.add(domain);
 }
 
 // ---------------------------------------------------------------------------

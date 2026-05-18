@@ -1025,6 +1025,173 @@
     }
     .retailer-cell-actions { align-items: stretch; }
   }
+
+  /* -------------------------------------------------------------------------
+   * Errors panel — always-visible feed of recent pipeline failures.
+   * Designed so an operator never has to dig into job detail panels or
+   * server logs to see what is broken.
+   * ----------------------------------------------------------------------- */
+  .errors-band {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 0.95rem 1rem;
+    margin-top: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+  }
+  .errors-band.errors-band-empty { border-style: dashed; }
+  .errors-band.errors-band-active { border-color: #ef4444; box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.25); }
+  .errors-band-header {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    justify-content: space-between;
+  }
+  .errors-band-title {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-weight: 700;
+    font-size: 0.95rem;
+  }
+  .errors-band-title .errors-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 999px;
+    background: #16a34a;
+    flex: 0 0 auto;
+  }
+  .errors-band-active .errors-band-title .errors-dot { background: #ef4444; }
+  .errors-band-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    align-items: center;
+    font-size: 0.78rem;
+  }
+  .errors-band-controls select,
+  .errors-band-controls input[type="search"] {
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--card-subtle);
+    color: var(--text);
+    font-size: 0.78rem;
+  }
+  .errors-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    font-size: 0.74rem;
+  }
+  .errors-summary .errors-chip {
+    background: var(--card-subtle);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.2rem 0.55rem;
+    color: var(--muted);
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+  }
+  .errors-summary .errors-chip.is-active { background: #fee2e2; color: #991b1b; border-color: #fecaca; }
+  @media (prefers-color-scheme: dark) {
+    .errors-summary .errors-chip.is-active { background: #7f1d1d; color: #fca5a5; border-color: #7f1d1d; }
+  }
+  .errors-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    max-height: 24rem;
+    overflow-y: auto;
+  }
+  .errors-list-item {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.55rem 0.7rem;
+    background: var(--card-subtle);
+    display: grid;
+    grid-template-columns: minmax(7rem, auto) minmax(0, 1fr) minmax(5rem, auto);
+    gap: 0.45rem 0.75rem;
+    align-items: start;
+    font-size: 0.82rem;
+  }
+  .errors-list-item .errors-code {
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-weight: 700;
+    color: #991b1b;
+    font-size: 0.74rem;
+    letter-spacing: 0.02em;
+    word-break: break-all;
+  }
+  @media (prefers-color-scheme: dark) {
+    .errors-list-item .errors-code { color: #fca5a5; }
+  }
+  .errors-list-item .errors-meta {
+    color: var(--muted);
+    font-size: 0.72rem;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .errors-list-item .errors-body {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    /* Critical: never truncate detail or URLs — the operator needs to see them. */
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+  .errors-list-item .errors-body .errors-context {
+    color: var(--muted);
+    font-size: 0.72rem;
+  }
+  .errors-list-item .errors-body .errors-url {
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 0.72rem;
+    color: var(--muted);
+    word-break: break-all;
+    overflow-wrap: anywhere;
+  }
+  .errors-empty {
+    color: var(--muted);
+    font-size: 0.82rem;
+    padding: 0.6rem 0.2rem;
+  }
+  .errors-error-banner {
+    background: #fee2e2;
+    color: #991b1b;
+    border: 1px solid #fecaca;
+    padding: 0.45rem 0.65rem;
+    border-radius: 8px;
+    font-size: 0.78rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    .errors-error-banner { background: #7f1d1d; color: #fca5a5; border-color: #7f1d1d; }
+  }
+
+  /* -------------------------------------------------------------------------
+   * Anti-truncation patches — long URLs and retailer names in the table now
+   * wrap instead of being clipped with an ellipsis. Long error messages on the
+   * retailer rows also wrap fully.
+   * ----------------------------------------------------------------------- */
+  .retailer-cell-primary,
+  .retailer-cell-secondary,
+  .retailer-cell-meta,
+  .retailer-row-summary {
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+  .retailer-cell-secondary,
+  .retailer-row-summary {
+    white-space: normal !important;
+  }
 </style>
 </head>
 <body>
@@ -1071,6 +1238,44 @@
       <div class="cost-strip-note">
         Estimates from measured token usage in this app (Gemini API + Stagehand). Not official Google invoices.
       </div>
+    </div>
+
+    <div class="errors-band errors-band-empty" id="errorsBand" aria-live="polite" aria-label="Recent pipeline errors">
+      <div class="errors-band-header">
+        <div class="errors-band-title">
+          <span class="errors-dot" id="errorsDot"></span>
+          <span id="errorsTitle">Recent errors</span>
+          <span id="errorsLastUpdated" style="font-weight:500; font-size:0.75rem; color:var(--muted);"></span>
+        </div>
+        <div class="errors-band-controls">
+          <label>Window
+            <select id="errorsWindowSelect">
+              <option value="15">Last 15 min</option>
+              <option value="60" selected>Last 1 hr</option>
+              <option value="360">Last 6 hr</option>
+              <option value="1440">Last 24 hr</option>
+              <option value="10080">Last 7 days</option>
+            </select>
+          </label>
+          <label>Stage
+            <select id="errorsStageSelect">
+              <option value="">All stages</option>
+              <option value="explore">explore</option>
+              <option value="crawl">crawl</option>
+              <option value="upload">upload</option>
+              <option value="discover">discover</option>
+              <option value="e2e">e2e</option>
+            </select>
+          </label>
+          <input type="search" id="errorsRetailerFilter" placeholder="Retailer…" autocomplete="off" />
+          <button type="button" class="btn-secondary btn-small" id="errorsRefreshBtn">Refresh</button>
+        </div>
+      </div>
+      <div id="errorsApiError" class="errors-error-banner" style="display:none"></div>
+      <div class="errors-summary" id="errorsSummary"></div>
+      <ul class="errors-list" id="errorsList">
+        <li class="errors-empty" id="errorsEmpty">No errors recorded in the selected window.</li>
+      </ul>
     </div>
   </section>
 
@@ -3472,6 +3677,169 @@ setInterval(refreshCostMetrics, 60000);
 loadOverview();
 e2eTryResume();
 discoverTryResume();
+
+// ----------------------------------------------------------------------------
+// Errors panel — recent pipeline failures across all stages.
+//
+// Loads from /api/errors, supports filtering by stage/code/retailer/window,
+// auto-refreshes every 5 seconds, and renders an "ERRORS API DOWN" banner if
+// the endpoint itself fails so failures of the failure-reporter are visible too.
+// ----------------------------------------------------------------------------
+const errorsState = {
+  window: 60,
+  stage: "",
+  retailer: "",
+  code: "",
+  lastRows: [],
+};
+
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function relativeTime(iso) {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "";
+  const diff = Date.now() - t;
+  if (diff < 0) return "just now";
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return s + "s ago";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m ago";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h ago";
+  return Math.floor(h / 24) + "d ago";
+}
+
+async function loadErrors() {
+  const params = new URLSearchParams();
+  params.set("since", String(errorsState.window));
+  params.set("limit", "200");
+  if (errorsState.stage) params.set("stage", errorsState.stage);
+  if (errorsState.retailer) params.set("retailer", errorsState.retailer);
+  if (errorsState.code) params.set("code", errorsState.code);
+  const apiErrorEl = document.getElementById("errorsApiError");
+  try {
+    const res = await fetch("/api/errors?" + params.toString());
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(res.status + " " + (text || res.statusText));
+    }
+    const data = await res.json();
+    apiErrorEl.style.display = "none";
+    apiErrorEl.textContent = "";
+    errorsState.lastRows = Array.isArray(data.errors) ? data.errors : [];
+    renderErrors(data);
+  } catch (err) {
+    console.error("[loadErrors] Error:", err);
+    apiErrorEl.style.display = "block";
+    apiErrorEl.textContent = "Errors API failed: " + (err && err.message ? err.message : err);
+  }
+}
+
+function renderErrors(data) {
+  const list = document.getElementById("errorsList");
+  const empty = document.getElementById("errorsEmpty");
+  const band = document.getElementById("errorsBand");
+  const summary = document.getElementById("errorsSummary");
+  const titleSuffix = document.getElementById("errorsLastUpdated");
+  const counts = data && data.counts ? data.counts : { byCode: {}, byStage: {}, total: 0 };
+  const rows = errorsState.lastRows;
+
+  titleSuffix.textContent = "· updated " + new Date().toLocaleTimeString();
+
+  // Header dot + border state.
+  if (rows.length === 0) {
+    band.classList.add("errors-band-empty");
+    band.classList.remove("errors-band-active");
+  } else {
+    band.classList.remove("errors-band-empty");
+    band.classList.add("errors-band-active");
+  }
+
+  // Top-N error-code chips. Clicking a chip filters by that code.
+  const codeEntries = Object.entries(counts.byCode || {}).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  if (codeEntries.length === 0) {
+    summary.innerHTML = '<span class="errors-chip" style="cursor:default">No errors in window</span>';
+  } else {
+    summary.innerHTML = codeEntries
+      .map(function (entry) {
+        const code = entry[0];
+        const n = entry[1];
+        const active = errorsState.code === code ? " is-active" : "";
+        return (
+          '<span class="errors-chip' + active + '" data-code="' + escapeHtml(code) + '">' +
+          escapeHtml(code) + " · " + n + "</span>"
+        );
+      })
+      .join("");
+    summary.querySelectorAll(".errors-chip").forEach(function (chip) {
+      chip.addEventListener("click", function () {
+        const code = chip.getAttribute("data-code");
+        errorsState.code = errorsState.code === code ? "" : code;
+        loadErrors();
+      });
+    });
+  }
+
+  // Row list.
+  if (rows.length === 0) {
+    list.innerHTML = "";
+    list.appendChild(empty);
+    empty.textContent = "No errors recorded in the selected window.";
+    return;
+  }
+  list.innerHTML = rows
+    .map(function (r) {
+      const retailer = r.retailer ? escapeHtml(r.retailer) : "—";
+      const stage = escapeHtml(r.stage || "?");
+      const url = r.url ? '<div class="errors-url">' + escapeHtml(r.url) + "</div>" : "";
+      const attempt = r.attempt && r.attempt > 1 ? " · attempt " + r.attempt : "";
+      return (
+        '<li class="errors-list-item">' +
+        '<div><div class="errors-code">' + escapeHtml(r.code || "UNKNOWN") + "</div>" +
+        '<div class="errors-context">' + stage + " · " + retailer + attempt + "</div></div>" +
+        '<div class="errors-body"><div>' + escapeHtml(r.detail || "") + "</div>" + url + "</div>" +
+        '<div class="errors-meta" title="' + escapeHtml(r.occurredAt || "") + '">' +
+        escapeHtml(relativeTime(r.occurredAt)) + "</div>" +
+        "</li>"
+      );
+    })
+    .join("");
+}
+
+document.getElementById("errorsWindowSelect").addEventListener("change", function (e) {
+  errorsState.window = parseInt(e.target.value, 10) || 60;
+  loadErrors();
+});
+document.getElementById("errorsStageSelect").addEventListener("change", function (e) {
+  errorsState.stage = e.target.value;
+  loadErrors();
+});
+document.getElementById("errorsRetailerFilter").addEventListener("input", function (e) {
+  errorsState.retailer = e.target.value.trim();
+  // Debounce per keystroke.
+  clearTimeout(window.__errorsRetailerDebounce);
+  window.__errorsRetailerDebounce = setTimeout(loadErrors, 250);
+});
+document.getElementById("errorsRefreshBtn").addEventListener("click", loadErrors);
+loadErrors();
+setInterval(loadErrors, 5000);
+
+// Also auto-refresh the retailer overview every 15s so newly-completed jobs
+// surface without requiring a manual reload.
+setInterval(function () {
+  // Skip refresh while a modal/detail edit is in progress to avoid clobbering
+  // unsaved input. The dashboard exposes window.__overviewLockEdits for this.
+  if (!window.__overviewLockEdits) loadOverview();
+}, 15000);
+
 console.log("[init] UI ready");
 </script>
 </body>

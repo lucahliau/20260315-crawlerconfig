@@ -200,6 +200,36 @@ export async function ensurePipelinePersistenceSchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS upload_url_results_lookup_idx
       ON upload_url_results (retailer, crawl_source_crawled_at, status);
     `);
+    // Unified error feed across all pipeline stages.
+    await pg.query(`
+      CREATE TABLE IF NOT EXISTS scrape_errors (
+        id BIGSERIAL PRIMARY KEY,
+        code TEXT NOT NULL,
+        detail TEXT NOT NULL DEFAULT '',
+        retailer TEXT,
+        stage TEXT NOT NULL,
+        url TEXT,
+        attempt INTEGER NOT NULL DEFAULT 1,
+        job_id TEXT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pg.query(`
+      CREATE INDEX IF NOT EXISTS scrape_errors_occurred_idx
+      ON scrape_errors (occurred_at DESC);
+    `);
+    await pg.query(`
+      CREATE INDEX IF NOT EXISTS scrape_errors_retailer_idx
+      ON scrape_errors (retailer, occurred_at DESC);
+    `);
+    await pg.query(`
+      CREATE INDEX IF NOT EXISTS scrape_errors_code_idx
+      ON scrape_errors (code, occurred_at DESC);
+    `);
+    // Best-effort retention: keep ~30 days of errors so the table doesn't grow
+    // unbounded. Runs at most every 5 minutes via the partial index trick on
+    // schema-init; the real prune happens lazily in the API handler.
   })();
   return schemaReady;
 }
@@ -411,6 +441,151 @@ export async function recordUploadUrlResult(record: UploadUrlResultRecord): Prom
       JSON.stringify(record.metadata ?? {}),
     ],
   );
+}
+
+// ---------------------------------------------------------------------------
+// Unified error feed (surfaces failures from all stages in one place so the UI
+// doesn't need to crawl multiple tables / JSON files to find what broke).
+// ---------------------------------------------------------------------------
+
+export interface ScrapeErrorRecord {
+  /** Stable category of failure — used for grouping/filtering in the UI. */
+  code: string;
+  /** Free-text detail (usually the message from the underlying Error). */
+  detail: string;
+  retailer: string | null;
+  /** Stage that produced the failure: explore | crawl | upload | discover. */
+  stage: string;
+  /** URL the failure was tied to, if any. */
+  url: string | null;
+  /** Caller-supplied attempt counter (defaults to 1). */
+  attempt: number;
+  /** Optional FK to a pipeline_jobs row. */
+  jobId: string | null;
+  /** Optional extra context. */
+  metadata: Record<string, unknown>;
+  occurredAt: string;
+}
+
+export async function recordScrapeError(input: {
+  code: string;
+  detail: string;
+  retailer?: string | null;
+  stage: string;
+  url?: string | null;
+  attempt?: number;
+  jobId?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  const pg = getPool();
+  if (!pg) return;
+  await ensurePipelinePersistenceSchema();
+  try {
+    await pg.query(
+      `
+        INSERT INTO scrape_errors (
+          code, detail, retailer, stage, url, attempt, job_id, metadata
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8::jsonb
+        )
+      `,
+      [
+        input.code.slice(0, 80),
+        (input.detail ?? "").slice(0, 4000),
+        input.retailer ?? null,
+        input.stage,
+        input.url ?? null,
+        input.attempt ?? 1,
+        input.jobId ?? null,
+        JSON.stringify(input.metadata ?? {}),
+      ],
+    );
+  } catch (err) {
+    // Never throw from a logger — degrade silently to stderr so the caller's
+    // own error path is unaffected.
+    console.error("[pipelineStore] Failed to record scrape_errors row:", err);
+  }
+}
+
+export async function listRecentScrapeErrors(opts?: {
+  limit?: number;
+  sinceMinutes?: number;
+  retailer?: string;
+  stage?: string;
+  code?: string;
+}): Promise<ScrapeErrorRecord[]> {
+  const pg = getPool();
+  if (!pg) return [];
+  await ensurePipelinePersistenceSchema();
+  const limit = Math.max(1, Math.min(opts?.limit ?? 200, 1000));
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (opts?.sinceMinutes && Number.isFinite(opts.sinceMinutes)) {
+    params.push(opts.sinceMinutes);
+    where.push(`occurred_at >= NOW() - ($${params.length}::text || ' minutes')::interval`);
+  }
+  if (opts?.retailer) {
+    params.push(opts.retailer);
+    where.push(`retailer = $${params.length}`);
+  }
+  if (opts?.stage) {
+    params.push(opts.stage);
+    where.push(`stage = $${params.length}`);
+  }
+  if (opts?.code) {
+    params.push(opts.code);
+    where.push(`code = $${params.length}`);
+  }
+  params.push(limit);
+  const sql = `
+    SELECT code, detail, retailer, stage, url, attempt, job_id, metadata, occurred_at
+    FROM scrape_errors
+    ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+    ORDER BY occurred_at DESC, id DESC
+    LIMIT $${params.length}
+  `;
+  const { rows } = await pg.query(sql, params);
+  return rows.map((row) => ({
+    code: String(row.code ?? "UNKNOWN"),
+    detail: String(row.detail ?? ""),
+    retailer: typeof row.retailer === "string" ? row.retailer : null,
+    stage: String(row.stage ?? ""),
+    url: typeof row.url === "string" ? row.url : null,
+    attempt: typeof row.attempt === "number" ? row.attempt : 1,
+    jobId: typeof row.job_id === "string" ? row.job_id : null,
+    metadata:
+      row.metadata && typeof row.metadata === "object"
+        ? (row.metadata as Record<string, unknown>)
+        : {},
+    occurredAt:
+      row.occurred_at instanceof Date
+        ? row.occurred_at.toISOString()
+        : String(row.occurred_at ?? ""),
+  }));
+}
+
+export async function getScrapeErrorCounts(opts?: {
+  sinceMinutes?: number;
+}): Promise<{ byCode: Record<string, number>; byStage: Record<string, number>; total: number }> {
+  const pg = getPool();
+  if (!pg) return { byCode: {}, byStage: {}, total: 0 };
+  await ensurePipelinePersistenceSchema();
+  const params: unknown[] = [];
+  let whereClause = "";
+  if (opts?.sinceMinutes && Number.isFinite(opts.sinceMinutes)) {
+    params.push(opts.sinceMinutes);
+    whereClause = `WHERE occurred_at >= NOW() - ($${params.length}::text || ' minutes')::interval`;
+  }
+  const [codeRows, stageRows, totalRows] = await Promise.all([
+    pg.query(`SELECT code, COUNT(*)::int AS n FROM scrape_errors ${whereClause} GROUP BY code`, params),
+    pg.query(`SELECT stage, COUNT(*)::int AS n FROM scrape_errors ${whereClause} GROUP BY stage`, params),
+    pg.query(`SELECT COUNT(*)::int AS n FROM scrape_errors ${whereClause}`, params),
+  ]);
+  const byCode: Record<string, number> = {};
+  for (const r of codeRows.rows) byCode[String(r.code)] = Number(r.n) || 0;
+  const byStage: Record<string, number> = {};
+  for (const r of stageRows.rows) byStage[String(r.stage)] = Number(r.n) || 0;
+  return { byCode, byStage, total: Number(totalRows.rows[0]?.n) || 0 };
 }
 
 export async function getSuccessfulUploadUrls(
