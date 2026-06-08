@@ -1068,6 +1068,32 @@ async function runE2EOrchestrator(jobId: string, discoverOptions?: DiscoverBrand
         percentComplete: 20 + Math.floor((i / brands.length) * 35),
       });
 
+      // Resume / cache the explore stage: if this brand already has a completed
+      // config (from a prior run that crashed or was redeployed mid-pipeline),
+      // reuse it instead of re-spending Gemini + Stagehand credits.
+      const existingConfig = await loadStoredConfig(fallbackRetailer);
+      if (existingConfig) {
+        const existingState = await getRetailerPipelineState(fallbackRetailer);
+        const existingStatus = getExploreStatus(
+          existingState?.exploreState,
+          true,
+          hasConfigError(existingConfig),
+        );
+        if (existingStatus === "completed") {
+          configsSuccessful++;
+          const rec = normalizeRecommendationValue(
+            (existingConfig.dataQuality as Record<string, unknown> | undefined)?.overallRecommendation,
+          );
+          const retailer =
+            typeof existingConfig.retailer === "string" ? existingConfig.retailer : fallbackRetailer;
+          if (rec === "recommended") {
+            recommendedConfigs.push({ retailer, config: existingConfig });
+          }
+          pushLog(jobId, `  Config for ${brand.name}: ${rec} (resumed from existing config — no AI spend)\n`);
+          continue;
+        }
+      }
+
       const outcome = await exploreRetailerWithRecovery(job, {
         url,
         retailer: fallbackRetailer,
