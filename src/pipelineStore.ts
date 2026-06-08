@@ -230,6 +230,24 @@ export async function ensurePipelinePersistenceSchema(): Promise<void> {
     // Best-effort retention: keep ~30 days of errors so the table doesn't grow
     // unbounded. Runs at most every 5 minutes via the partial index trick on
     // schema-init; the real prune happens lazily in the API handler.
+
+    // Worker liveness table — each worker process upserts its row every ~15s.
+    // Dashboard reads this to show "who's online and draining the queue."
+    await pg.query(`
+      CREATE TABLE IF NOT EXISTS worker_heartbeats (
+        worker_id TEXT PRIMARY KEY,
+        hostname TEXT,
+        pid INTEGER,
+        concurrency INTEGER NOT NULL DEFAULT 1,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pg.query(`
+      CREATE INDEX IF NOT EXISTS worker_heartbeats_last_seen_idx
+      ON worker_heartbeats (last_seen_at DESC);
+    `);
   })();
   return schemaReady;
 }
@@ -586,6 +604,85 @@ export async function getScrapeErrorCounts(opts?: {
   const byStage: Record<string, number> = {};
   for (const r of stageRows.rows) byStage[String(r.stage)] = Number(r.n) || 0;
   return { byCode, byStage, total: Number(totalRows.rows[0]?.n) || 0 };
+}
+
+// ---------------------------------------------------------------------------
+// Worker heartbeats — drives the "online workers" view on the dashboard.
+// ---------------------------------------------------------------------------
+
+export interface WorkerHeartbeatRow {
+  workerId: string;
+  hostname: string | null;
+  pid: number | null;
+  concurrency: number;
+  metadata: Record<string, unknown>;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  /** Seconds since last_seen_at — convenience for the UI. */
+  ageSeconds: number;
+}
+
+export async function upsertWorkerHeartbeat(input: {
+  workerId: string;
+  hostname?: string;
+  pid?: number;
+  concurrency?: number;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  const pg = getPool();
+  if (!pg) return;
+  await ensurePipelinePersistenceSchema();
+  await pg.query(
+    `
+      INSERT INTO worker_heartbeats (worker_id, hostname, pid, concurrency, metadata, first_seen_at, last_seen_at)
+      VALUES ($1, $2, $3, $4, $5::jsonb, NOW(), NOW())
+      ON CONFLICT (worker_id) DO UPDATE SET
+        hostname = EXCLUDED.hostname,
+        pid = EXCLUDED.pid,
+        concurrency = EXCLUDED.concurrency,
+        metadata = EXCLUDED.metadata,
+        last_seen_at = NOW()
+    `,
+    [
+      input.workerId,
+      input.hostname ?? null,
+      input.pid ?? null,
+      input.concurrency ?? 1,
+      JSON.stringify(input.metadata ?? {}),
+    ],
+  );
+}
+
+export async function listWorkerHeartbeats(opts?: {
+  staleAfterSeconds?: number;
+}): Promise<WorkerHeartbeatRow[]> {
+  const pg = getPool();
+  if (!pg) return [];
+  await ensurePipelinePersistenceSchema();
+  const { rows } = await pg.query(
+    `SELECT worker_id, hostname, pid, concurrency, metadata, first_seen_at, last_seen_at,
+            EXTRACT(EPOCH FROM (NOW() - last_seen_at))::int AS age_seconds
+     FROM worker_heartbeats
+     ORDER BY last_seen_at DESC`,
+  );
+  const staleAfter = opts?.staleAfterSeconds ?? 0;
+  return rows
+    .filter((r) => !staleAfter || Number(r.age_seconds) <= staleAfter)
+    .map((row) => ({
+      workerId: String(row.worker_id),
+      hostname: typeof row.hostname === "string" ? row.hostname : null,
+      pid: typeof row.pid === "number" ? row.pid : null,
+      concurrency: typeof row.concurrency === "number" ? row.concurrency : 1,
+      metadata:
+        row.metadata && typeof row.metadata === "object"
+          ? (row.metadata as Record<string, unknown>)
+          : {},
+      firstSeenAt:
+        row.first_seen_at instanceof Date ? row.first_seen_at.toISOString() : String(row.first_seen_at ?? ""),
+      lastSeenAt:
+        row.last_seen_at instanceof Date ? row.last_seen_at.toISOString() : String(row.last_seen_at ?? ""),
+      ageSeconds: Number(row.age_seconds) || 0,
+    }));
 }
 
 export async function getSuccessfulUploadUrls(

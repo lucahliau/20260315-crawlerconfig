@@ -7,7 +7,10 @@
     "start": "tsx src/server.ts",
     "explore": "tsx src/explore.ts",
     "ui": "tsx src/server.ts",
-    "verify-fx": "tsx scripts/verify-fx.ts"
+    "verify-fx": "tsx scripts/verify-fx.ts",
+    "worker": "tsx src/worker.ts",
+    "build": "npm --prefix dashboard ci --include=dev && npm --prefix dashboard run build",
+    "build:dashboard": "npm --prefix dashboard run build"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1009.0",
@@ -16,6 +19,7 @@
     "dotenv": "^16.4.5",
     "express": "^5.1.0",
     "pg": "^8.20.0",
+    "pg-boss": "^10.4.2",
     "zod": "^3.24.0"
   },
   "devDependencies": {

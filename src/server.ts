@@ -30,6 +30,7 @@ import {
   listRecentScrapeErrors,
   listRetailerPipelineStates,
   listPipelineEvents,
+  listWorkerHeartbeats,
   markRunningJobsInterrupted,
   recordScrapeError,
   recordUploadUrlResult,
@@ -38,12 +39,20 @@ import {
   type PipelineJobRecord,
 } from "./pipelineStore.js";
 import { ErrorCodes, classifyError, type ErrorCode } from "./errorCodes.js";
+import {
+  enqueueUploadUrls,
+  getQueueStats,
+  listDeadLetter,
+  retryDeadLetterJob,
+} from "./queue.js";
 import { safeParseConfig } from "./schemas/config.js";
+import { createBrandsRouter } from "./routes/brands.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 app.use(express.json());
+app.use(createBrandsRouter());
 
 const PORT = parseInt(process.env.PORT ?? "3456", 10);
 const CONFIGS_DIR = process.env.CONFIGS_DIR ?? path.join(process.cwd(), "configs");
@@ -1643,6 +1652,119 @@ app.get("/api/errors", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Durable queue + workers — exposes pg-boss state to the dashboard so an
+// operator can see queue depth, dead-lettered jobs, and which workers are
+// online (Railway vs. the M4 laptop, in the hybrid topology).
+// ---------------------------------------------------------------------------
+
+app.get("/api/queue/stats", async (_req, res) => {
+  try {
+    const [queues, workers] = await Promise.all([
+      getQueueStats(),
+      listWorkerHeartbeats({ staleAfterSeconds: 120 }),
+    ]);
+    res.json({ queues, workers });
+  } catch (err) {
+    console.error("[api/queue/stats] Error:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to load queue stats.",
+      code: "QUEUE_STATS_FAILED",
+    });
+  }
+});
+
+app.get("/api/queue/dead-letter", async (req, res) => {
+  try {
+    const limitParam = Number.parseInt(String(req.query.limit ?? "50"), 10);
+    const rows = await listDeadLetter({
+      limit: Number.isFinite(limitParam) ? limitParam : 50,
+      queue: typeof req.query.queue === "string" ? req.query.queue : undefined,
+    });
+    res.json({ rows });
+  } catch (err) {
+    console.error("[api/queue/dead-letter] Error:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to load DLQ.",
+      code: "QUEUE_DLQ_FAILED",
+    });
+  }
+});
+
+app.post("/api/queue/retry/:jobId", async (req, res) => {
+  try {
+    const newId = await retryDeadLetterJob(req.params.jobId);
+    if (!newId) return res.status(404).json({ error: "Job not found" });
+    res.json({ ok: true, newJobId: newId });
+  } catch (err) {
+    console.error("[api/queue/retry] Error:", err);
+    res.status(500).json({ error: err instanceof Error ? err.message : "Retry failed." });
+  }
+});
+
+/**
+ * Fan a retailer's product URLs onto the durable queue for processing by any
+ * online worker. This is the queue-driven equivalent of POST /api/upload/:retailer
+ * — but instead of running the upload inside this process, it just enqueues.
+ */
+app.post("/api/upload/:retailer/enqueue", async (req, res) => {
+  try {
+    const retailer = req.params.retailer;
+    const configPath = path.join(CONFIGS_DIR, `${retailer}.json`);
+    if (!fs.existsSync(configPath)) {
+      return res.status(404).json({ error: `No config for retailer "${retailer}"` });
+    }
+    const productUrlsPath = path.join(PRODUCT_URLS_DIR, `${retailer}.json`);
+    if (!fs.existsSync(productUrlsPath)) {
+      return res.status(404).json({ error: `No crawled URLs for retailer "${retailer}"` });
+    }
+    const urlsData = JSON.parse(fs.readFileSync(productUrlsPath, "utf-8")) as {
+      urls?: string[];
+      crawledAt?: string;
+    };
+    const urls = Array.isArray(urlsData.urls) ? urlsData.urls : [];
+    const crawledAt = urlsData.crawledAt ?? new Date().toISOString();
+
+    const limit = Math.max(1, Math.min(parseInt(String(req.body?.limit ?? urls.length), 10) || urls.length, urls.length));
+    const targetUrls = urls.slice(0, limit);
+
+    // Skip URLs already uploaded for this crawl checkpoint.
+    const alreadyDone = await getSuccessfulUploadUrls(retailer, crawledAt);
+    const toEnqueue = targetUrls.filter((u) => !alreadyDone.has(u));
+
+    const jobs = toEnqueue.map((url) => {
+      let domain = retailer;
+      try {
+        domain = new URL(url).hostname;
+      } catch {
+        /* fall back to retailer name */
+      }
+      return {
+        retailer,
+        url,
+        crawlSourceCrawledAt: crawledAt,
+        domain,
+      };
+    });
+
+    const { accepted, duplicates } = await enqueueUploadUrls(jobs);
+    res.json({
+      retailer,
+      totalUrls: urls.length,
+      targeted: targetUrls.length,
+      alreadyUploaded: alreadyDone.size,
+      enqueued: accepted,
+      duplicates,
+    });
+  } catch (err) {
+    console.error("[api/upload/enqueue] Error:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Enqueue failed.",
+      code: "QUEUE_ENQUEUE_FAILED",
+    });
+  }
+});
+
 app.get("/api/discovered-brands", (_req, res) => {
   try {
     if (!fs.existsSync(DISCOVERED_BRANDS_PATH)) {
@@ -2233,9 +2355,22 @@ app.post("/api/upload/:retailer", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Serve the HTML UI
+// Serve the dashboards
 // ---------------------------------------------------------------------------
 
+// New React dashboard (Vite build) under /app — falls back to index.html for SPA routing.
+const DASHBOARD_DIST = path.join(__dirname, "..", "dashboard", "dist");
+if (fs.existsSync(path.join(DASHBOARD_DIST, "index.html"))) {
+  app.use("/app", express.static(DASHBOARD_DIST));
+  app.get(/^\/app(\/.*)?$/, (_req, res) => {
+    res.sendFile(path.join(DASHBOARD_DIST, "index.html"));
+  });
+  console.log("[dashboard] Serving React dashboard at /app");
+} else {
+  console.log("[dashboard] React build not found; run `npm run build` in dashboard/ to enable /app");
+}
+
+// Legacy monolithic HTML UI at /.
 app.get("/", (_req, res) => {
   res.sendFile(path.join(__dirname, "Ui.html"));
 });

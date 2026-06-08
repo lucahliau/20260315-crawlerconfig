@@ -11,6 +11,65 @@ const DISCOVERED_BRANDS_PATH =
 /** Default model for brand discovery (Gemini API id, not Stagehand `google/...` form). */
 const DEFAULT_GEMINI_DISCOVER_MODEL = "gemini-3-flash-preview";
 
+/**
+ * Curated "cool but accessible" reference brands. Used two ways:
+ *  - as VIBE ANCHORS so the model learns the target sensibility, and
+ *  - as SNOWBALL SEEDS ("find new labels like these") to push breadth.
+ * These are anchors only — the prompt tells the model NOT to return them.
+ * Edit this list to steer taste over time.
+ */
+const COOL_ACCESSIBLE_ANCHORS = [
+  "Noah (New York)",
+  "Aimé Leon Dore (New York)",
+  "Stüssy",
+  "Carhartt WIP",
+  "A.P.C. (Paris)",
+  "Sézane (Paris)",
+  "Sefr (Stockholm)",
+  "Soulland (Copenhagen)",
+  "Norse Projects (Copenhagen)",
+  "Arté Antwerp",
+  "Drôle de Monsieur (Paris)",
+  "Percival (London)",
+  "Wax London",
+  "Universal Works",
+  "YMC (London)",
+  "Sunspel",
+  "Sunflower (Copenhagen)",
+  "Corridor NYC",
+  "Adsum (New York)",
+  "Le Bonnet (Amsterdam)",
+  "Portuguese Flannel",
+  "Kestin (Scotland)",
+  "Satta (London)",
+] as const;
+
+/**
+ * Right taste, WRONG price tier — archival / high-end labels whose tees run $150–$400+.
+ * The target tier sits well below these. Anchors only.
+ */
+const TOO_EXPENSIVE_ANCHORS = [
+  "Auralee",
+  "Comoli",
+  "Graphpaper",
+  "Kaptain Sunshine",
+  "Luca Faloni",
+  "Lemaire",
+  "Our Legacy",
+  "Margaret Howell",
+] as const;
+
+/** Commoditized mall / fast fashion — wrong on identity. Anchors only. */
+const TOO_GENERIC_ANCHORS = [
+  "Zara",
+  "H&M",
+  "Uniqlo",
+  "Shein",
+  "ASOS",
+  "Mango",
+  "Gap",
+] as const;
+
 /** JSON Schema for structured discover output (Gemini `responseJsonSchema`). */
 const DISCOVER_BRANDS_RESPONSE_JSON_SCHEMA = {
   type: "object",
@@ -22,6 +81,7 @@ const DISCOVER_BRANDS_RESPONSE_JSON_SCHEMA = {
         properties: {
           name: { type: "string" },
           url: { type: "string" },
+          region: { type: "string" },
         },
         required: ["name", "url"],
       },
@@ -46,9 +106,39 @@ function discoverTimeoutMs(): number {
   return Math.floor(n);
 }
 
+/** Curation state for a discovered brand. Absent = legacy entry, treat as already approved. */
+export type BrandStatus = "candidate" | "approved" | "rejected";
+
+/** A sampled entry-level price, used to verify a brand sits in the accessible tier. */
+export interface BrandPriceSample {
+  /** Lowest sampled product price, normalized to USD. */
+  usd: number;
+  /** Product URL the price was read from. */
+  sourceUrl: string;
+  /** ISO timestamp of the probe. */
+  at: string;
+}
+
 export interface DiscoveredBrand {
   name: string;
   url: string;
+  /** Curation state. Absent on legacy entries — treated as "approved". */
+  status?: BrandStatus;
+  /** Where the candidate came from, e.g. "gemini", or a stockist domain. */
+  source?: string;
+  /** Best-guess region/country, e.g. "France", "New York". */
+  region?: string;
+  /** 0–100 fit score against the cool+accessible rubric (populated by a later scoring pass). */
+  fitScore?: number;
+  /** Sampled entry price for tier verification (populated by the price probe). */
+  priceSample?: BrandPriceSample;
+  /** ISO timestamp when first added to the master list. */
+  discoveredAt?: string;
+}
+
+/** A brand is eligible for the crawl pipeline if it is approved or a legacy entry (no status). */
+export function isPipelineEligible(b: DiscoveredBrand): boolean {
+  return b.status === undefined || b.status === "approved";
 }
 
 /** Appended when a discovery run finishes (see `discoverBrands`). */
@@ -120,7 +210,11 @@ function parseBrandsFromPayload(parsed: unknown): { brands: DiscoveredBrand[] } 
     if (b && typeof b === "object" && typeof b.name === "string" && typeof b.url === "string") {
       const url = b.url.trim();
       if (url.startsWith("http://") || url.startsWith("https://")) {
-        result.push({ name: String(b.name).trim(), url });
+        const region =
+          typeof (b as { region?: unknown }).region === "string"
+            ? String((b as { region?: unknown }).region).trim() || undefined
+            : undefined;
+        result.push({ name: String(b.name).trim(), url, region });
       }
     }
   }
@@ -197,6 +291,49 @@ export function addToMasterList(url: string, name?: string): void {
     };
     saveMasterList(updatedMaster);
   });
+}
+
+/** Read the full brand master list (candidates + approved + legacy). */
+export function listBrands(): DiscoveredBrand[] {
+  return loadMasterList().brands;
+}
+
+/** Set a brand's curation status (approve/reject) by URL. Returns false if not found. */
+export function setBrandStatus(url: string, status: BrandStatus): boolean {
+  const normalized = normalizeUrl(url);
+  if (!normalized) return false;
+  let found = false;
+  enqueueMaster(() => {
+    const master = loadMasterList();
+    const brands = master.brands.map((b) => {
+      if (b.url === normalized) {
+        found = true;
+        return { ...b, status };
+      }
+      return b;
+    });
+    if (found) saveMasterList({ ...master, brands });
+  });
+  return found;
+}
+
+/** Attach a sampled entry price to a brand (used by the price-tier probe). Returns false if not found. */
+export function setBrandPriceSample(url: string, sample: BrandPriceSample): boolean {
+  const normalized = normalizeUrl(url);
+  if (!normalized) return false;
+  let found = false;
+  enqueueMaster(() => {
+    const master = loadMasterList();
+    const brands = master.brands.map((b) => {
+      if (b.url === normalized) {
+        found = true;
+        return { ...b, priceSample: sample };
+      }
+      return b;
+    });
+    if (found) saveMasterList({ ...master, brands });
+  });
+  return found;
 }
 
 export function syncConfigsToMasterList(configsDir: string): void {
@@ -280,13 +417,31 @@ Still apply every rule below: only brands that pass the STRICT DEFINITION, exclu
 `
       : "";
 
-  const prompt = `You are a fashion researcher. Use web search to find 15-20 interesting CLOTHING and APPAREL brands that are NOT commoditized mass-market fashion.
+  const goodAnchors = COOL_ACCESSIBLE_ANCHORS.join(", ");
+  const expensiveAnchors = TOO_EXPENSIVE_ANCHORS.join(", ");
+  const genericAnchors = TOO_GENERIC_ANCHORS.join(", ");
+
+  const prompt = `You are a fashion researcher. Use web search to find 15-20 interesting CLOTHING and APPAREL brands that are cool and design-led but ACCESSIBLY PRICED — not commoditized mass-market fashion, and NOT ultra-high-end/archival/designer.
 
 "Not commoditized" means the brand has a real product identity and its own line of apparel—not interchangeable trend-factory mall fashion or pure aggregators. You do NOT need to find "niche" or underground labels only.
 
 The API enforces a fixed JSON schema for your reply. Output only that JSON structure: do not wrap it in markdown, do not use code fences (no triple backticks), do not add explanations, and do not repeat or restart the answer mid-output—complete a single valid response.
 
-${categoryBlock}STRICT DEFINITION — what counts as a valid result:
+${categoryBlock}TARGET VIBE — "cool but accessible". These are CALIBRATION ANCHORS only. Do NOT return any of these exact brands; find NEW labels with a similar sensibility:
+- GOOD (this is the target — cool, design-led, soft/understated, where a basic tee is roughly $20–$90): ${goodAnchors}
+- TOO EXPENSIVE (right taste but WRONG price tier — tees run $150–$400+; AVOID this archival/high-end tier): ${expensiveAnchors}
+- TOO GENERIC (commoditized mall / fast fashion; AVOID): ${genericAnchors}
+
+PRICE TIER — hard requirement:
+- Target "elevated but accessible": a basic T-shirt should land roughly $20–$90, and outerwear roughly $120–$400.
+- REJECT ultra-fast-fashion (e.g. $5 tees) AND ultra-high-end / archival / luxury / designer (e.g. $150+ tees, $800+ coats).
+- When unsure of a brand's pricing, prefer contemporary independents and direct-to-consumer labels over luxury or designer houses.
+
+REGION & SENSIBILITY — prioritize (not exclusive):
+- French labels, New York fashion, and "soft" / understated, design-led brands are especially welcome.
+- Also strong: cool streetwear-adjacent independents, Scandinavian / Copenhagen labels, and London independents.
+
+STRICT DEFINITION — what counts as a valid result:
 - The brand's PRIMARY business must be selling wearable apparel: tops, bottoms, outerwear, dresses, tailoring, knitwear, denim, activewear, technical/outdoor CLOTHING (jackets, pants, baselayers), footwear sold as fashion or apparel, hats/headwear, and fashion bags/backpacks when sold by a clothing label.
 - The brand must be a clothing/apparel company first. It is NOT enough that they sell a few T-shirts alongside other product lines.
 - Specialty sport and performance apparel brands are valid when apparel/footwear is a substantive part of their offering (e.g. Wilson tennis, running, cycling brands)—these are welcome even if they are well-known in their category.
@@ -303,13 +458,16 @@ STRICT EXCLUSIONS — do NOT include brands that are mainly any of the following
 STYLE PREFERENCES (among valid clothing brands only):
 - Men-focused or unisex
 - Strongly avoid commoditized fashion mass retailers and aggregators: ASOS, Shein-style ultra-fast fashion, and interchangeable fast-fashion chains (Zara, H&M, Uniqlo, etc.)
-- Prefer brands with distinct identity: independents, heritage labels, workwear, technical apparel, sustainable/ethical lines, streetwear, Japanese/European specialty labels, and specialty sport/performance apparel (e.g. Wilson tennis)—not required to be obscure
+- Prefer brands with a distinct identity that still sit in the accessible price tier above: contemporary independents, design-led direct-to-consumer labels, elevated streetwear, workwear, and French / New York / Scandinavian / London labels.
+- Do NOT skew toward luxury, designer, or archival/heritage houses just because they are tasteful — if a brand's basic tee costs $150+ it is the WRONG tier even if the design is great.
 
 ${exclusionText}REQUIREMENTS:
 - Return EXACTLY 15-20 brands (fewer is not acceptable)
 - Every brand must satisfy the STRICT DEFINITION above; exclude anything that fails the STRICT EXCLUSIONS
+- Every brand must sit in the accessible price tier (roughly $20–$90 for a basic tee); exclude luxury/designer/archival labels
 - Each brand must have a valid homepage URL (https preferred) for a clothing/apparel brand
-- Your reply must be one JSON object only, matching the schema: an object with a "brands" array of { "name", "url" } objects
+- Include a short "region" per brand: the label's home country or city (e.g. "France", "New York", "Copenhagen")
+- Your reply must be one JSON object only, matching the schema: an object with a "brands" array of { "name", "url", "region" } objects
 
 Search the web, verify each candidate is primarily a clothing company, then output only the JSON object (no markdown, no code fences).`;
 
@@ -364,11 +522,19 @@ Search the web, verify each candidate is primarily a clothing company, then outp
   const seenUrls = new Set(master.urls);
   const newBrands: DiscoveredBrand[] = [];
 
+  const discoveredAt = new Date().toISOString();
   for (const b of result.brands) {
     const url = normalizeUrl(b.url);
     if (url && !seenUrls.has(url)) {
       seenUrls.add(url);
-      newBrands.push({ name: b.name, url });
+      newBrands.push({
+        name: b.name,
+        url,
+        region: b.region,
+        status: "candidate",
+        source: "gemini",
+        discoveredAt,
+      });
     }
   }
 

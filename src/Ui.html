@@ -1177,6 +1177,151 @@
   }
 
   /* -------------------------------------------------------------------------
+   * Queue + workers panel — visibility into pg-boss queue depth, dead-letter
+   * jobs, and which workers are draining the queue.
+   * ----------------------------------------------------------------------- */
+  .queue-band {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 0.85rem 1rem;
+    margin-top: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+  }
+  .queue-band-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .queue-band-title {
+    font-weight: 700;
+    font-size: 0.95rem;
+  }
+  .queue-band-subtitle {
+    font-size: 0.74rem;
+    color: var(--muted);
+    margin-left: 0.45rem;
+  }
+  .queue-rows {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.55rem;
+  }
+  .queue-row {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.55rem 0.7rem;
+    background: var(--card-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .queue-row .queue-name {
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 0.76rem;
+    color: var(--muted);
+  }
+  .queue-row .queue-counts {
+    display: flex;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+    align-items: center;
+    font-size: 0.82rem;
+  }
+  .queue-row .queue-count-chip {
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    font-size: 0.74rem;
+    font-weight: 700;
+  }
+  .queue-row .queue-count-chip.waiting { background: #dbeafe; color: #1e3a8a; border-color: #bfdbfe; }
+  .queue-row .queue-count-chip.active { background: #fef3c7; color: #92400e; border-color: #fde68a; }
+  .queue-row .queue-count-chip.failed { background: #fee2e2; color: #991b1b; border-color: #fecaca; }
+  .queue-row .queue-count-chip.completed { background: #dcfce7; color: #166534; border-color: #bbf7d0; }
+  @media (prefers-color-scheme: dark) {
+    .queue-row .queue-count-chip.waiting { background: #1e3a8a; color: #bfdbfe; border-color: #1e3a8a; }
+    .queue-row .queue-count-chip.active { background: #78350f; color: #fcd34d; border-color: #78350f; }
+    .queue-row .queue-count-chip.failed { background: #7f1d1d; color: #fca5a5; border-color: #7f1d1d; }
+    .queue-row .queue-count-chip.completed { background: #14532d; color: #86efac; border-color: #14532d; }
+  }
+  .workers-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .worker-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.55rem;
+    align-items: center;
+    padding: 0.4rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card-subtle);
+    font-size: 0.8rem;
+  }
+  .worker-row .worker-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 999px;
+    background: #16a34a;
+  }
+  .worker-row.worker-stale .worker-dot { background: #9ca3af; }
+  .worker-row .worker-id {
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 0.78rem;
+    word-break: break-all;
+  }
+  .worker-row .worker-meta {
+    color: var(--muted);
+    font-size: 0.72rem;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .dlq-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    max-height: 18rem;
+    overflow-y: auto;
+  }
+  .dlq-item {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.5rem 0.7rem;
+    background: var(--card-subtle);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+  }
+  .dlq-item .dlq-body { word-break: break-word; overflow-wrap: anywhere; }
+  .dlq-item .dlq-meta { text-align: right; color: var(--muted); font-size: 0.72rem; white-space: nowrap; }
+  .dlq-item .dlq-meta button {
+    margin-top: 0.25rem;
+    font-size: 0.72rem;
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--border);
+    background: var(--card);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .dlq-empty {
+    color: var(--muted);
+    font-size: 0.8rem;
+    padding: 0.4rem 0.2rem;
+  }
+
+  /* -------------------------------------------------------------------------
    * Anti-truncation patches — long URLs and retailer names in the table now
    * wrap instead of being clipped with an ellipsis. Long error messages on the
    * retailer rows also wrap fully.
@@ -1276,6 +1421,40 @@
       <ul class="errors-list" id="errorsList">
         <li class="errors-empty" id="errorsEmpty">No errors recorded in the selected window.</li>
       </ul>
+    </div>
+
+    <div class="queue-band" id="queueBand" aria-label="Durable queue and workers">
+      <div class="queue-band-header">
+        <div class="queue-band-title">
+          Queue &amp; workers
+          <span class="queue-band-subtitle" id="queueBandSubtitle">Loading…</span>
+        </div>
+        <div style="display:flex; gap:0.45rem; align-items:center; flex-wrap:wrap;">
+          <button type="button" class="btn-secondary btn-small" id="queueRefreshBtn">Refresh</button>
+          <button type="button" class="btn-secondary btn-small" id="queueShowDlqBtn">Show DLQ</button>
+        </div>
+      </div>
+      <div id="queueApiError" class="errors-error-banner" style="display:none"></div>
+      <div class="queue-rows" id="queueRows"></div>
+
+      <div>
+        <div style="font-size:0.78rem; font-weight:700; color:var(--muted); margin:0.35rem 0 0.3rem;">
+          Online workers
+          <span style="font-weight:500;" id="workersHint">— how many are draining the queue right now</span>
+        </div>
+        <div class="workers-list" id="workersList">
+          <div class="dlq-empty">No workers have checked in. Start one with <code>npm run worker</code>.</div>
+        </div>
+      </div>
+
+      <div id="dlqWrap" style="display:none;">
+        <div style="font-size:0.78rem; font-weight:700; color:var(--muted); margin:0.35rem 0 0.3rem;">
+          Dead-letter queue (failed after retries)
+        </div>
+        <ul class="dlq-list" id="dlqList">
+          <li class="dlq-empty">No dead-lettered jobs.</li>
+        </ul>
+      </div>
     </div>
   </section>
 
@@ -3839,6 +4018,154 @@ setInterval(function () {
   // unsaved input. The dashboard exposes window.__overviewLockEdits for this.
   if (!window.__overviewLockEdits) loadOverview();
 }, 15000);
+
+// ----------------------------------------------------------------------------
+// Queue + workers panel.
+// Polls /api/queue/stats every 5s. Shows queue depth (waiting / active /
+// failed / completed), online workers (with stale indicator after 60s of no
+// heartbeat), and a collapsible DLQ list with one-click retry.
+// ----------------------------------------------------------------------------
+let queueDlqVisible = false;
+
+async function loadQueueStats() {
+  const apiErrEl = document.getElementById("queueApiError");
+  try {
+    const res = await fetch("/api/queue/stats");
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(res.status + " " + (txt || res.statusText));
+    }
+    const data = await res.json();
+    apiErrEl.style.display = "none";
+    apiErrEl.textContent = "";
+    renderQueueStats(data);
+  } catch (err) {
+    console.error("[loadQueueStats] Error:", err);
+    apiErrEl.style.display = "block";
+    apiErrEl.textContent = "Queue API failed: " + (err && err.message ? err.message : err);
+  }
+}
+
+function renderQueueStats(data) {
+  const queues = (data && data.queues) || [];
+  const workers = (data && data.workers) || [];
+  const rowsEl = document.getElementById("queueRows");
+  const workersEl = document.getElementById("workersList");
+  const subtitleEl = document.getElementById("queueBandSubtitle");
+
+  const totalWaiting = queues.reduce(function (s, q) { return s + (q.waiting || 0); }, 0);
+  const totalActive = queues.reduce(function (s, q) { return s + (q.active || 0); }, 0);
+  const totalFailed = queues.reduce(function (s, q) { return s + (q.failed || 0); }, 0);
+  subtitleEl.textContent =
+    totalWaiting + " waiting · " +
+    totalActive + " active · " +
+    totalFailed + " failed · " +
+    workers.length + " worker" + (workers.length === 1 ? "" : "s") +
+    " · updated " + new Date().toLocaleTimeString();
+
+  if (queues.length === 0) {
+    rowsEl.innerHTML = '<div class="dlq-empty">Queue layer not initialized (DATABASE_URL may be missing).</div>';
+  } else {
+    rowsEl.innerHTML = queues.map(function (q) {
+      return (
+        '<div class="queue-row">' +
+        '<div class="queue-name">' + escapeHtml(q.name) + "</div>" +
+        '<div class="queue-counts">' +
+        '<span class="queue-count-chip waiting" title="Waiting">' + (q.waiting || 0) + " waiting</span>" +
+        '<span class="queue-count-chip active" title="Active">' + (q.active || 0) + " active</span>" +
+        '<span class="queue-count-chip failed" title="Failed">' + (q.failed || 0) + " failed</span>" +
+        '<span class="queue-count-chip completed" title="Completed">' + (q.completed || 0) + " done</span>" +
+        "</div></div>"
+      );
+    }).join("");
+  }
+
+  if (workers.length === 0) {
+    workersEl.innerHTML = '<div class="dlq-empty">No workers have checked in. Start one with <code>npm run worker</code>.</div>';
+  } else {
+    workersEl.innerHTML = workers.map(function (w) {
+      const stale = (w.ageSeconds || 0) > 60 ? " worker-stale" : "";
+      const meta = "concurrency " + (w.concurrency || 1) +
+        " · last seen " + (w.ageSeconds || 0) + "s ago" +
+        (w.hostname ? " · " + escapeHtml(w.hostname) : "");
+      return (
+        '<div class="worker-row' + stale + '">' +
+        '<span class="worker-dot"></span>' +
+        '<div class="worker-id">' + escapeHtml(w.workerId) + "</div>" +
+        '<div class="worker-meta">' + meta + "</div>" +
+        "</div>"
+      );
+    }).join("");
+  }
+}
+
+async function loadDeadLetter() {
+  const list = document.getElementById("dlqList");
+  try {
+    const res = await fetch("/api/queue/dead-letter?limit=50");
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(res.status + " " + (txt || res.statusText));
+    }
+    const data = await res.json();
+    const rows = (data && data.rows) || [];
+    if (rows.length === 0) {
+      list.innerHTML = '<li class="dlq-empty">No dead-lettered jobs.</li>';
+      return;
+    }
+    list.innerHTML = rows.map(function (r) {
+      const dataPreview = r.data ? JSON.stringify(r.data).slice(0, 240) : "";
+      const outPreview = r.output ? JSON.stringify(r.output).slice(0, 240) : "";
+      return (
+        '<li class="dlq-item">' +
+        '<div class="dlq-body">' +
+        '<div style="font-family:var(--mono,monospace);font-size:0.74rem;color:var(--muted);">' +
+        escapeHtml(r.name) + " · retries " + r.retryCount + " · " + relativeTime(r.completedOn || r.createdOn) +
+        "</div>" +
+        '<div>' + escapeHtml(dataPreview) + "</div>" +
+        (outPreview ? '<div style="color:#991b1b;">' + escapeHtml(outPreview) + "</div>" : "") +
+        "</div>" +
+        '<div class="dlq-meta">' +
+        '<div>' + escapeHtml(r.id) + "</div>" +
+        '<button type="button" data-jobid="' + escapeHtml(r.id) + '">Retry</button>' +
+        "</div></li>"
+      );
+    }).join("");
+    list.querySelectorAll("button[data-jobid]").forEach(function (b) {
+      b.addEventListener("click", async function () {
+        const jobId = b.getAttribute("data-jobid");
+        b.disabled = true;
+        b.textContent = "…";
+        try {
+          const res = await fetch("/api/queue/retry/" + encodeURIComponent(jobId), { method: "POST" });
+          if (!res.ok) throw new Error(await res.text());
+          b.textContent = "queued";
+          setTimeout(loadDeadLetter, 600);
+        } catch (err) {
+          b.disabled = false;
+          b.textContent = "Retry failed";
+          console.error("[dlq retry] Error:", err);
+        }
+      });
+    });
+  } catch (err) {
+    list.innerHTML = '<li class="dlq-empty" style="color:#991b1b;">Failed to load DLQ: ' + escapeHtml(err.message || String(err)) + "</li>";
+  }
+}
+
+document.getElementById("queueRefreshBtn").addEventListener("click", function () {
+  loadQueueStats();
+  if (queueDlqVisible) loadDeadLetter();
+});
+document.getElementById("queueShowDlqBtn").addEventListener("click", function () {
+  queueDlqVisible = !queueDlqVisible;
+  document.getElementById("dlqWrap").style.display = queueDlqVisible ? "" : "none";
+  this.textContent = queueDlqVisible ? "Hide DLQ" : "Show DLQ";
+  if (queueDlqVisible) loadDeadLetter();
+});
+loadQueueStats();
+setInterval(loadQueueStats, 5000);
+setInterval(function () { if (queueDlqVisible) loadDeadLetter(); }, 10000);
 
 console.log("[init] UI ready");
 </script>
