@@ -14,11 +14,21 @@ const KIND_LABEL: Record<RunKind, string> = {
  * the dashboard (instead of the CLI) and watch progress live over SSE. Calls
  * `onChanged` when a run finishes so the brand list can refresh.
  */
+const FOCUS_EXAMPLES = [
+  "so-cal surfer brands",
+  "French workwear",
+  "gorpcore / technical outdoor",
+  "Japanese minimalist basics",
+  "NYC skate-adjacent",
+  "Scandinavian knitwear",
+];
+
 export function PipelineActions({ onChanged }: { onChanged?: () => void }) {
   const [running, setRunning] = useState<RunKind | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [finishedKind, setFinishedKind] = useState<RunKind | null>(null);
+  const [focus, setFocus] = useState("");
   const closeRef = useRef<(() => void) | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -40,7 +50,7 @@ export function PipelineActions({ onChanged }: { onChanged?: () => void }) {
       try {
         const streamUrl =
           kind === "discover"
-            ? api.jobStreamUrl((await api.discover()).jobId)
+            ? api.jobStreamUrl((await api.discover(focus.trim() || undefined)).jobId)
             : kind === "mine"
               ? api.taskStreamUrl((await api.mineStockists()).taskId)
               : api.taskStreamUrl((await api.probeBrands({ onlyCandidates: true })).taskId);
@@ -63,16 +73,60 @@ export function PipelineActions({ onChanged }: { onChanged?: () => void }) {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [running, onChanged],
+    [running, onChanged, focus],
   );
 
   return (
     <section className="space-y-3 rounded-xl border border-neutral-800 bg-neutral-900/40 p-4">
+      {/* Discovery focus: free-text aesthetic/region/activity that steers the Gemini search. */}
+      <div className="space-y-1.5">
+        <label htmlFor="discovery-focus" className="text-xs font-medium text-neutral-400">
+          Discovery focus{" "}
+          <span className="font-normal text-neutral-600">
+            (optional — an aesthetic, region, or activity to steer the search)
+          </span>
+        </label>
+        <input
+          id="discovery-focus"
+          data-testid="discovery-focus"
+          type="text"
+          value={focus}
+          onChange={(e) => setFocus(e.target.value)}
+          disabled={running !== null}
+          maxLength={500}
+          placeholder={`e.g. ${FOCUS_EXAMPLES[0]}, ${FOCUS_EXAMPLES[1]}, ${FOCUS_EXAMPLES[2]}…`}
+          className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 focus:border-neutral-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+        />
+        <div className="flex flex-wrap gap-1.5">
+          {FOCUS_EXAMPLES.map((ex) => (
+            <button
+              key={ex}
+              type="button"
+              disabled={running !== null}
+              onClick={() => setFocus(ex)}
+              className="rounded-full border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-[11px] text-neutral-400 transition hover:border-neutral-600 hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {ex}
+            </button>
+          ))}
+          {focus && (
+            <button
+              type="button"
+              disabled={running !== null}
+              onClick={() => setFocus("")}
+              className="rounded-full border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-[11px] text-neutral-500 transition hover:border-red-800 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              clear
+            </button>
+          )}
+        </div>
+      </div>
+
       <div className="flex flex-wrap items-center gap-2">
         <ActionButton
           testId="action-discover"
           label="Run discovery"
-          hint="Gemini + Google Search"
+          hint={focus.trim() ? `focus: ${focus.trim()}` : "Gemini + Google Search"}
           busy={running === "discover"}
           disabled={running !== null}
           onClick={() => void start("discover")}
@@ -153,7 +207,7 @@ function ActionButton({
       <span className="text-sm font-medium text-neutral-100">
         {busy ? "Running…" : label}
       </span>
-      <span className="text-[11px] text-neutral-500">{hint}</span>
+      <span className="max-w-[12rem] truncate text-[11px] text-neutral-500">{hint}</span>
     </button>
   );
 }
