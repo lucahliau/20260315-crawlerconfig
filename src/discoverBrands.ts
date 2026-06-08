@@ -4,6 +4,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { writeJsonAtomic } from "./jsonFs.js";
 import { estimateUsdFromDiscoverUsage, type DiscoverApiUsage } from "./pricing.js";
+import {
+  brandStoreEnabled,
+  dbLoadMasterList,
+  dbInsertBrandsIfMissing,
+  dbSetBrandStatus,
+  dbSetBrandPriceSample,
+  dbRecordDiscoveryRun,
+  dbBootstrapBrandsIfEmpty,
+} from "./brandStore.js";
 
 const DISCOVERED_BRANDS_PATH =
   process.env.DISCOVERED_BRANDS_PATH ?? path.join(process.cwd(), "discovered-brands.json");
@@ -153,7 +162,7 @@ interface MasterList {
   history?: DiscoveryCountSnapshot[];
 }
 
-function loadMasterList(): MasterList {
+function loadMasterListJson(): MasterList {
   try {
     const raw = fs.readFileSync(DISCOVERED_BRANDS_PATH, "utf-8");
     const data = JSON.parse(raw) as MasterList;
@@ -180,6 +189,21 @@ function loadMasterList(): MasterList {
 
 function saveMasterList(list: MasterList): void {
   writeJsonAtomic(DISCOVERED_BRANDS_PATH, list);
+}
+
+/**
+ * Load the master list, preferring the durable Postgres store when DATABASE_URL
+ * is set (survives Railway redeploys) and falling back to the local JSON file
+ * for offline dev. Async because the DB read is async.
+ */
+async function loadMasterList(): Promise<MasterList> {
+  if (brandStoreEnabled()) {
+    const fromDb = await dbLoadMasterList();
+    if (fromDb) {
+      return { brands: fromDb.brands, urls: fromDb.urls, history: fromDb.history };
+    }
+  }
+  return loadMasterListJson();
 }
 
 const masterQueue: Array<() => void> = [];
@@ -276,11 +300,16 @@ export function normalizeUrl(raw: string): string | null {
   }
 }
 
-export function addToMasterList(url: string, name?: string): void {
+export async function addToMasterList(url: string, name?: string): Promise<void> {
+  const normalized = normalizeUrl(url);
+  if (!normalized) return;
+  if (brandStoreEnabled()) {
+    // ON CONFLICT DO NOTHING — never clobber an existing brand's curation/price.
+    await dbInsertBrandsIfMissing([{ name: name ?? normalized, url: normalized }]);
+    return;
+  }
   enqueueMaster(() => {
-    const normalized = normalizeUrl(url);
-    if (!normalized) return;
-    const master = loadMasterList();
+    const master = loadMasterListJson();
     const existingUrls = new Set([...master.urls, ...master.brands.map((b) => b.url)]);
     if (existingUrls.has(normalized)) return;
     const brand: DiscoveredBrand = { name: name ?? normalized, url: normalized };
@@ -294,17 +323,20 @@ export function addToMasterList(url: string, name?: string): void {
 }
 
 /** Read the full brand master list (candidates + approved + legacy). */
-export function listBrands(): DiscoveredBrand[] {
-  return loadMasterList().brands;
+export async function listBrands(): Promise<DiscoveredBrand[]> {
+  return (await loadMasterList()).brands;
 }
 
 /** Set a brand's curation status (approve/reject) by URL. Returns false if not found. */
-export function setBrandStatus(url: string, status: BrandStatus): boolean {
+export async function setBrandStatus(url: string, status: BrandStatus): Promise<boolean> {
   const normalized = normalizeUrl(url);
   if (!normalized) return false;
+  if (brandStoreEnabled()) {
+    return dbSetBrandStatus(normalized, status);
+  }
   let found = false;
   enqueueMaster(() => {
-    const master = loadMasterList();
+    const master = loadMasterListJson();
     const brands = master.brands.map((b) => {
       if (b.url === normalized) {
         found = true;
@@ -318,12 +350,15 @@ export function setBrandStatus(url: string, status: BrandStatus): boolean {
 }
 
 /** Attach a sampled entry price to a brand (used by the price-tier probe). Returns false if not found. */
-export function setBrandPriceSample(url: string, sample: BrandPriceSample): boolean {
+export async function setBrandPriceSample(url: string, sample: BrandPriceSample): Promise<boolean> {
   const normalized = normalizeUrl(url);
   if (!normalized) return false;
+  if (brandStoreEnabled()) {
+    return dbSetBrandPriceSample(normalized, sample);
+  }
   let found = false;
   enqueueMaster(() => {
-    const master = loadMasterList();
+    const master = loadMasterListJson();
     const brands = master.brands.map((b) => {
       if (b.url === normalized) {
         found = true;
@@ -336,7 +371,7 @@ export function setBrandPriceSample(url: string, sample: BrandPriceSample): bool
   return found;
 }
 
-export function syncConfigsToMasterList(configsDir: string): void {
+export async function syncConfigsToMasterList(configsDir: string): Promise<void> {
   try {
     if (!fs.existsSync(configsDir)) return;
     const files = fs.readdirSync(configsDir).filter((f) => f.endsWith(".json"));
@@ -346,7 +381,7 @@ export function syncConfigsToMasterList(configsDir: string): void {
         const config = JSON.parse(raw) as { baseUrl?: string; retailerDisplayName?: string };
         const baseUrl = config.baseUrl;
         if (baseUrl && typeof baseUrl === "string") {
-          addToMasterList(baseUrl, config.retailerDisplayName);
+          await addToMasterList(baseUrl, config.retailerDisplayName);
         }
       } catch {
         // Skip invalid configs
@@ -355,6 +390,17 @@ export function syncConfigsToMasterList(configsDir: string): void {
   } catch {
     // Configs dir may not exist
   }
+}
+
+/**
+ * One-time migration of any pre-existing local discovered-brands.json into the
+ * durable Postgres store (only seeds when the table is still empty). Lets a
+ * machine with prior local curation populate the shared DB on first boot.
+ */
+export async function bootstrapBrandsFromJson(): Promise<number> {
+  if (!brandStoreEnabled()) return 0;
+  const json = loadMasterListJson();
+  return dbBootstrapBrandsIfEmpty(json.brands);
 }
 
 const MAX_DISCOVER_CATEGORY_LEN = 500;
@@ -398,7 +444,7 @@ export async function discoverBrands(
     );
   }
 
-  const master = loadMasterList();
+  const master = await loadMasterList();
   const exclusionList = [...new Set([...master.urls, ...master.brands.map((b) => b.url)])];
 
   const exclusionText =
@@ -539,13 +585,24 @@ Search the web, verify each candidate is primarily a clothing company, then outp
   }
 
   const newTotal = master.brands.length + newBrands.length;
-  const priorHistory = master.history ?? [];
-  const updatedMaster: MasterList = {
-    brands: [...master.brands, ...newBrands],
-    urls: [...seenUrls],
-    history: [...priorHistory, { at: new Date().toISOString(), count: newTotal }],
-  };
-  enqueueMaster(() => saveMasterList(updatedMaster));
+  if (brandStoreEnabled()) {
+    // Durable path: insert candidates (skip dupes) + log the search so the UI
+    // can show "already searched this" and avoid wasting credits re-running it.
+    await dbInsertBrandsIfMissing(newBrands);
+    await dbRecordDiscoveryRun({
+      category: category ?? null,
+      newCount: newBrands.length,
+      totalCount: newTotal,
+    });
+  } else {
+    const priorHistory = master.history ?? [];
+    const updatedMaster: MasterList = {
+      brands: [...master.brands, ...newBrands],
+      urls: [...seenUrls],
+      history: [...priorHistory, { at: new Date().toISOString(), count: newTotal }],
+    };
+    enqueueMaster(() => saveMasterList(updatedMaster));
+  }
 
   onProgress(`Done. Added ${newBrands.length} new brands.`);
 

@@ -8,6 +8,13 @@ import {
   roundUsdPrice,
 } from "./currencyToUsd.js";
 import { classifyPriceTier, type PriceTier } from "./priceProbe.js";
+import fs from "node:fs";
+import {
+  brandStoreEnabled,
+  dbReplaceBrandLeads,
+  dbLoadBrandLeads,
+  dbBootstrapLeadsIfEmpty,
+} from "./brandStore.js";
 
 /**
  * Stockist / editorial brand-source mining — zero AI, near-free.
@@ -188,7 +195,7 @@ export interface VendorLead {
   stockists: string[];
 }
 
-interface StockistMineResult {
+export interface StockistMineResult {
   stockist: string;
   ok: boolean;
   vendorCount: number;
@@ -326,7 +333,7 @@ export async function mineAndWriteLeads(opts?: {
   // Lazy import so this stays decoupled from discovery's hot path.
   const { listBrands } = await import("./discoverBrands.js");
   const knownKeys = new Set<string>();
-  for (const b of listBrands()) {
+  for (const b of await listBrands()) {
     knownKeys.add(normalizeBrandKey(b.name));
     try {
       const host = new URL(b.url).hostname.replace(/^www\./, "").split(".")[0];
@@ -347,8 +354,44 @@ export async function mineAndWriteLeads(opts?: {
     stockists,
     leads,
   };
-  writeJsonAtomic(BRAND_LEADS_PATH, file);
+  // Durable store survives Railway redeploys; JSON kept for offline dev only.
+  if (brandStoreEnabled()) {
+    await dbReplaceBrandLeads(file);
+  } else {
+    writeJsonAtomic(BRAND_LEADS_PATH, file);
+  }
   return file;
+}
+
+/** Read the latest mined leads, preferring Postgres, falling back to local JSON. */
+export async function loadBrandLeads(): Promise<BrandLeadsFile | null> {
+  if (brandStoreEnabled()) {
+    return dbLoadBrandLeads();
+  }
+  try {
+    if (!fs.existsSync(BRAND_LEADS_PATH)) return null;
+    const raw = fs.readFileSync(BRAND_LEADS_PATH, "utf-8");
+    return JSON.parse(raw) as BrandLeadsFile;
+  } catch {
+    return null;
+  }
+}
+
+/** Read the local JSON leads file directly (no DB) — used by the bootstrap path. */
+function loadBrandLeadsJson(): BrandLeadsFile | null {
+  try {
+    if (!fs.existsSync(BRAND_LEADS_PATH)) return null;
+    const raw = fs.readFileSync(BRAND_LEADS_PATH, "utf-8");
+    return JSON.parse(raw) as BrandLeadsFile;
+  } catch {
+    return null;
+  }
+}
+
+/** One-time migration of any pre-existing brand-leads.json into Postgres. */
+export async function bootstrapLeadsFromJson(): Promise<number> {
+  if (!brandStoreEnabled()) return 0;
+  return dbBootstrapLeadsIfEmpty(loadBrandLeadsJson());
 }
 
 // --- CLI: `tsx src/brandSources.ts [--write]` -------------------------------

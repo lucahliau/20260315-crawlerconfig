@@ -2438,7 +2438,7 @@ export async function exploreRetailer(
         blocksHeadlessBrowsers,
       );
       writePartialConfig(configsDir, retailer, partial);
-      if (baseUrl) addToMasterList(baseUrl, displayName);
+      if (baseUrl) await addToMasterList(baseUrl, displayName);
       writeExplorationArtifacts(retailer, {
         phase: "post_sitemap",
         sitemapUrl: sitemapResult.sitemapUrl,
@@ -2479,7 +2479,7 @@ export async function exploreRetailer(
         blocksHeadlessBrowsers,
       );
       writePartialConfig(configsDir, retailer, partial);
-      if (baseUrl) addToMasterList(baseUrl, displayName);
+      if (baseUrl) await addToMasterList(baseUrl, displayName);
       writeExplorationArtifacts(retailer, {
         phase: "post_category",
         startUrls: categoryResult.startUrls,
@@ -2511,7 +2511,7 @@ export async function exploreRetailer(
       writePartialConfig(configsDir, retailer, minimalConfig);
       const masterUrl = minimalConfig.baseUrl as string | undefined;
       const masterName = minimalConfig.retailerDisplayName as string | undefined;
-      if (masterUrl) addToMasterList(masterUrl, masterName);
+      if (masterUrl) await addToMasterList(masterUrl, masterName);
       const metrics = await shutdownStagehand(stagehand);
       stagehand = null;
       log(session, "Done.");
@@ -2681,7 +2681,7 @@ export async function exploreRetailer(
     writePartialConfig(configsDir, retailer, finalConfig);
     const masterUrl = finalConfig.baseUrl as string | undefined;
     const masterName = finalConfig.retailerDisplayName as string | undefined;
-    if (masterUrl) addToMasterList(masterUrl, masterName);
+    if (masterUrl) await addToMasterList(masterUrl, masterName);
 
     log(session, "\n--- Summary ---");
     log(session, `  Retailer:         ${displayName} (${retailer})`);

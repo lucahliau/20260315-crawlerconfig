@@ -1,7 +1,5 @@
 import { Router, type Request, type Response } from "express";
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import {
   listBrands,
   setBrandStatus,
@@ -11,7 +9,8 @@ import {
   type DiscoveredBrand,
 } from "../discoverBrands.js";
 import { classifyPriceTier, probeAndRecordBrands, type PriceTier } from "../priceProbe.js";
-import { mineAndWriteLeads } from "../brandSources.js";
+import { mineAndWriteLeads, loadBrandLeads } from "../brandSources.js";
+import { dbListDiscoveryRuns } from "../brandStore.js";
 
 /**
  * Brand-curation API for the dashboard.
@@ -20,9 +19,6 @@ import { mineAndWriteLeads } from "../brandSources.js";
  * 2400-line monolith. Read-only + instant writes only — long-running probe/mine
  * runs are triggered through the separate job/SSE endpoints.
  */
-
-const BRAND_LEADS_PATH =
-  process.env.BRAND_LEADS_PATH ?? path.join(process.cwd(), "brand-leads.json");
 
 const VALID_STATUSES: readonly BrandStatus[] = ["candidate", "approved", "rejected"];
 
@@ -141,9 +137,9 @@ export function createBrandsRouter(): Router {
    * GET /api/brands — full curation list with derived tier + summary counts.
    * Optional ?status=candidate|approved|rejected and ?tier=accessible|... filters.
    */
-  router.get("/api/brands", (req: Request, res: Response) => {
+  router.get("/api/brands", async (req: Request, res: Response) => {
     try {
-      const all = listBrands().map(toView);
+      const all = (await listBrands()).map(toView);
 
       const statusFilter = String(req.query.status ?? "").trim();
       const tierFilter = String(req.query.tier ?? "").trim();
@@ -179,7 +175,7 @@ export function createBrandsRouter(): Router {
    * POST /api/brands/status — set curation state.
    * Body: { url: string, status: "candidate"|"approved"|"rejected" }
    */
-  router.post("/api/brands/status", (req: Request, res: Response) => {
+  router.post("/api/brands/status", async (req: Request, res: Response) => {
     try {
       const url = typeof req.body?.url === "string" ? req.body.url.trim() : "";
       const status = req.body?.status as unknown;
@@ -191,7 +187,7 @@ export function createBrandsRouter(): Router {
           .status(400)
           .json({ error: `Invalid 'status'. Expected one of: ${VALID_STATUSES.join(", ")}.` });
       }
-      const found = setBrandStatus(url, status as BrandStatus);
+      const found = await setBrandStatus(url, status as BrandStatus);
       if (!found) {
         return res.status(404).json({ error: "Brand not found for that URL." });
       }
@@ -206,14 +202,14 @@ export function createBrandsRouter(): Router {
    * POST /api/brands/add — promote a lead (or manual entry) into the master list as a candidate.
    * Body: { url: string, name?: string }
    */
-  router.post("/api/brands/add", (req: Request, res: Response) => {
+  router.post("/api/brands/add", async (req: Request, res: Response) => {
     try {
       const url = typeof req.body?.url === "string" ? req.body.url.trim() : "";
       const name = typeof req.body?.name === "string" ? req.body.name.trim() : undefined;
       if (!url) {
         return res.status(400).json({ error: "Missing 'url'." });
       }
-      addToMasterList(url, name);
+      await addToMasterList(url, name);
       res.json({ ok: true, url, name });
     } catch (err) {
       console.error("[api/brands/add] Error:", err);
@@ -225,17 +221,31 @@ export function createBrandsRouter(): Router {
    * GET /api/brand-leads — the latest stockist-mining output (read-only artifact).
    * Returns { generatedAt, stockists, leads } or an empty shape if not yet generated.
    */
-  router.get("/api/brand-leads", (_req: Request, res: Response) => {
+  router.get("/api/brand-leads", async (_req: Request, res: Response) => {
     try {
-      if (!fs.existsSync(BRAND_LEADS_PATH)) {
+      const data = await loadBrandLeads();
+      if (!data) {
         return res.json({ generatedAt: null, stockists: [], leads: [] });
       }
-      const raw = fs.readFileSync(BRAND_LEADS_PATH, "utf-8");
-      const data = JSON.parse(raw) as unknown;
       res.json(data);
     } catch (err) {
       console.error("[api/brand-leads] Error:", err);
       res.status(500).json({ error: "Failed to load brand leads." });
+    }
+  });
+
+  /**
+   * GET /api/discovery-runs — recent discovery searches (category + counts), so
+   * the UI can show "you already searched this" and avoid re-spending credits.
+   */
+  router.get("/api/discovery-runs", async (req: Request, res: Response) => {
+    try {
+      const limit = Number(req.query.limit ?? 50);
+      const runs = await dbListDiscoveryRuns(Number.isFinite(limit) ? limit : 50);
+      res.json({ runs });
+    } catch (err) {
+      console.error("[api/discovery-runs] Error:", err);
+      res.status(500).json({ error: "Failed to load discovery runs." });
     }
   });
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, subscribeStream } from "../api.ts";
+import { api, subscribeStream, type DiscoveryRun } from "../api.ts";
 
 type RunKind = "discover" | "mine" | "probe";
 
@@ -23,12 +23,27 @@ const FOCUS_EXAMPLES = [
   "Scandinavian knitwear",
 ];
 
+/** Compact "3d ago" / "2h ago" relative time for the recent-searches list. */
+function timeAgo(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const secs = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (secs < 60) return "just now";
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 export function PipelineActions({ onChanged }: { onChanged?: () => void }) {
   const [running, setRunning] = useState<RunKind | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [finishedKind, setFinishedKind] = useState<RunKind | null>(null);
   const [focus, setFocus] = useState("");
+  const [runs, setRuns] = useState<DiscoveryRun[]>([]);
   const closeRef = useRef<(() => void) | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -39,6 +54,21 @@ export function PipelineActions({ onChanged }: { onChanged?: () => void }) {
 
   // Tear down any live stream on unmount.
   useEffect(() => () => closeRef.current?.(), []);
+
+  // Load recent discovery searches (so we don't re-spend credits on dupes).
+  const loadRuns = useCallback(() => {
+    api
+      .getDiscoveryRuns(30)
+      .then((r) => setRuns(r.runs))
+      .catch(() => setRuns([]));
+  }, []);
+  useEffect(() => loadRuns(), [loadRuns]);
+
+  // Has the current focus already been searched? (case-insensitive match)
+  const focusKey = focus.trim().toLowerCase().replace(/\s+/g, " ");
+  const priorRun = focusKey
+    ? runs.find((r) => (r.category ?? "").trim().toLowerCase().replace(/\s+/g, " ") === focusKey)
+    : undefined;
 
   const start = useCallback(
     async (kind: RunKind) => {
@@ -61,6 +91,7 @@ export function PipelineActions({ onChanged }: { onChanged?: () => void }) {
             setRunning(null);
             setFinishedKind(kind);
             if (typeof event.error === "string") setError(event.error);
+            if (kind === "discover") loadRuns();
             onChanged?.();
           },
           onError: (e) => {
@@ -73,7 +104,7 @@ export function PipelineActions({ onChanged }: { onChanged?: () => void }) {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [running, onChanged, focus],
+    [running, onChanged, focus, loadRuns],
   );
 
   return (
@@ -120,7 +151,35 @@ export function PipelineActions({ onChanged }: { onChanged?: () => void }) {
             </button>
           )}
         </div>
+        {priorRun && (
+          <p className="text-[11px] text-amber-400/90">
+            ⚠ You already searched “{priorRun.category}” {timeAgo(priorRun.ranAt)} (found{" "}
+            {priorRun.newCount} new). Running again may spend credits for few new brands.
+          </p>
+        )}
       </div>
+
+      {/* Recent searches: persisted across redeploys; click to reuse a focus. */}
+      {runs.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-neutral-500">Recent searches</p>
+          <div className="flex flex-wrap gap-1.5">
+            {runs.slice(0, 12).map((r, i) => (
+              <button
+                key={`${r.ranAt}-${i}`}
+                type="button"
+                disabled={running !== null}
+                onClick={() => r.category && setFocus(r.category)}
+                title={`${timeAgo(r.ranAt)} · +${r.newCount} new · ${r.totalCount} total`}
+                className="rounded-full border border-neutral-800 bg-neutral-950 px-2.5 py-1 text-[11px] text-neutral-400 transition hover:border-neutral-600 hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {r.category ?? "general sweep"}{" "}
+                <span className="text-neutral-600">+{r.newCount}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <ActionButton

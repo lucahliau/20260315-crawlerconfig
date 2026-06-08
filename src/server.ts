@@ -12,9 +12,11 @@ import {
   normalizeDiscoverCategory,
   normalizeUrl,
   syncConfigsToMasterList,
+  bootstrapBrandsFromJson,
   type DiscoveredBrand,
   type DiscoverBrandsOptions,
 } from "./discoverBrands.js";
+import { bootstrapLeadsFromJson } from "./brandSources.js";
 import { writeJsonAtomic } from "./jsonFs.js";
 import { retailerSlugFromUrl } from "./retailerSlug.js";
 import { recordDiscoverUsage, recordExploreUsage, getCostMetrics } from "./usageLedger.js";
@@ -2388,7 +2390,12 @@ app.listen(PORT, () => {
       console.error("[startup] Failed to initialize pipeline persistence:", err);
     }
     try {
-      syncConfigsToMasterList(CONFIGS_DIR);
+      // Seed the durable brand store from any local JSON on first boot (no-op
+      // once the DB has rows), then reconcile configs into the master list.
+      const seeded = await bootstrapBrandsFromJson();
+      if (seeded > 0) console.log(`[startup] Seeded ${seeded} brands into Postgres from local JSON.`);
+      await bootstrapLeadsFromJson();
+      await syncConfigsToMasterList(CONFIGS_DIR);
     } catch (err) {
       console.error("[startup] Failed to sync configs to master list:", err);
     }

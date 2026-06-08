@@ -52,7 +52,13 @@ export interface UploadUrlResultRecord {
 let pool: Pool | null = null;
 let schemaReady: Promise<void> | null = null;
 
-function getPool(): Pool | null {
+/**
+ * Shared singleton pg pool for all persistence modules (pipeline jobs, brand
+ * store, etc). Returns null when DATABASE_URL is unset so callers degrade to
+ * local-file fallbacks. Exported so sibling stores reuse one connection pool
+ * rather than opening their own against the same (connection-limited) Supabase.
+ */
+export function getPool(): Pool | null {
   if (pool) return pool;
   const dbUrl = (process.env.DATABASE_URL ?? "").replace(/^["']+|["']+$/g, "");
   if (!dbUrl) return null;

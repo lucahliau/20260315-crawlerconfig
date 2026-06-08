@@ -309,7 +309,7 @@ export async function probeAndRecordBrands(opts?: {
   const onProgress = opts?.onProgress ?? (() => {});
   const concurrency = Math.max(1, Math.min(opts?.concurrency ?? 4, 8));
 
-  let brands = listBrands();
+  let brands = await listBrands();
   if (opts?.onlyCandidates) brands = brands.filter((b) => !isPipelineEligible(b));
   if (!opts?.force) brands = brands.filter((b) => !b.priceSample);
 
@@ -335,7 +335,7 @@ export async function probeAndRecordBrands(opts?: {
       }
       const usd = r.teeUsd ?? r.usd;
       const tier = classifyPriceTier(usd);
-      setBrandPriceSample(b.url, { usd, sourceUrl: r.sourceUrl, at: new Date().toISOString() });
+      await setBrandPriceSample(b.url, { usd, sourceUrl: r.sourceUrl, at: new Date().toISOString() });
       summary.probed++;
       summary.byTier[tier]++;
       if (tier === "too_expensive") summary.flaggedTooExpensive.push({ name: b.name, url: b.url, usd });

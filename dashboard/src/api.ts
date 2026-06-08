@@ -50,6 +50,17 @@ export interface BrandLeadsResponse {
   leads: VendorLead[];
 }
 
+export interface DiscoveryRun {
+  category: string | null;
+  newCount: number;
+  totalCount: number;
+  ranAt: string;
+}
+
+export interface DiscoveryRunsResponse {
+  runs: DiscoveryRun[];
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
@@ -152,4 +163,6 @@ export const api = {
       body: JSON.stringify({ url, name }),
     }),
   getBrandLeads: () => request<BrandLeadsResponse>("/api/brand-leads"),
+  getDiscoveryRuns: (limit = 50) =>
+    request<DiscoveryRunsResponse>(`/api/discovery-runs?limit=${limit}`),
 };
