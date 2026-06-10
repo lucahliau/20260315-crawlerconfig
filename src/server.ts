@@ -13,6 +13,8 @@ import {
   normalizeUrl,
   syncConfigsToMasterList,
   bootstrapBrandsFromJson,
+  listBrands,
+  isPipelineEligible,
   type DiscoveredBrand,
   type DiscoverBrandsOptions,
 } from "./discoverBrands.js";
@@ -1884,6 +1886,31 @@ app.get("/api/retailers-overview", async (_req, res) => {
         upload.crawlSourceCrawledAt === crawl.crawledAt
       );
 
+      // Live stage state from retailer_pipeline_state — lets the dashboard show
+      // in-flight crawls/uploads (and their failures) without polling job SSE.
+      const crawlState = state?.crawlState as Record<string, unknown> | undefined;
+      const uploadState = state?.uploadState as Record<string, unknown> | undefined;
+      const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+      const str = (v: unknown) => (typeof v === "string" && v.length > 0 ? v : null);
+      const crawlLive = str(crawlState?.status)
+        ? {
+            status: str(crawlState?.status)!,
+            totalUrls: num(crawlState?.totalUrls),
+            lastCheckpointAt: str(crawlState?.lastCheckpointAt),
+            error: str(crawlState?.error),
+          }
+        : null;
+      const uploadLive = str(uploadState?.status)
+        ? {
+            status: str(uploadState?.status)!,
+            uploaded: num(uploadState?.uploaded),
+            skipped: num(uploadState?.skipped),
+            failed: num(uploadState?.failed),
+            total: num(uploadState?.total),
+            error: str(uploadState?.error),
+          }
+        : null;
+
       retailers.push({
         retailer,
         filename,
@@ -1900,23 +1927,23 @@ app.get("/api/retailers-overview", async (_req, res) => {
         crawl,
         upload,
         uploadMatchesCurrentCrawl,
+        crawlLive,
+        uploadLive,
+        latestJobId: str(state?.latestJobId),
       });
     }
 
     const identifiedWithoutConfig: { name: string; url: string }[] = [];
     const backlogSeen = new Set<string>();
 
+    // Brand store is Postgres-first (JSON only as offline fallback) — the old
+    // direct read of discovered-brands.json went stale on Railway's ephemeral FS.
+    // Only pipeline-eligible brands (approved or legacy) belong in the explore backlog.
     let discoveredBrandsList: DiscoveredBrand[] = [];
-    let discoveredUrlStrings: string[] = [];
-    if (fs.existsSync(DISCOVERED_BRANDS_PATH)) {
-      try {
-        const raw = fs.readFileSync(DISCOVERED_BRANDS_PATH, "utf-8");
-        const data = JSON.parse(raw) as { brands?: unknown; urls?: unknown };
-        discoveredBrandsList = Array.isArray(data.brands) ? (data.brands as DiscoveredBrand[]) : [];
-        discoveredUrlStrings = Array.isArray(data.urls) ? (data.urls as string[]) : [];
-      } catch {
-        // ignore parse errors
-      }
+    try {
+      discoveredBrandsList = (await listBrands()).filter(isPipelineEligible);
+    } catch (err) {
+      console.error("[api/retailers-overview] Failed to list brands for backlog:", err);
     }
 
     for (const b of discoveredBrandsList) {
@@ -1927,14 +1954,6 @@ app.get("/api/retailers-overview", async (_req, res) => {
       backlogSeen.add(n);
       const name = typeof b.name === "string" && b.name.trim().length > 0 ? b.name.trim() : n;
       identifiedWithoutConfig.push({ name, url: n });
-    }
-    for (const u of discoveredUrlStrings) {
-      if (typeof u !== "string") continue;
-      const n = normalizeUrl(u);
-      if (!n || backlogSeen.has(n)) continue;
-      if (configBaseUrls.has(n)) continue;
-      backlogSeen.add(n);
-      identifiedWithoutConfig.push({ name: n, url: n });
     }
     for (const row of stateRows) {
       const n = typeof row.baseUrl === "string" ? normalizeUrl(row.baseUrl) : null;

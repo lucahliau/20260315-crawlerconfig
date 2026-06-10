@@ -271,6 +271,20 @@ export async function markRunningJobsInterrupted(): Promise<void> {
       WHERE status = 'running'
     `,
   );
+  // Stage states live in retailer_pipeline_state JSON — a crash mid-crawl/upload
+  // would otherwise leave status='running' forever, blocking the dashboard's
+  // per-retailer actions. Crawl resumes from checkpointed URLs and upload skips
+  // already-uploaded URLs, so 'interrupted' simply means "safe to re-run".
+  for (const column of ["crawl_state", "upload_state"] as const) {
+    await pg.query(
+      `
+        UPDATE retailer_pipeline_state
+        SET ${column} = ${column} || '{"status":"interrupted"}'::jsonb,
+            updated_at = NOW()
+        WHERE ${column}->>'status' = 'running'
+      `,
+    );
+  }
 }
 
 export async function createPipelineJob(job: PipelineJobRecord): Promise<void> {

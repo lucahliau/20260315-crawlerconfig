@@ -61,6 +61,81 @@ export interface DiscoveryRunsResponse {
   runs: DiscoveryRun[];
 }
 
+// --- Retailer pipeline (explore → crawl → upload) ---
+
+export type ExploreStatus =
+  | "idle"
+  | "running"
+  | "completed"
+  | "failed"
+  | "needs_retry"
+  | "queued_retry";
+export type Recommendation = "recommended" | "usable" | "not recommended" | "unknown";
+
+export interface CrawlSummary {
+  totalUrls: number;
+  crawledAt: string;
+  method: string;
+}
+
+export interface CrawlLive {
+  status: string;
+  totalUrls: number | null;
+  lastCheckpointAt: string | null;
+  error: string | null;
+}
+
+export interface UploadLive {
+  status: string;
+  uploaded: number | null;
+  skipped: number | null;
+  failed: number | null;
+  total: number | null;
+  error: string | null;
+}
+
+export interface RetailerRow {
+  retailer: string;
+  filename: string;
+  config: { baseUrl?: string; retailerDisplayName?: string } & Record<string, unknown>;
+  recommendation: Recommendation;
+  storedRecommendation: Recommendation;
+  exploreStatus: ExploreStatus;
+  exploreError: string | null;
+  retryAt: string | null;
+  exploreFailureCode: string | null;
+  exploreFailureReason: string | null;
+  exploreAttempt: number | null;
+  exploreMaxAttempts: number | null;
+  crawl: CrawlSummary | null;
+  upload: { uploaded?: number; skipped?: number; failed?: number; total?: number; uploadedAt?: string } & Record<string, unknown> | null;
+  uploadMatchesCurrentCrawl: boolean;
+  crawlLive: CrawlLive | null;
+  uploadLive: UploadLive | null;
+  latestJobId: string | null;
+}
+
+export interface RetailersOverviewResponse {
+  retailers: RetailerRow[];
+  identifiedWithoutConfig: { name: string; url: string }[];
+}
+
+export interface ScrapeError {
+  code: string;
+  detail: string;
+  retailer: string | null;
+  stage: string;
+  url: string | null;
+  attempt: number;
+  jobId: string | null;
+  occurredAt?: string;
+}
+
+export interface ErrorsResponse {
+  errors: ScrapeError[];
+  counts: { byCode: Record<string, number>; byStage: Record<string, number>; total: number };
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
@@ -165,4 +240,41 @@ export const api = {
   getBrandLeads: () => request<BrandLeadsResponse>("/api/brand-leads"),
   getDiscoveryRuns: (limit = 50) =>
     request<DiscoveryRunsResponse>(`/api/discovery-runs?limit=${limit}`),
+
+  // --- Retailer pipeline ---
+  getRetailersOverview: () => request<RetailersOverviewResponse>("/api/retailers-overview"),
+  explore: (urls: string[], skipExisting = true) =>
+    request<{ jobId: string; skippedUrls: string[]; skippedCount: number }>("/api/explore", {
+      method: "POST",
+      body: JSON.stringify({ urls, skipExisting }),
+    }),
+  exploreRetry: (retailers: string[]) =>
+    request<{ jobId: string; submittedCount: number }>("/api/explore/retry", {
+      method: "POST",
+      body: JSON.stringify({ retailers }),
+    }),
+  crawl: (retailer: string) =>
+    request<{ jobId: string }>(`/api/crawl/${encodeURIComponent(retailer)}`, {
+      method: "POST",
+      body: "{}",
+    }),
+  upload: (retailer: string) =>
+    request<{ jobId: string }>(`/api/upload/${encodeURIComponent(retailer)}`, {
+      method: "POST",
+      body: "{}",
+    }),
+  runE2E: () => request<{ jobId: string }>("/api/run-e2e", { method: "POST", body: "{}" }),
+  setRecommendation: (retailer: string, recommendation: Recommendation) =>
+    request<{ retailer: string; recommendation: Recommendation }>(
+      `/api/configs/${encodeURIComponent(retailer)}/recommendation`,
+      { method: "PATCH", body: JSON.stringify({ recommendation }) },
+    ),
+  getErrors: (params?: { sinceMinutes?: number; retailer?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.sinceMinutes) qs.set("since", String(params.sinceMinutes));
+    if (params?.retailer) qs.set("retailer", params.retailer);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const q = qs.toString();
+    return request<ErrorsResponse>(`/api/errors${q ? `?${q}` : ""}`);
+  },
 };

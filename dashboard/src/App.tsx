@@ -1,18 +1,20 @@
 import { useState } from "react";
 import { BrandCuration } from "./components/BrandCuration.tsx";
 import { LeadsView } from "./components/LeadsView.tsx";
+import { RetailersView } from "./components/RetailersView.tsx";
 
-type Tab = "brands" | "leads";
+type Tab = "brands" | "leads" | "retailers";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "brands", label: "Brands" },
   { key: "leads", label: "Leads" },
+  { key: "retailers", label: "Retailers" },
 ];
 
 /**
  * App shell. The unified control panel for the clothing content pipeline.
- * Tabs: Brand Curation (approve/reject + run discovery/mine/probe) and Leads
- * (promote mined stockist names into the master list). More views layer in next.
+ * Tabs follow the funnel: Brands (discover + approve), Leads (promote mined
+ * stockist names), Retailers (explore → crawl → upload operations per site).
  */
 export function App() {
   const [tab, setTab] = useState<Tab>("brands");
@@ -44,8 +46,10 @@ export function App() {
       <main className="mx-auto max-w-7xl p-6">
         {tab === "brands" ? (
           <BrandCuration />
-        ) : (
+        ) : tab === "leads" ? (
           <LeadsView onAdded={() => setReloadKey((k) => k + 1)} />
+        ) : (
+          <RetailersView />
         )}
       </main>
     </div>

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, type Brand, type BrandStatus, type PriceTier } from "../api.ts";
-import { BrandCard } from "./BrandCard.tsx";
 import { PipelineActions } from "./PipelineActions.tsx";
 
 type StatusFilter = BrandStatus | "all";
@@ -142,18 +141,113 @@ export function BrandCuration() {
           Nothing here. Try a different filter, or run a discovery.
         </p>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {visible.map((b) => (
-            <BrandCard
-              key={b.url}
-              brand={b}
-              busy={busyUrl === b.url}
-              onSetStatus={setStatus}
-            />
-          ))}
+        <div className="overflow-hidden rounded-xl border border-neutral-800">
+          <ul className="divide-y divide-neutral-800/60">
+            {visible.map((b) => (
+              <BrandRow key={b.url} brand={b} busy={busyUrl === b.url} onSetStatus={setStatus} />
+            ))}
+          </ul>
         </div>
       )}
     </section>
+  );
+}
+
+const TIER_STYLE: Record<PriceTier, { label: string; cls: string }> = {
+  accessible: { label: "accessible", cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" },
+  too_expensive: { label: "too pricey", cls: "bg-amber-500/15 text-amber-300 border-amber-500/30" },
+  too_cheap: { label: "too cheap", cls: "bg-amber-500/15 text-amber-300 border-amber-500/30" },
+  unknown: { label: "unknown", cls: "bg-neutral-700/30 text-neutral-400 border-neutral-600/40" },
+};
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+/** One compact brand row — scales to hundreds of brands where the old card grid didn't. */
+function BrandRow({
+  brand,
+  busy,
+  onSetStatus,
+}: {
+  brand: Brand;
+  busy: boolean;
+  onSetStatus: (url: string, status: BrandStatus) => void;
+}) {
+  const tier = TIER_STYLE[brand.tier];
+  const price = brand.priceSample ? `$${Math.round(brand.priceSample.usd)}` : null;
+  const status = brand.effectiveStatus;
+
+  return (
+    <li
+      className={`flex items-center gap-3 px-4 py-2.5 hover:bg-neutral-900/50 ${
+        status === "rejected" ? "opacity-50" : ""
+      }`}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
+          <span className="truncate font-medium text-neutral-100">{brand.name}</span>
+          <a
+            href={brand.url}
+            target="_blank"
+            rel="noreferrer"
+            className="hidden truncate text-xs text-neutral-500 hover:text-neutral-300 hover:underline sm:inline"
+          >
+            {hostOf(brand.url)}
+          </a>
+        </div>
+      </div>
+
+      <div className="hidden shrink-0 items-center gap-1.5 text-[11px] text-neutral-400 md:flex">
+        {brand.region && <span className="rounded bg-neutral-800 px-1.5 py-0.5">{brand.region}</span>}
+        {brand.source && <span className="rounded bg-neutral-800 px-1.5 py-0.5">via {brand.source}</span>}
+      </div>
+
+      <span className={`w-28 shrink-0 rounded-full border px-2 py-0.5 text-center text-[11px] ${tier.cls}`}>
+        {price ? `${price} · ` : ""}
+        {tier.label}
+      </span>
+
+      <div className="flex w-44 shrink-0 items-center justify-end gap-1.5">
+        {status === "candidate" ? (
+          <>
+            <button
+              disabled={busy}
+              onClick={() => onSetStatus(brand.url, "approved")}
+              className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-white transition hover:bg-emerald-500 disabled:opacity-50"
+            >
+              Approve
+            </button>
+            <button
+              disabled={busy}
+              onClick={() => onSetStatus(brand.url, "rejected")}
+              className="rounded-md bg-neutral-800 px-3 py-1 text-xs font-medium text-neutral-200 transition hover:bg-red-600/80 disabled:opacity-50"
+            >
+              Reject
+            </button>
+          </>
+        ) : (
+          <>
+            <span
+              className={`text-xs font-medium ${status === "approved" ? "text-emerald-400" : "text-red-400"}`}
+            >
+              {status === "approved" ? "✓ Approved" : "✕ Rejected"}
+            </span>
+            <button
+              disabled={busy}
+              onClick={() => onSetStatus(brand.url, "candidate")}
+              className="text-xs text-neutral-500 hover:text-neutral-300 disabled:opacity-50"
+            >
+              Undo
+            </button>
+          </>
+        )}
+      </div>
+    </li>
   );
 }
 
