@@ -2439,13 +2439,16 @@ app.post("/api/upload/:retailer", async (req, res) => {
 // ---------------------------------------------------------------------------
 
 // New React dashboard (Vite build) under /app — falls back to index.html for SPA routing.
+// The same bundle also serves the mobile swipe app at /swipe (App.tsx switches on
+// the pathname; Vite's base:"/app/" makes asset URLs absolute, so they resolve
+// from /swipe as well).
 const DASHBOARD_DIST = path.join(__dirname, "..", "dashboard", "dist");
 if (fs.existsSync(path.join(DASHBOARD_DIST, "index.html"))) {
   app.use("/app", express.static(DASHBOARD_DIST));
-  app.get(/^\/app(\/.*)?$/, (_req, res) => {
+  app.get(/^\/(app|swipe)(\/.*)?$/, (_req, res) => {
     res.sendFile(path.join(DASHBOARD_DIST, "index.html"));
   });
-  console.log("[dashboard] Serving React dashboard at /app");
+  console.log("[dashboard] Serving React dashboard at /app (mobile swipe at /swipe)");
 } else {
   console.log("[dashboard] React build not found; run `npm run build` in dashboard/ to enable /app");
 }

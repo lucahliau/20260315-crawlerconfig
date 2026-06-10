@@ -153,6 +153,29 @@ export interface ProcessingResponse {
   perRetailer: { retailer: string; total: number; nobg: number; embedded: number }[];
 }
 
+// --- Mobile swipe queue ---
+
+export interface PreviewImage {
+  src: string;
+  title?: string;
+}
+
+export interface BrandPreview {
+  url: string;
+  ok: boolean;
+  hero: string | null;
+  images: PreviewImage[];
+  source: "shopify" | "sampled" | "og" | "none";
+  fetchedAt: string;
+}
+
+export type SwipeBrand = Brand & { preview: BrandPreview | null };
+
+export interface SwipeQueueResponse {
+  total: number;
+  brands: SwipeBrand[];
+}
+
 // --- Systems health ---
 
 export interface SystemCheck {
@@ -322,4 +345,6 @@ export const api = {
   },
   getProcessing: () => request<ProcessingResponse>("/api/processing"),
   getSystems: () => request<SystemsResponse>("/api/systems"),
+  getSwipeQueue: (limit = 15) =>
+    request<SwipeQueueResponse>(`/api/swipe-queue?limit=${limit}`),
 };

@@ -224,10 +224,10 @@ const MIN_PATTERN_MATCHES = 8;
  * (e.g. /journal/products/the-story-of-the-hoodie). Excluded from pattern
  * inference and sampling so blog posts can't masquerade as the catalog.
  */
-const NON_PRODUCT_PATH =
+export const NON_PRODUCT_PATH =
   /\/(journal|blog|blogs|news|article|articles|stories|story|magazine|editorial|press|lookbook|about|policy|policies|legal|help|faq|support|careers|account|cart|checkout)\//i;
 
-async function discoverSitemapCandidates(origin: string): Promise<string[]> {
+export async function discoverSitemapCandidates(origin: string): Promise<string[]> {
   const candidates: string[] = [];
   const robotsRes = await fetchWithTimeout(`${origin}/robots.txt`, "text/plain");
   if (robotsRes?.ok) {
@@ -246,7 +246,7 @@ async function discoverSitemapCandidates(origin: string): Promise<string[]> {
 }
 
 /** Walk sitemaps (bounded) and collect page URLs. */
-async function collectSitemapUrls(
+export async function collectSitemapUrls(
   entry: string,
   onLog?: (msg: string) => void,
 ): Promise<string[]> {

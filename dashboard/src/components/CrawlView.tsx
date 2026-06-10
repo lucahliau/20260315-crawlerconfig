@@ -44,10 +44,16 @@ export function CrawlView() {
   const [search, setSearch] = useState("");
 
   // Only sites whose config identification completed belong in this stage.
+  // Not-yet-crawled sites sort first so pending work is visible immediately
+  // (rows arrive alphabetical from the API, which keeps each group stable).
   const retailers = useMemo(
-    () => (data?.retailers ?? []).filter((r) => r.exploreStatus === "completed"),
+    () =>
+      (data?.retailers ?? [])
+        .filter((r) => r.exploreStatus === "completed")
+        .sort((a, b) => Number(!!a.crawl) - Number(!!b.crawl)),
     [data],
   );
+  const crawledCount = useMemo(() => retailers.filter((r) => !!r.crawl).length, [retailers]);
   const counts = useMemo(() => {
     const c: Record<Filter, number> = {
       all: retailers.length,
@@ -77,9 +83,13 @@ export function CrawlView() {
           <p className="mt-1 text-sm text-gray-500">
             Collect product URLs, then extract and push products to the catalog.{" "}
             <span className="tnum">
+              {crawledCount}/{counts.all}
+            </span>{" "}
+            crawled ·{" "}
+            <span className="tnum">
               {counts.done}/{counts.all}
             </span>{" "}
-            sites fully up to date.
+            fully up to date.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -233,12 +243,17 @@ function Row({
             label={`Interrupted${r.crawlLive?.totalUrls ? ` · ${r.crawlLive.totalUrls} saved` : ""}`}
           />
         ) : r.crawl ? (
-          <span className="text-gray-700">
-            <span className="tnum">{r.crawl.totalUrls.toLocaleString()}</span> URLs
-            <span className="ml-1.5 text-gray-400">{timeAgo(r.crawl.crawledAt)}</span>
-          </span>
+          <StatusDot
+            tone="ok"
+            label={
+              <>
+                Crawled · <span className="tnum">{r.crawl.totalUrls.toLocaleString()}</span> URLs
+                <span className="ml-1.5 text-gray-400">{timeAgo(r.crawl.crawledAt)}</span>
+              </>
+            }
+          />
         ) : (
-          <span className="text-gray-300">—</span>
+          <StatusDot tone="idle" muted label="Not crawled yet" />
         )}
       </td>
 

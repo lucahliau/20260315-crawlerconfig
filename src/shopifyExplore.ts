@@ -25,10 +25,11 @@ const FETCH_TIMEOUT_MS = 15_000;
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 
-interface ShopifyProduct {
+export interface ShopifyProduct {
   handle?: string;
   title?: string;
   vendor?: string;
+  images?: { src?: string }[];
 }
 
 async function fetchWithTimeout(url: string, accept: string): Promise<Response | null> {
@@ -47,7 +48,7 @@ async function fetchWithTimeout(url: string, accept: string): Promise<Response |
   }
 }
 
-async function fetchProductsPage(origin: string, limit: number): Promise<ShopifyProduct[] | null> {
+export async function fetchProductsPage(origin: string, limit: number): Promise<ShopifyProduct[] | null> {
   const res = await fetchWithTimeout(`${origin}/products.json?limit=${limit}`, "application/json");
   if (!res || !res.ok) return null;
   try {

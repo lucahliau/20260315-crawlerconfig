@@ -11,6 +11,7 @@ import {
 import { classifyPriceTier, probeAndRecordBrands, type PriceTier } from "../priceProbe.js";
 import { mineAndWriteLeads, loadBrandLeads } from "../brandSources.js";
 import { dbListDiscoveryRuns } from "../brandStore.js";
+import { getPreviewsFor } from "../brandPreview.js";
 
 /**
  * Brand-curation API for the dashboard.
@@ -176,6 +177,44 @@ export function createBrandsRouter(options: BrandsRouterOptions = {}): Router {
     } catch (err) {
       console.error("[api/brands] Error:", err);
       res.status(500).json({ error: "Failed to load brands." });
+    }
+  });
+
+  /**
+   * GET /api/swipe-queue — candidates for the mobile swipe app, enriched with
+   * cached site imagery. Accessible tier first (the target segment), then
+   * unprobed, then too-pricey; newest discoveries first within each group.
+   * Previews for the returned page are fetched lazily (bounded concurrency +
+   * per-brand timeout) and cached in Postgres, so repeat loads are instant.
+   */
+  router.get("/api/swipe-queue", async (req: Request, res: Response) => {
+    try {
+      const limitRaw = parseInt(String(req.query.limit ?? "15"), 10);
+      const limit = Math.max(1, Math.min(Number.isFinite(limitRaw) ? limitRaw : 15, 40));
+
+      const candidates = (await listBrands())
+        .map(toView)
+        .filter((b) => b.effectiveStatus === "candidate");
+      const tierRank: Record<PriceTier, number> = {
+        accessible: 0,
+        unknown: 1,
+        too_cheap: 2,
+        too_expensive: 3,
+      };
+      candidates.sort((a, b) => {
+        if (tierRank[a.tier] !== tierRank[b.tier]) return tierRank[a.tier] - tierRank[b.tier];
+        return (b.discoveredAt ?? "").localeCompare(a.discoveredAt ?? "");
+      });
+
+      const page = candidates.slice(0, limit);
+      const previews = await getPreviewsFor(page.map((b) => b.url));
+      res.json({
+        total: candidates.length,
+        brands: page.map((b) => ({ ...b, preview: previews.get(b.url) ?? null })),
+      });
+    } catch (err) {
+      console.error("[api/swipe-queue] Error:", err);
+      res.status(500).json({ error: "Failed to load swipe queue." });
     }
   });
 
