@@ -28,6 +28,7 @@ import {
   createPipelineJob,
   ensurePipelinePersistenceSchema,
   getPipelineJob,
+  getPool,
   getRetailerPipelineState,
   getScrapeErrorCounts,
   getSuccessfulUploadUrls,
@@ -48,6 +49,7 @@ import {
   getQueueStats,
   listDeadLetter,
   retryDeadLetterJob,
+  stopBoss,
 } from "./queue.js";
 import { safeParseConfig } from "./schemas/config.js";
 import { createBrandsRouter } from "./routes/brands.js";
@@ -2455,7 +2457,7 @@ app.get("/", (_req, res) => {
 // Start
 // ---------------------------------------------------------------------------
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   void (async () => {
     try {
       await ensurePipelinePersistenceSchema();
@@ -2476,3 +2478,33 @@ app.listen(PORT, () => {
     console.log(`\n  Crawler Config UI running at http://localhost:${PORT}\n`);
   })();
 });
+
+// Graceful shutdown — Railway sends SIGTERM to the old container on every
+// redeploy. Without a handler, Node dies by signal (non-zero exit) and Railway
+// emails a "deployment crashed" alert even though the new deploy succeeded.
+// Exit 0 instead; anything in flight is already covered by the resume story
+// (markRunningJobsInterrupted on next boot + crawl checkpoints + upload ledger).
+let shuttingDown = false;
+function shutdownGracefully(signal: string): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} received — exiting cleanly (interrupted jobs resume on next boot).`);
+  server.close();
+  // Hard deadline: open SSE sockets or a stuck pool query must not stall the swap.
+  setTimeout(() => process.exit(0), 5000);
+  void (async () => {
+    try {
+      await stopBoss();
+    } catch {
+      /* best-effort */
+    }
+    try {
+      await getPool()?.end();
+    } catch {
+      /* best-effort */
+    }
+    process.exit(0);
+  })();
+}
+process.on("SIGTERM", () => shutdownGracefully("SIGTERM"));
+process.on("SIGINT", () => shutdownGracefully("SIGINT"));
