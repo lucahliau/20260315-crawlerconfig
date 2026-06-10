@@ -51,12 +51,41 @@ import {
 } from "./queue.js";
 import { safeParseConfig } from "./schemas/config.js";
 import { createBrandsRouter } from "./routes/brands.js";
+import { isShopifyStore } from "./shopifyExplore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 app.use(express.json());
-app.use(createBrandsRouter());
+app.use(
+  createBrandsRouter({
+    // Approve → config, hands-free, when it's free: Shopify stores get their
+    // crawl config generated deterministically (no Stagehand/Gemini spend) via
+    // the normal explore-job machinery, so state persists like any explore.
+    // Non-Shopify brands stay in the Retailers backlog for a manual (paid) explore.
+    onBrandApproved: (url) => {
+      void (async () => {
+        try {
+          const clean = cleanUrl(url);
+          if (!clean) return;
+          const slug = retailerSlugFromUrl(clean);
+          const config = await loadStoredConfig(slug);
+          const state = await getRetailerPipelineState(slug);
+          const status = getExploreStatus(state?.exploreState, !!config, hasConfigError(config));
+          if (shouldSkipExistingExplore(status)) return;
+          if (!(await isShopifyStore(clean))) {
+            console.log(`[auto-explore] ${slug}: not Shopify — left in backlog for manual explore.`);
+            return;
+          }
+          const { jobId } = await createExploreJob([clean], 1);
+          console.log(`[auto-explore] ${slug}: Shopify detected — explore job ${jobId} started.`);
+        } catch (err) {
+          console.error("[auto-explore] Failed:", err);
+        }
+      })();
+    },
+  }),
+);
 
 const PORT = parseInt(process.env.PORT ?? "3456", 10);
 const CONFIGS_DIR = process.env.CONFIGS_DIR ?? path.join(process.cwd(), "configs");

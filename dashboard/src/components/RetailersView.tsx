@@ -360,7 +360,7 @@ export function RetailersView() {
             className="flex w-full items-center justify-between px-4 py-3 text-left"
           >
             <span className="text-sm font-medium text-neutral-200">
-              Backlog — eligible, not yet explored{" "}
+              Backlog — approved brands without a crawl config yet{" "}
               <span className="text-neutral-500">({backlog.length})</span>
             </span>
             <span className="flex items-center gap-3">

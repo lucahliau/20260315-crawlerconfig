@@ -89,7 +89,9 @@ export function BrandCuration() {
         <div>
           <h2 className="text-base font-semibold text-neutral-100">Brand curation</h2>
           <p className="text-sm text-neutral-400">
-            Approve the cool, accessible ones before they cost any crawl budget.
+            Approve the cool, accessible ones. Shopify brands get a crawl config built
+            automatically (free) and appear in <span className="text-neutral-300">Retailers</span>;
+            the rest land in the Retailers backlog for a manual explore.
           </p>
         </div>
         <div className="flex gap-2 text-xs text-neutral-400">

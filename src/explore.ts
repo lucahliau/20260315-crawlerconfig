@@ -4,6 +4,7 @@ import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
 import { addToMasterList } from "./discoverBrands.js";
+import { tryShopifyExplore } from "./shopifyExplore.js";
 import { writeJsonAtomic } from "./jsonFs.js";
 import { retailerSlugFromUrl } from "./retailerSlug.js";
 import { estimateUsdFromStagehandMetrics } from "./pricing.js";
@@ -2402,6 +2403,29 @@ export async function exploreRetailer(
 
     configsDir = process.env.CONFIGS_DIR ?? path.join(process.cwd(), "configs");
     fs.mkdirSync(configsDir, { recursive: true });
+
+    // Shopify fast path: most target brands are Shopify stores whose catalog is
+    // fully enumerable via the public /products.json — no browser or LLM needed.
+    const shopifyConfig = await tryShopifyExplore(
+      url,
+      { retailer, displayName },
+      (msg) => log(session, msg),
+    );
+    if (shopifyConfig) {
+      writePartialConfig(configsDir, retailer, shopifyConfig);
+      if (baseUrl) {
+        await addToMasterList(baseUrl, shopifyConfig.retailerDisplayName as string | undefined);
+      }
+      log(session, "\n--- Summary ---");
+      log(session, `  Retailer:         ${shopifyConfig.retailerDisplayName} (${retailer})`);
+      log(session, `  Discovery method: api (Shopify /products.json)`);
+      log(session, `  Recommendation:   ${(shopifyConfig.dataQuality as { overallRecommendation?: string }).overallRecommendation}`);
+      log(session, `  Output:           configs/${retailer}.json`);
+      log(session, "----------------\n");
+      log(session, "Done (Shopify fast path — no Stagehand/Gemini spend).");
+      return { config: shopifyConfig, metrics: null, estimatedUsd: 0 };
+    }
+    log(session, "Not a Shopify store (or products.json unavailable) — using browser exploration.\n");
 
     log(session, formatStagehandInitMessage(false));
 

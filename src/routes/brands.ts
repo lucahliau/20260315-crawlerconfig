@@ -130,7 +130,15 @@ function isKindRunning(kind: TaskKind): boolean {
   return false;
 }
 
-export function createBrandsRouter(): Router {
+export interface BrandsRouterOptions {
+  /**
+   * Fired (and not awaited) after a brand is set to "approved" — server.ts uses
+   * it to auto-generate a crawl config when the site is Shopify (zero AI cost).
+   */
+  onBrandApproved?: (url: string) => void;
+}
+
+export function createBrandsRouter(options: BrandsRouterOptions = {}): Router {
   const router = Router();
 
   /**
@@ -191,6 +199,7 @@ export function createBrandsRouter(): Router {
       if (!found) {
         return res.status(404).json({ error: "Brand not found for that URL." });
       }
+      if (status === "approved") options.onBrandApproved?.(url);
       res.json({ ok: true, url, status });
     } catch (err) {
       console.error("[api/brands/status] Error:", err);
