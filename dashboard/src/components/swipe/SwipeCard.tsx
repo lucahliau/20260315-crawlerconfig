@@ -3,12 +3,13 @@ import type { BrandStatus, PriceTier, SwipeBrand } from "../../api.ts";
 import { cx } from "../ui.tsx";
 
 /**
- * One brand card in the swipe stack. The top card (depth 0) is draggable:
- * past ±35% of its width it animates off-screen and commits the decision;
- * otherwise it springs back. Buttons mirror the gestures for tap-only use.
+ * One brand card in the swipe stack. Approve/reject are BUTTON-ONLY —
+ * swiping the card (either direction) just skips it for later: it animates
+ * away and rejoins the back of the deck undecided, so a commute session can
+ * defer the hard calls without losing them.
  */
 
-const COMMIT_RATIO = 0.35;
+const SKIP_RATIO = 0.35;
 
 const TIER_DARK: Record<PriceTier, { label: string; cls: string }> = {
   accessible: { label: "Accessible", cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" },
@@ -29,10 +30,12 @@ export function SwipeCard({
   brand,
   depth,
   onDecide,
+  onSkip,
 }: {
   brand: SwipeBrand;
   depth: number;
   onDecide: (status: BrandStatus) => void;
+  onSkip: () => void;
 }) {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const startRef = useRef<{ x: number; y: number; id: number } | null>(null);
@@ -41,10 +44,18 @@ export function SwipeCard({
   const [exiting, setExiting] = useState<0 | 1 | -1>(0);
   const [failedImgs, setFailedImgs] = useState<Set<string>>(new Set());
 
-  const commit = (dir: 1 | -1) => {
+  /** Buttons decide; the exit animation direction just matches the verdict. */
+  const decide = (status: BrandStatus) => {
+    setExiting(status === "approved" ? 1 : -1);
+    setDragging(false);
+    setTimeout(() => onDecide(status), 220);
+  };
+
+  /** A swipe (either direction) defers the brand — no API call, back of the deck. */
+  const skip = (dir: 1 | -1) => {
     setExiting(dir);
     setDragging(false);
-    setTimeout(() => onDecide(dir === 1 ? "approved" : "rejected"), 220);
+    setTimeout(() => onSkip(), 220);
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -64,8 +75,8 @@ export function SwipeCard({
     const width = cardRef.current?.offsetWidth ?? 320;
     const final = e.clientX - startRef.current.x;
     startRef.current = null;
-    if (Math.abs(final) > width * COMMIT_RATIO) {
-      commit(final > 0 ? 1 : -1);
+    if (Math.abs(final) > width * SKIP_RATIO) {
+      skip(final > 0 ? 1 : -1);
     } else {
       setDragging(false);
       setDx(0);
@@ -107,18 +118,14 @@ export function SwipeCard({
         transitionProperty: dragging ? "none" : "transform, opacity",
       }}
     >
-      {/* Drag verdict overlays */}
+      {/* Drag overlay — swiping defers, it never decides */}
       <div
-        className="pointer-events-none absolute left-4 top-4 z-20 rotate-[-12deg] rounded-md border-2 border-emerald-400 px-2.5 py-1 text-lg font-bold tracking-wider text-emerald-400"
-        style={{ opacity: Math.max(0, Math.min(1, (dx - 30) / 70)) }}
+        className="pointer-events-none absolute inset-x-0 top-5 z-20 flex justify-center"
+        style={{ opacity: Math.max(0, Math.min(1, (Math.abs(dx) - 30) / 70)) }}
       >
-        APPROVE
-      </div>
-      <div
-        className="pointer-events-none absolute right-4 top-4 z-20 rotate-[12deg] rounded-md border-2 border-red-400 px-2.5 py-1 text-lg font-bold tracking-wider text-red-400"
-        style={{ opacity: Math.max(0, Math.min(1, (-dx - 30) / 70)) }}
-      >
-        REJECT
+        <span className="rounded-full border border-gray-500 bg-gray-950/70 px-3 py-1 text-sm font-semibold tracking-wider text-gray-200 backdrop-blur">
+          LATER ↺
+        </span>
       </div>
 
       {/* Imagery */}
@@ -182,7 +189,7 @@ export function SwipeCard({
       {/* Actions */}
       <div className="flex shrink-0 items-center justify-center gap-5 px-4 py-3.5">
         <button
-          onClick={() => commit(-1)}
+          onClick={() => decide("rejected")}
           aria-label="Reject"
           className="flex size-14 items-center justify-center rounded-full border border-gray-700 bg-gray-800 text-xl text-red-400 active:scale-95"
         >
@@ -198,7 +205,7 @@ export function SwipeCard({
           Open site ↗
         </a>
         <button
-          onClick={() => commit(1)}
+          onClick={() => decide("approved")}
           aria-label="Approve"
           className="flex size-14 items-center justify-center rounded-full bg-emerald-500 text-xl text-white active:scale-95"
         >

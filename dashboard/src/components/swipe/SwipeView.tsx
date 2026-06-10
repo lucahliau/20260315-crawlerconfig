@@ -1,14 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type BrandStatus, type SwipeBrand } from "../../api.ts";
 import { SwipeCard } from "./SwipeCard.tsx";
+import { MobileDiscover } from "./MobileDiscover.tsx";
+import { cx } from "../ui.tsx";
 
 /**
- * Mobile swipe triage for the Discover stage, served at /swipe.
+ * Mobile companion for the Discover stage, served at /swipe. Two tabs:
  *
- * One candidate brand per screen with real imagery from its site; swipe right
- * (or ✓) to approve, left (or ✕) to reject. Decisions go through the same
- * POST /api/brands/status as the desktop dashboard, so approving here also
- * fires the Shopify auto-explore hook.
+ *   Review — one candidate brand per screen with real imagery from its site.
+ *   Approve/reject via the buttons ONLY; swiping the card just defers it to
+ *   the back of the deck ("come back to it later"). Decisions go through the
+ *   same POST /api/brands/status as the desktop, so approving here also fires
+ *   the Shopify auto-explore hook.
+ *
+ *   Discover — kick off discovery runs / stockist mining / price checks from
+ *   the phone; the queue refreshes when they finish.
  */
 
 interface Decision {
@@ -17,6 +23,7 @@ interface Decision {
 }
 
 export function SwipeView() {
+  const [tab, setTab] = useState<"review" | "discover">("review");
   const [deck, setDeck] = useState<SwipeBrand[]>([]);
   const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -91,6 +98,14 @@ export function SwipeView() {
     });
   }, [lastDecision]);
 
+  /** Swipe = defer: move the top card to the back of the deck, undecided. */
+  const skip = useCallback((brand: SwipeBrand) => {
+    setDeck((cur) => {
+      const rest = cur.filter((b) => b.url !== brand.url);
+      return [...rest, brand];
+    });
+  }, []);
+
   return (
     <div
       className="flex h-dvh flex-col bg-gray-950 text-gray-100"
@@ -120,32 +135,39 @@ export function SwipeView() {
         </div>
       )}
 
-      <main className="relative flex-1 px-4 pb-3">
-        {loading ? (
-          <CenterNote>Loading brands…</CenterNote>
-        ) : deck.length === 0 ? (
-          <CenterNote>
-            Queue clear.
-            <br />
-            <span className="text-gray-500">Run a discovery from the dashboard to find more.</span>
-          </CenterNote>
-        ) : (
-          // Top card last in DOM so it stacks above the peeking cards.
-          deck
-            .slice(0, 3)
-            .map((b, i) => (
-              <SwipeCard
-                key={b.url}
-                brand={b}
-                depth={i}
-                onDecide={(status) => decide(b, status)}
-              />
-            ))
-            .reverse()
-        )}
-      </main>
+      {tab === "review" ? (
+        <main className="relative flex-1 px-4 pb-3">
+          {loading ? (
+            <CenterNote>Loading brands…</CenterNote>
+          ) : deck.length === 0 ? (
+            <CenterNote>
+              Queue clear.
+              <br />
+              <span className="text-gray-500">Find more in the Discover tab below.</span>
+            </CenterNote>
+          ) : (
+            // Top card last in DOM so it stacks above the peeking cards.
+            deck
+              .slice(0, 3)
+              .map((b, i) => (
+                <SwipeCard
+                  key={b.url}
+                  brand={b}
+                  depth={i}
+                  onDecide={(status) => decide(b, status)}
+                  onSkip={() => skip(b)}
+                />
+              ))
+              .reverse()
+          )}
+        </main>
+      ) : (
+        <main className="min-h-0 flex-1">
+          <MobileDiscover onChanged={() => void refill()} />
+        </main>
+      )}
 
-      {lastDecision && (
+      {tab === "review" && lastDecision && (
         <div className="pointer-events-none absolute inset-x-0 bottom-24 z-30 flex justify-center">
           <button
             onClick={undo}
@@ -156,6 +178,27 @@ export function SwipeView() {
           </button>
         </div>
       )}
+
+      <nav className="flex shrink-0 border-t border-gray-800 bg-gray-950">
+        {(
+          [
+            { key: "review", label: "Review", icon: "▤" },
+            { key: "discover", label: "Discover", icon: "✦" },
+          ] as const
+        ).map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={cx(
+              "flex h-14 flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium",
+              tab === t.key ? "text-white" : "text-gray-500",
+            )}
+          >
+            <span className="text-base leading-none">{t.icon}</span>
+            {t.label}
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }
