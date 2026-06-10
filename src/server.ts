@@ -54,12 +54,16 @@ import {
 import { safeParseConfig } from "./schemas/config.js";
 import { createBrandsRouter } from "./routes/brands.js";
 import { createOpsRouter } from "./routes/ops.js";
+import { installDashboardAuth } from "./dashboardAuth.js";
 import { isShopifyStore } from "./shopifyExplore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 app.use(express.json());
+// Everything below — legacy UI, /app dashboard, /swipe, all /api routes — is
+// behind the dashboard password when DASHBOARD_PASSWORD is set (Railway).
+installDashboardAuth(app);
 app.use(createOpsRouter());
 app.use(
   createBrandsRouter({
