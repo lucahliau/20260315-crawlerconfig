@@ -1,6 +1,15 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type Brand, type BrandStatus, type PriceTier } from "../api.ts";
 import { PipelineActions } from "./PipelineActions.tsx";
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorBanner,
+  Segmented,
+  StatusDot,
+  TierLabel,
+} from "./ui.tsx";
 
 type StatusFilter = BrandStatus | "all";
 type TierFilter = PriceTier | "all";
@@ -84,83 +93,58 @@ export function BrandCuration() {
   }
 
   return (
-    <section className="space-y-5">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-neutral-100">Brand curation</h2>
-          <p className="text-sm text-neutral-400">
-            Approve the cool, accessible ones. Shopify brands get a crawl config built
-            automatically (free) and appear in <span className="text-neutral-300">Retailers</span>;
-            the rest land in the Retailers backlog for a manual explore.
-          </p>
-        </div>
-        <div className="flex gap-2 text-xs text-neutral-400">
-          <Pill>{counts.byStatus.candidate} to review</Pill>
-          <Pill accent="emerald">{counts.byStatus.approved} approved</Pill>
-          <Pill accent="amber">{counts.byTier.too_expensive} too pricey</Pill>
-        </div>
+    <section className="space-y-6">
+      <header>
+        <h1 className="text-lg font-semibold tracking-tight">Brand curation</h1>
+        <p className="mt-1 max-w-2xl text-sm text-gray-500">
+          Approve the cool, accessible ones. Shopify brands get a crawl config built automatically
+          (free) and appear in Retailers; the rest land in the Retailers backlog for a manual
+          explore.
+        </p>
       </header>
 
       <PipelineActions onChanged={() => void load()} />
 
-      <div className="flex flex-wrap items-center gap-2">
-        <TabGroup
-          tabs={STATUS_TABS.map((t) => ({
+      <div className="flex flex-wrap items-center gap-3">
+        <Segmented
+          items={STATUS_TABS.map((t) => ({
             ...t,
-            count:
-              t.key === "all" ? counts.total : counts.byStatus[t.key as BrandStatus],
+            count: t.key === "all" ? counts.total : counts.byStatus[t.key as BrandStatus],
           }))}
           active={statusFilter}
           onChange={(k) => setStatusFilter(k as StatusFilter)}
         />
-        <div className="mx-1 h-5 w-px bg-neutral-800" />
-        <TabGroup
-          tabs={TIER_TABS.map((t) => ({
+        <Segmented
+          items={TIER_TABS.map((t) => ({
             ...t,
             count: t.key === "all" ? undefined : counts.byTier[t.key as PriceTier],
           }))}
           active={tierFilter}
           onChange={(k) => setTierFilter(k as TierFilter)}
         />
-        <button
-          onClick={() => void load()}
-          className="ml-auto rounded-md border border-neutral-800 px-3 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800"
-        >
+        <Button size="sm" className="ml-auto" onClick={() => void load()}>
           Refresh
-        </button>
+        </Button>
       </div>
 
-      {error && (
-        <div className="rounded-md border border-red-900 bg-red-950/50 px-4 py-3 text-sm text-red-300">
-          {error}
-        </div>
-      )}
+      {error && <ErrorBanner onDismiss={() => setError(null)}>{error}</ErrorBanner>}
 
       {loading ? (
-        <p className="text-sm text-neutral-400">Loading brands…</p>
+        <p className="text-sm text-gray-500">Loading brands…</p>
       ) : visible.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-neutral-800 px-4 py-10 text-center text-sm text-neutral-500">
-          Nothing here. Try a different filter, or run a discovery.
-        </p>
+        <EmptyState>Nothing here. Try a different filter, or run a discovery.</EmptyState>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-neutral-800">
-          <ul className="divide-y divide-neutral-800/60">
+        <Card>
+          <ul className="divide-y divide-gray-100">
             {visible.map((b) => (
               <BrandRow key={b.url} brand={b} busy={busyUrl === b.url} onSetStatus={setStatus} />
             ))}
           </ul>
-        </div>
+        </Card>
       )}
     </section>
   );
 }
-
-const TIER_STYLE: Record<PriceTier, { label: string; cls: string }> = {
-  accessible: { label: "accessible", cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" },
-  too_expensive: { label: "too pricey", cls: "bg-amber-500/15 text-amber-300 border-amber-500/30" },
-  too_cheap: { label: "too cheap", cls: "bg-amber-500/15 text-amber-300 border-amber-500/30" },
-  unknown: { label: "unknown", cls: "bg-neutral-700/30 text-neutral-400 border-neutral-600/40" },
-};
 
 function hostOf(url: string): string {
   try {
@@ -170,7 +154,7 @@ function hostOf(url: string): string {
   }
 }
 
-/** One compact brand row — scales to hundreds of brands where the old card grid didn't. */
+/** One compact brand row — scales to hundreds of brands where a card grid wouldn't. */
 function BrandRow({
   brand,
   busy,
@@ -180,120 +164,70 @@ function BrandRow({
   busy: boolean;
   onSetStatus: (url: string, status: BrandStatus) => void;
 }) {
-  const tier = TIER_STYLE[brand.tier];
-  const price = brand.priceSample ? `$${Math.round(brand.priceSample.usd)}` : null;
   const status = brand.effectiveStatus;
 
   return (
     <li
-      className={`flex items-center gap-3 px-4 py-2.5 hover:bg-neutral-900/50 ${
+      className={`flex items-center gap-4 px-4 py-2.5 transition-colors hover:bg-gray-50 ${
         status === "rejected" ? "opacity-50" : ""
       }`}
     >
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <span className="truncate font-medium text-neutral-100">{brand.name}</span>
+          <span className="truncate text-sm font-medium text-gray-900">{brand.name}</span>
           <a
             href={brand.url}
             target="_blank"
             rel="noreferrer"
-            className="hidden truncate text-xs text-neutral-500 hover:text-neutral-300 hover:underline sm:inline"
+            className="hidden truncate text-xs text-gray-400 hover:text-gray-700 hover:underline sm:inline"
           >
             {hostOf(brand.url)}
           </a>
         </div>
       </div>
 
-      <div className="hidden shrink-0 items-center gap-1.5 text-[11px] text-neutral-400 md:flex">
-        {brand.region && <span className="rounded bg-neutral-800 px-1.5 py-0.5">{brand.region}</span>}
-        {brand.source && <span className="rounded bg-neutral-800 px-1.5 py-0.5">via {brand.source}</span>}
+      <div className="hidden shrink-0 items-center gap-2 text-xs text-gray-400 md:flex">
+        {brand.region && <span>{brand.region}</span>}
+        {brand.region && brand.source && <span className="text-gray-300">·</span>}
+        {brand.source && <span>via {brand.source}</span>}
       </div>
 
-      <span className={`w-28 shrink-0 rounded-full border px-2 py-0.5 text-center text-[11px] ${tier.cls}`}>
-        {price ? `${price} · ` : ""}
-        {tier.label}
-      </span>
+      <div className="w-36 shrink-0">
+        <TierLabel tier={brand.tier} usd={brand.priceSample?.usd} />
+      </div>
 
       <div className="flex w-44 shrink-0 items-center justify-end gap-1.5">
         {status === "candidate" ? (
           <>
-            <button
+            <Button
+              size="sm"
+              variant="primary"
               disabled={busy}
               onClick={() => onSetStatus(brand.url, "approved")}
-              className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-white transition hover:bg-emerald-500 disabled:opacity-50"
             >
               Approve
-            </button>
-            <button
-              disabled={busy}
-              onClick={() => onSetStatus(brand.url, "rejected")}
-              className="rounded-md bg-neutral-800 px-3 py-1 text-xs font-medium text-neutral-200 transition hover:bg-red-600/80 disabled:opacity-50"
-            >
+            </Button>
+            <Button size="sm" disabled={busy} onClick={() => onSetStatus(brand.url, "rejected")}>
               Reject
-            </button>
+            </Button>
           </>
         ) : (
           <>
-            <span
-              className={`text-xs font-medium ${status === "approved" ? "text-emerald-400" : "text-red-400"}`}
-            >
-              {status === "approved" ? "✓ Approved" : "✕ Rejected"}
-            </span>
-            <button
+            <StatusDot
+              tone={status === "approved" ? "ok" : "idle"}
+              label={status === "approved" ? "Approved" : "Rejected"}
+            />
+            <Button
+              size="sm"
+              variant="ghost"
               disabled={busy}
               onClick={() => onSetStatus(brand.url, "candidate")}
-              className="text-xs text-neutral-500 hover:text-neutral-300 disabled:opacity-50"
             >
               Undo
-            </button>
+            </Button>
           </>
         )}
       </div>
     </li>
-  );
-}
-
-function Pill({
-  children,
-  accent,
-}: {
-  children: ReactNode;
-  accent?: "emerald" | "amber";
-}) {
-  const cls =
-    accent === "emerald"
-      ? "text-emerald-300 border-emerald-500/30"
-      : accent === "amber"
-        ? "text-amber-300 border-amber-500/30"
-        : "text-neutral-300 border-neutral-700";
-  return <span className={`rounded-full border px-2.5 py-1 ${cls}`}>{children}</span>;
-}
-
-function TabGroup({
-  tabs,
-  active,
-  onChange,
-}: {
-  tabs: { key: string; label: string; count?: number }[];
-  active: string;
-  onChange: (key: string) => void;
-}) {
-  return (
-    <div className="flex gap-1 rounded-lg bg-neutral-900 p-1">
-      {tabs.map((t) => (
-        <button
-          key={t.key}
-          onClick={() => onChange(t.key)}
-          className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
-            active === t.key
-              ? "bg-neutral-700 text-neutral-100"
-              : "text-neutral-400 hover:text-neutral-200"
-          }`}
-        >
-          {t.label}
-          {t.count !== undefined && <span className="ml-1.5 text-neutral-500">{t.count}</span>}
-        </button>
-      ))}
-    </div>
   );
 }

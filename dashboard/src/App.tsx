@@ -2,6 +2,7 @@ import { useState } from "react";
 import { BrandCuration } from "./components/BrandCuration.tsx";
 import { LeadsView } from "./components/LeadsView.tsx";
 import { RetailersView } from "./components/RetailersView.tsx";
+import { cx } from "./components/ui.tsx";
 
 type Tab = "brands" | "leads" | "retailers";
 
@@ -22,28 +23,38 @@ export function App() {
   const [, setReloadKey] = useState(0);
 
   return (
-    <div className="min-h-full bg-neutral-950 text-neutral-100">
-      <header className="border-b border-neutral-800 px-6 py-4">
-        <h1 className="text-lg font-semibold tracking-tight">Clothing Pipeline</h1>
-        <p className="text-sm text-neutral-400">Unified control panel</p>
-        <nav className="mt-3 flex gap-1">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
-                tab === t.key
-                  ? "bg-neutral-800 text-neutral-100"
-                  : "text-neutral-400 hover:text-neutral-200"
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </nav>
+    <div className="min-h-full bg-gray-50 text-gray-900">
+      <header className="sticky top-0 z-30 border-b border-gray-200 bg-white/90 backdrop-blur">
+        <div className="mx-auto flex h-14 max-w-7xl items-center gap-8 px-6">
+          <div className="flex items-center gap-2.5">
+            <span className="flex size-6 items-center justify-center rounded-md bg-gray-900 text-[11px] font-semibold text-white">
+              CP
+            </span>
+            <span className="text-sm font-semibold tracking-tight">Clothing Pipeline</span>
+          </div>
+          <nav className="flex h-full items-stretch gap-5" aria-label="Sections">
+            {TABS.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={cx(
+                  "relative inline-flex items-center text-sm transition-colors",
+                  tab === t.key
+                    ? "font-medium text-gray-900"
+                    : "text-gray-500 hover:text-gray-800",
+                )}
+              >
+                {t.label}
+                {tab === t.key && (
+                  <span className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-gray-900" />
+                )}
+              </button>
+            ))}
+          </nav>
+        </div>
       </header>
 
-      <main className="mx-auto max-w-7xl p-6">
+      <main className="mx-auto max-w-7xl px-6 py-8">
         {tab === "brands" ? (
           <BrandCuration />
         ) : tab === "leads" ? (

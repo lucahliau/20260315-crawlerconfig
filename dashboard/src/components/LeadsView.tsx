@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, type PriceTier, type VendorLead } from "../api.ts";
-
-const TIER_STYLE: Record<PriceTier, { label: string; cls: string }> = {
-  accessible: { label: "accessible", cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" },
-  too_expensive: { label: "too pricey", cls: "bg-amber-500/15 text-amber-300 border-amber-500/30" },
-  too_cheap: { label: "too cheap", cls: "bg-amber-500/15 text-amber-300 border-amber-500/30" },
-  unknown: { label: "unknown", cls: "bg-neutral-700/30 text-neutral-400 border-neutral-600/40" },
-};
+import { api, type VendorLead } from "../api.ts";
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorBanner,
+  ExternalIcon,
+  StatusDot,
+  TierLabel,
+} from "./ui.tsx";
 
 /** Best-guess homepage URL from a brand name. Almost always needs the user to fix it. */
 function guessUrl(name: string): string {
@@ -86,99 +88,89 @@ export function LeadsView({ onAdded }: { onAdded?: () => void }) {
   );
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold text-neutral-100">Stockist leads</h2>
-          <p className="text-sm text-neutral-400">
+          <h1 className="text-lg font-semibold tracking-tight">Stockist leads</h1>
+          <p className="mt-1 text-sm text-gray-500">
             Brand names mined from cool boutiques. Confirm a homepage URL, then add the good ones.
             {generatedAt && (
-              <span className="ml-1 text-neutral-600">
-                · mined {new Date(generatedAt).toLocaleString()}
+              <span className="ml-1 text-gray-400">
+                Mined {new Date(generatedAt).toLocaleString()}.
               </span>
             )}
           </p>
         </div>
-        <button
-          onClick={() => void load()}
-          className="rounded-md border border-neutral-800 px-3 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800"
-        >
+        <Button size="sm" onClick={() => void load()}>
           Refresh
-        </button>
+        </Button>
       </header>
 
-      {error && (
-        <div className="rounded-md border border-red-900 bg-red-950/50 px-4 py-3 text-sm text-red-300">
-          {error}
-        </div>
-      )}
+      {error && <ErrorBanner onDismiss={() => setError(null)}>{error}</ErrorBanner>}
 
       {loading ? (
-        <p className="text-sm text-neutral-400">Loading leads…</p>
+        <p className="text-sm text-gray-500">Loading leads…</p>
       ) : sorted.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-neutral-800 px-4 py-10 text-center text-sm text-neutral-500">
-          No leads yet. Run “Mine stockists” from the Brands tab to generate some.
-        </p>
+        <EmptyState>No leads yet. Run “Mine stockists” from the Brands tab to generate some.</EmptyState>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-neutral-800">
+        <Card>
           <table className="w-full text-sm">
-            <thead className="bg-neutral-900 text-left text-xs text-neutral-400">
-              <tr>
-                <th className="px-3 py-2 font-medium">Brand</th>
-                <th className="px-3 py-2 font-medium">Tier</th>
-                <th className="px-3 py-2 font-medium">Carried by</th>
-                <th className="px-3 py-2 font-medium">Homepage URL</th>
-                <th className="px-3 py-2 font-medium"></th>
+            <thead>
+              <tr className="border-b border-gray-200 bg-gray-50 text-left text-[11px] font-medium uppercase tracking-wide text-gray-500">
+                <th className="whitespace-nowrap px-4 py-2.5">Brand</th>
+                <th className="whitespace-nowrap px-4 py-2.5">Price tier</th>
+                <th className="whitespace-nowrap px-4 py-2.5">Carried by</th>
+                <th className="whitespace-nowrap px-4 py-2.5">Homepage URL</th>
+                <th className="px-4 py-2.5"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-neutral-800">
+            <tbody className="divide-y divide-gray-100">
               {sorted.map((lead) => {
-                const tier = TIER_STYLE[lead.tier];
                 const state = addState[lead.name] ?? "idle";
                 return (
-                  <tr key={lead.name} className={state === "added" ? "opacity-50" : ""}>
-                    <td className="px-3 py-2">
-                      <div className="font-medium text-neutral-100">{lead.name}</div>
+                  <tr
+                    key={lead.name}
+                    className={`transition-colors hover:bg-gray-50 ${state === "added" ? "opacity-50" : ""}`}
+                  >
+                    <td className="px-4 py-2.5">
+                      <div className="font-medium text-gray-900">{lead.name}</div>
                       <a
                         href={searchUrl(lead.name)}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-[11px] text-neutral-500 hover:text-neutral-300 hover:underline"
+                        className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 hover:underline"
                       >
-                        find site ↗
+                        Find site
+                        <ExternalIcon className="size-3" />
                       </a>
                     </td>
-                    <td className="px-3 py-2">
-                      <span className={`rounded-full border px-2 py-0.5 text-[11px] ${tier.cls}`}>
-                        {lead.usd > 0 ? `$${lead.usd} · ` : ""}
-                        {tier.label}
-                      </span>
+                    <td className="px-4 py-2.5">
+                      <TierLabel tier={lead.tier} usd={lead.usd} />
                     </td>
-                    <td className="px-3 py-2 text-xs text-neutral-400">
+                    <td className="tnum px-4 py-2.5 text-xs text-gray-500">
                       {lead.stockists.length} shop{lead.stockists.length === 1 ? "" : "s"}
                     </td>
-                    <td className="px-3 py-2">
+                    <td className="px-4 py-2.5">
                       <input
                         value={urls[lead.name] ?? ""}
-                        onChange={(e) =>
-                          setUrls((u) => ({ ...u, [lead.name]: e.target.value }))
-                        }
+                        onChange={(e) => setUrls((u) => ({ ...u, [lead.name]: e.target.value }))}
                         disabled={state !== "idle"}
                         spellCheck={false}
-                        className="w-full min-w-[200px] rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1 text-xs text-neutral-200 outline-none focus:border-neutral-500 disabled:opacity-50"
+                        className="h-7 w-full min-w-[220px] rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-900 focus:border-gray-400 focus:outline-none disabled:bg-gray-50 disabled:text-gray-400"
                       />
                     </td>
-                    <td className="px-3 py-2 text-right">
+                    <td className="px-4 py-2.5 text-right">
                       {state === "added" ? (
-                        <span className="text-xs font-medium text-emerald-400">✓ added</span>
+                        <StatusDot tone="ok" label="Added" />
                       ) : (
-                        <button
+                        <Button
+                          size="sm"
+                          variant="primary"
                           onClick={() => void add(lead)}
                           disabled={state === "adding" || !(urls[lead.name] ?? "").trim()}
-                          className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           {state === "adding" ? "Adding…" : "Add"}
-                        </button>
+                        </Button>
                       )}
                     </td>
                   </tr>
@@ -186,7 +178,7 @@ export function LeadsView({ onAdded }: { onAdded?: () => void }) {
               })}
             </tbody>
           </table>
-        </div>
+        </Card>
       )}
     </section>
   );

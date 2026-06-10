@@ -7,6 +7,20 @@ import {
   type RetailerRow,
   type RetailersOverviewResponse,
 } from "../api.ts";
+import {
+  Button,
+  Card,
+  ChevronIcon,
+  ErrorBanner,
+  PlayIcon,
+  SearchIcon,
+  Segmented,
+  Spinner,
+  StatusDot,
+  XIcon,
+  cx,
+  type Tone,
+} from "./ui.tsx";
 
 /**
  * Retailer operations: one dense row per retailer covering the whole
@@ -123,13 +137,14 @@ export function RetailersView() {
       setJobLines([]);
       setJobDone(false);
       closeStreamRef.current = subscribeStream(api.jobStreamUrl(jobId), {
-        onLog: (line) => setJobLines((ls) => (ls.length > 500 ? [...ls.slice(-400), line] : [...ls, line])),
+        onLog: (line) =>
+          setJobLines((ls) => (ls.length > 500 ? [...ls.slice(-400), line] : [...ls, line])),
         onDone: (event) => {
           setJobDone(true);
           if (typeof event.error === "string") {
-            setJobLines((ls) => [...ls, `✕ ${event.error}`]);
+            setJobLines((ls) => [...ls, `Failed: ${event.error}`]);
           } else {
-            setJobLines((ls) => [...ls, "✓ done"]);
+            setJobLines((ls) => [...ls, "Done."]);
           }
           void load(true);
         },
@@ -214,43 +229,53 @@ export function RetailersView() {
   const backlog = data?.identifiedWithoutConfig ?? [];
 
   if (!data && !loadError) {
-    return <p className="text-sm text-neutral-400">Loading retailers…</p>;
+    return <p className="text-sm text-gray-500">Loading retailers…</p>;
   }
 
   return (
-    <section className="space-y-4 pb-72">
+    <section className="space-y-6 pb-72">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold text-neutral-100">Retailers</h2>
-          <p className="text-sm text-neutral-400">
-            Explore → crawl → upload, per site. {counts.done}/{counts.all} fully up to date.
+          <h1 className="text-lg font-semibold tracking-tight">Retailers</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Explore → crawl → upload, per site.{" "}
+            <span className="tnum">
+              {counts.done}/{counts.all}
+            </span>{" "}
+            fully up to date.
           </p>
         </div>
         <div className="flex items-center gap-2">
           {errors && errors.counts.total > 0 && (
             <span
-              className="rounded-full border border-red-500/30 px-2.5 py-1 text-xs text-red-300"
+              className="mr-1"
               title={Object.entries(errors.counts.byStage)
                 .map(([s, n]) => `${s}: ${n}`)
                 .join("  ·  ")}
             >
-              {errors.counts.total} errors · 24h
+              <StatusDot
+                tone="failed"
+                label={`${errors.counts.total} errors in 24h`}
+              />
             </span>
           )}
           {failedRetailers.length > 0 && (
-            <button
+            <Button
+              variant="warn"
+              size="sm"
               disabled={busyKey !== null}
               onClick={() =>
                 void runJob("retry-failed", `Retry ${failedRetailers.length} failed explores`, () =>
                   api.exploreRetry(failedRetailers),
                 )
               }
-              className="rounded-md border border-amber-600/40 bg-amber-600/10 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-600/20 disabled:opacity-50"
             >
               Retry {failedRetailers.length} failed
-            </button>
+            </Button>
           )}
-          <button
+          <Button
+            variant="primary"
+            size="sm"
             disabled={busyKey !== null}
             onClick={() => {
               if (
@@ -261,68 +286,50 @@ export function RetailersView() {
                 void runJob("e2e", "Full pipeline run", () => api.runE2E());
               }
             }}
-            className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
           >
-            ▶ Run full pipeline
-          </button>
+            <PlayIcon />
+            Run full pipeline
+          </Button>
         </div>
       </header>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex gap-1 rounded-lg bg-neutral-900 p-1">
-          {FILTERS.map((f) => (
-            <button
-              key={f.key}
-              onClick={() => setFilter(f.key)}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
-                filter === f.key
-                  ? "bg-neutral-700 text-neutral-100"
-                  : "text-neutral-400 hover:text-neutral-200"
-              }`}
-            >
-              {f.label} <span className="ml-1 text-neutral-500">{counts[f.key]}</span>
-            </button>
-          ))}
-        </div>
-        <input
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search retailer or domain…"
-          className="ml-auto w-64 rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-1.5 text-sm text-neutral-100 placeholder:text-neutral-600 focus:border-neutral-500 focus:outline-none"
+      <div className="flex flex-wrap items-center gap-3">
+        <Segmented
+          items={FILTERS.map((f) => ({ ...f, count: counts[f.key] }))}
+          active={filter}
+          onChange={(k) => setFilter(k as StageFilter)}
         />
+        <div className="relative ml-auto">
+          <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-gray-400" />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search retailer or domain"
+            className="h-8 w-64 rounded-md border border-gray-300 bg-white pl-8 pr-3 text-[13px] text-gray-900 placeholder:text-gray-400 focus:border-gray-400 focus:outline-none"
+          />
+        </div>
       </div>
 
-      {loadError && (
-        <div className="rounded-md border border-red-900 bg-red-950/50 px-4 py-3 text-sm text-red-300">
-          {loadError}
-        </div>
-      )}
-      {actionError && (
-        <div className="flex items-start justify-between gap-3 rounded-md border border-red-900 bg-red-950/50 px-4 py-3 text-sm text-red-300">
-          <span>{actionError}</span>
-          <button onClick={() => setActionError(null)} className="text-red-400 hover:text-red-200">
-            ✕
-          </button>
-        </div>
-      )}
+      {loadError && <ErrorBanner>{loadError}</ErrorBanner>}
+      {actionError && <ErrorBanner onDismiss={() => setActionError(null)}>{actionError}</ErrorBanner>}
 
-      <div className="overflow-x-auto rounded-xl border border-neutral-800">
-        <table className="w-full min-w-[860px] text-sm">
+      <Card className="overflow-x-auto">
+        <table className="w-full min-w-[880px] text-sm">
           <thead>
-            <tr className="border-b border-neutral-800 bg-neutral-900/60 text-left text-[11px] uppercase tracking-wide text-neutral-500">
-              <th className="px-3 py-2 font-medium">Retailer</th>
-              <th className="px-3 py-2 font-medium">Explore</th>
-              <th className="px-3 py-2 font-medium">Quality</th>
-              <th className="px-3 py-2 font-medium">Crawl</th>
-              <th className="px-3 py-2 font-medium">Upload</th>
-              <th className="px-3 py-2 text-right font-medium">Actions</th>
+            <tr className="border-b border-gray-200 bg-gray-50 text-left text-[11px] font-medium uppercase tracking-wide text-gray-500">
+              <th className="px-4 py-2.5">Retailer</th>
+              <th className="px-4 py-2.5">Explore</th>
+              <th className="px-4 py-2.5">Quality</th>
+              <th className="px-4 py-2.5">Crawl</th>
+              <th className="px-4 py-2.5">Upload</th>
+              <th className="px-4 py-2.5 text-right">Actions</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="divide-y divide-gray-100">
             {visible.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-sm text-neutral-500">
+                <td colSpan={6} className="px-4 py-12 text-center text-sm text-gray-400">
                   No retailers match this filter.
                 </td>
               </tr>
@@ -335,33 +342,43 @@ export function RetailersView() {
                 onExplore={() =>
                   void runJob(`explore:${r.retailer}`, `Re-explore ${r.retailer}`, async () => {
                     const baseUrl = r.config?.baseUrl;
-                    if (r.exploreStatus === "failed" || r.exploreStatus === "needs_retry" || r.exploreStatus === "queued_retry") {
+                    if (
+                      r.exploreStatus === "failed" ||
+                      r.exploreStatus === "needs_retry" ||
+                      r.exploreStatus === "queued_retry"
+                    ) {
                       return api.exploreRetry([r.retailer]);
                     }
                     if (!baseUrl) throw new Error("No base URL on config.");
                     return api.explore([baseUrl], false);
                   })
                 }
-                onCrawl={() => void runJob(`crawl:${r.retailer}`, `Crawl ${r.retailer}`, () => api.crawl(r.retailer))}
-                onUpload={() => void runJob(`upload:${r.retailer}`, `Upload ${r.retailer}`, () => api.upload(r.retailer))}
+                onCrawl={() =>
+                  void runJob(`crawl:${r.retailer}`, `Crawl ${r.retailer}`, () => api.crawl(r.retailer))
+                }
+                onUpload={() =>
+                  void runJob(`upload:${r.retailer}`, `Upload ${r.retailer}`, () =>
+                    api.upload(r.retailer),
+                  )
+                }
                 onWatch={() => r.latestJobId && watchJob(r.latestJobId, `${r.retailer} — latest job`)}
                 onSetRec={(rec) => void setRec(r.retailer, rec)}
               />
             ))}
           </tbody>
         </table>
-      </div>
+      </Card>
 
       {/* Backlog: approved brands with no explore config yet. */}
       {backlog.length > 0 && (
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900/40">
+        <Card>
           <button
             onClick={() => setShowBacklog((s) => !s)}
             className="flex w-full items-center justify-between px-4 py-3 text-left"
           >
-            <span className="text-sm font-medium text-neutral-200">
+            <span className="text-sm font-medium text-gray-900">
               Backlog — approved brands without a crawl config yet{" "}
-              <span className="text-neutral-500">({backlog.length})</span>
+              <span className="tnum font-normal text-gray-400">({backlog.length})</span>
             </span>
             <span className="flex items-center gap-3">
               <span
@@ -370,73 +387,85 @@ export function RetailersView() {
                 onClick={(e) => {
                   e.stopPropagation();
                   if (busyKey !== null) return;
-                  if (window.confirm(`Explore all ${backlog.length} backlog sites? This spends Stagehand/Gemini credits.`)) {
+                  if (
+                    window.confirm(
+                      `Explore all ${backlog.length} backlog sites? This spends Stagehand/Gemini credits on non-Shopify sites.`,
+                    )
+                  ) {
                     void runJob("explore-backlog", `Explore ${backlog.length} backlog sites`, () =>
                       api.explore(backlog.map((b) => b.url)),
                     );
                   }
                 }}
-                className="rounded-md border border-neutral-700 px-2.5 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                className="inline-flex h-7 items-center rounded-md border border-gray-300 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
               >
                 Explore all
               </span>
-              <span className="text-neutral-500">{showBacklog ? "▾" : "▸"}</span>
+              <ChevronIcon open={showBacklog} className="text-gray-400" />
             </span>
           </button>
           {showBacklog && (
-            <ul className="divide-y divide-neutral-800/60 border-t border-neutral-800">
+            <ul className="divide-y divide-gray-100 border-t border-gray-200">
               {backlog.map((b) => (
-                <li key={b.url} className="flex items-center justify-between gap-3 px-4 py-2">
-                  <div className="min-w-0">
-                    <span className="font-medium text-neutral-200">{b.name}</span>{" "}
+                <li
+                  key={b.url}
+                  className="flex items-center justify-between gap-3 px-4 py-2 transition-colors hover:bg-gray-50"
+                >
+                  <div className="flex min-w-0 items-baseline gap-2">
+                    <span className="text-sm font-medium text-gray-900">{b.name}</span>
                     <a
                       href={b.url}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-xs text-neutral-500 hover:text-neutral-300 hover:underline"
+                      className="truncate text-xs text-gray-400 hover:text-gray-700 hover:underline"
                     >
                       {hostOf(b.url)}
                     </a>
                   </div>
-                  <button
+                  <Button
+                    size="sm"
                     disabled={busyKey !== null}
                     onClick={() =>
                       void runJob(`explore:${b.url}`, `Explore ${b.name}`, () => api.explore([b.url]))
                     }
-                    className="rounded-md bg-neutral-800 px-3 py-1 text-xs font-medium text-neutral-200 hover:bg-neutral-700 disabled:opacity-50"
                   >
                     Explore
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>
           )}
-        </div>
+        </Card>
       )}
 
       {/* Live job log drawer. */}
       {activeJob && (
-        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-neutral-800 bg-neutral-950/95 backdrop-blur">
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-gray-200 bg-white shadow-[0_-8px_24px_rgba(0,0,0,0.08)]">
           <div className="mx-auto max-w-7xl px-6 py-3">
             <div className="mb-2 flex items-center justify-between">
-              <span className="flex items-center gap-2 text-sm font-medium text-neutral-200">
-                {!jobDone && <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />}
+              <span className="flex items-center gap-2 text-sm font-medium text-gray-900">
+                {jobDone ? (
+                  <StatusDot tone="ok" label="" />
+                ) : (
+                  <Spinner className="text-blue-500" />
+                )}
                 {activeJob.title}
-                {jobDone && <span className="text-xs text-neutral-500">finished</span>}
+                {jobDone && <span className="text-xs font-normal text-gray-400">finished</span>}
               </span>
               <button
                 onClick={() => {
                   closeStreamRef.current?.();
                   setActiveJob(null);
                 }}
-                className="rounded-md border border-neutral-800 px-2.5 py-1 text-xs text-neutral-400 hover:bg-neutral-800"
+                className="inline-flex size-7 items-center justify-center rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                aria-label="Close log"
               >
-                Close
+                <XIcon />
               </button>
             </div>
-            <div className="max-h-48 overflow-y-auto rounded-lg border border-neutral-800 bg-neutral-950 p-3 font-mono text-[11px] leading-relaxed text-neutral-300">
+            <div className="max-h-48 overflow-y-auto rounded-md bg-gray-950 p-3 font-mono text-[11px] leading-relaxed text-gray-300">
               {jobLines.length === 0 ? (
-                <span className="text-neutral-600">Waiting for log output…</span>
+                <span className="text-gray-500">Waiting for log output…</span>
               ) : (
                 jobLines.map((l, i) => (
                   <div key={i} className="whitespace-pre-wrap break-words">
@@ -455,20 +484,13 @@ export function RetailersView() {
 
 // --- Row ---
 
-const EXPLORE_BADGE: Record<string, string> = {
-  completed: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-  running: "bg-sky-500/15 text-sky-300 border-sky-500/30",
-  failed: "bg-red-500/15 text-red-300 border-red-500/30",
-  needs_retry: "bg-amber-500/15 text-amber-300 border-amber-500/30",
-  queued_retry: "bg-amber-500/15 text-amber-300 border-amber-500/30",
-  idle: "bg-neutral-700/30 text-neutral-400 border-neutral-600/40",
-};
-
-const REC_COLOR: Record<Recommendation, string> = {
-  recommended: "text-emerald-300",
-  usable: "text-sky-300",
-  "not recommended": "text-neutral-500",
-  unknown: "text-neutral-500",
+const EXPLORE_TONE: Record<string, { tone: Tone; label: string }> = {
+  completed: { tone: "ok", label: "Completed" },
+  running: { tone: "running", label: "Running" },
+  failed: { tone: "failed", label: "Failed" },
+  needs_retry: { tone: "warn", label: "Needs retry" },
+  queued_retry: { tone: "warn", label: "Retry queued" },
+  idle: { tone: "idle", label: "Not explored" },
 };
 
 function Row({
@@ -495,101 +517,131 @@ function Row({
   const uploadRunning = r.uploadLive?.status === "running";
   const anyRunning = exploreRunning || crawlRunning || uploadRunning;
   const exploreFailedish =
-    r.exploreStatus === "failed" || r.exploreStatus === "needs_retry" || r.exploreStatus === "queued_retry";
+    r.exploreStatus === "failed" ||
+    r.exploreStatus === "needs_retry" ||
+    r.exploreStatus === "queued_retry";
   const exploreTitle =
-    [r.exploreFailureCode, r.exploreFailureReason ?? r.exploreError].filter(Boolean).join(" — ") || undefined;
+    [r.exploreFailureCode, r.exploreFailureReason ?? r.exploreError].filter(Boolean).join(" — ") ||
+    undefined;
+  const exploreBadge = EXPLORE_TONE[r.exploreStatus] ?? EXPLORE_TONE.idle;
 
   return (
-    <tr className="border-b border-neutral-800/60 last:border-b-0 hover:bg-neutral-900/40">
-      <td className="max-w-[220px] px-3 py-2.5">
-        <div className="truncate font-medium text-neutral-100">{name}</div>
+    <tr className="transition-colors hover:bg-gray-50">
+      <td className="max-w-[220px] px-4 py-2.5">
+        <div className="truncate text-sm font-medium text-gray-900">{name}</div>
         {host && (
           <a
             href={r.config?.baseUrl}
             target="_blank"
             rel="noreferrer"
-            className="truncate text-xs text-neutral-500 hover:text-neutral-300 hover:underline"
+            className="truncate text-xs text-gray-400 hover:text-gray-700 hover:underline"
           >
             {host}
           </a>
         )}
       </td>
 
-      <td className="px-3 py-2.5">
-        <span
+      <td className="px-4 py-2.5">
+        <StatusDot
+          tone={exploreBadge.tone}
           title={exploreTitle}
-          className={`inline-block rounded-full border px-2 py-0.5 text-[11px] ${EXPLORE_BADGE[r.exploreStatus] ?? EXPLORE_BADGE.idle}`}
-        >
-          {r.exploreStatus.replace("_", " ")}
-          {exploreFailedish && r.exploreAttempt != null && r.exploreMaxAttempts != null && (
-            <span className="ml-1 opacity-70">
-              {r.exploreAttempt}/{r.exploreMaxAttempts}
-            </span>
-          )}
-        </span>
+          muted={r.exploreStatus === "idle"}
+          label={
+            <>
+              {exploreBadge.label}
+              {exploreFailedish && r.exploreAttempt != null && r.exploreMaxAttempts != null && (
+                <span className="tnum ml-1 text-gray-400">
+                  {r.exploreAttempt}/{r.exploreMaxAttempts}
+                </span>
+              )}
+            </>
+          }
+        />
       </td>
 
-      <td className="px-3 py-2.5">
+      <td className="px-4 py-2.5">
         <select
           value={REC_OPTIONS.includes(r.recommendation) ? r.recommendation : "not recommended"}
           disabled={r.exploreStatus !== "completed"}
           onChange={(e) => onSetRec(e.target.value as Recommendation)}
-          className={`rounded-md border border-transparent bg-transparent py-0.5 pr-1 text-xs hover:border-neutral-700 focus:border-neutral-600 focus:outline-none disabled:opacity-40 ${REC_COLOR[r.recommendation] ?? "text-neutral-400"}`}
+          className={cx(
+            "h-7 rounded-md border border-transparent bg-transparent pr-1 text-xs",
+            "hover:border-gray-300 focus:border-gray-400 focus:outline-none disabled:opacity-40",
+            r.recommendation === "recommended"
+              ? "text-emerald-700"
+              : r.recommendation === "usable"
+                ? "text-blue-700"
+                : "text-gray-500",
+          )}
         >
           {REC_OPTIONS.map((o) => (
-            <option key={o} value={o} className="bg-neutral-900 text-neutral-200">
+            <option key={o} value={o} className="text-gray-900">
               {o}
             </option>
           ))}
         </select>
       </td>
 
-      <td className="px-3 py-2.5 text-xs">
+      <td className="whitespace-nowrap px-4 py-2.5 text-xs">
         {crawlRunning ? (
-          <span className="text-sky-300">
-            ⟳ {r.crawlLive?.totalUrls ?? 0} URLs…
-            <span className="ml-1 text-neutral-500">{timeAgo(r.crawlLive?.lastCheckpointAt)}</span>
+          <span className="inline-flex items-center gap-1.5 text-blue-700">
+            <Spinner className="text-blue-500" />
+            <span className="tnum">{r.crawlLive?.totalUrls ?? 0} URLs</span>
+            <span className="text-gray-400">{timeAgo(r.crawlLive?.lastCheckpointAt)}</span>
           </span>
         ) : r.crawlLive?.status === "failed" ? (
-          <span className="text-red-300" title={r.crawlLive?.error ?? undefined}>
-            ✕ failed{r.crawlLive?.totalUrls ? ` · ${r.crawlLive.totalUrls} URLs saved` : ""}
-          </span>
+          <StatusDot
+            tone="failed"
+            title={r.crawlLive?.error ?? undefined}
+            label={`Failed${r.crawlLive?.totalUrls ? ` · ${r.crawlLive.totalUrls} URLs saved` : ""}`}
+          />
         ) : r.crawlLive?.status === "interrupted" && !r.crawl ? (
-          <span className="text-amber-300" title="Interrupted by a restart — re-run Crawl to resume from the checkpoint.">
-            ⏸ interrupted{r.crawlLive?.totalUrls ? ` · ${r.crawlLive.totalUrls} URLs saved` : ""}
-          </span>
+          <StatusDot
+            tone="warn"
+            title="Interrupted by a restart — re-run Crawl to resume from the checkpoint."
+            label={`Interrupted${r.crawlLive?.totalUrls ? ` · ${r.crawlLive.totalUrls} saved` : ""}`}
+          />
         ) : r.crawl ? (
-          <span className="text-neutral-300">
-            {r.crawl.totalUrls.toLocaleString()} URLs
-            <span className="ml-1.5 text-neutral-500">{timeAgo(r.crawl.crawledAt)}</span>
+          <span className="text-gray-700">
+            <span className="tnum">{r.crawl.totalUrls.toLocaleString()}</span> URLs
+            <span className="ml-1.5 text-gray-400">{timeAgo(r.crawl.crawledAt)}</span>
           </span>
         ) : (
-          <span className="text-neutral-600">—</span>
+          <span className="text-gray-300">—</span>
         )}
       </td>
 
-      <td className="px-3 py-2.5 text-xs">
+      <td className="whitespace-nowrap px-4 py-2.5 text-xs">
         {uploadRunning ? (
-          <span className="text-sky-300">
-            ⟳ {(r.uploadLive?.uploaded ?? 0) + (r.uploadLive?.skipped ?? 0)}/{r.uploadLive?.total ?? 0}
-            {r.uploadLive?.failed ? <span className="ml-1 text-red-400">({r.uploadLive.failed} failed)</span> : null}
+          <span className="inline-flex items-center gap-1.5 text-blue-700">
+            <Spinner className="text-blue-500" />
+            <span className="tnum">
+              {(r.uploadLive?.uploaded ?? 0) + (r.uploadLive?.skipped ?? 0)}/{r.uploadLive?.total ?? 0}
+            </span>
+            {r.uploadLive?.failed ? (
+              <span className="tnum text-red-600">({r.uploadLive.failed} failed)</span>
+            ) : null}
           </span>
         ) : r.uploadLive?.status === "failed" ? (
-          <span className="text-red-300" title={r.uploadLive?.error ?? undefined}>
-            ✕ failed
-          </span>
+          <StatusDot tone="failed" title={r.uploadLive?.error ?? undefined} label="Failed" />
         ) : r.uploadLive?.status === "interrupted" ? (
-          <span
-            className="text-amber-300"
+          <StatusDot
+            tone="warn"
             title="Interrupted by a restart — re-run Upload to resume (already-uploaded URLs are skipped)."
-          >
-            ⏸ {(r.uploadLive?.uploaded ?? 0) + (r.uploadLive?.skipped ?? 0)}/{r.uploadLive?.total ?? 0} · resume
-          </span>
+            label={
+              <span className="tnum">
+                {(r.uploadLive?.uploaded ?? 0) + (r.uploadLive?.skipped ?? 0)}/
+                {r.uploadLive?.total ?? 0} · resume
+              </span>
+            }
+          />
         ) : r.upload ? (
-          <span className={r.uploadMatchesCurrentCrawl ? "text-neutral-300" : "text-amber-300"}>
-            {Number(r.upload.uploaded ?? 0).toLocaleString()}
-            {r.upload.failed ? <span className="ml-1 text-red-400">({Number(r.upload.failed)} failed)</span> : null}
-            <span className="ml-1.5 text-neutral-500">{timeAgo(String(r.upload.uploadedAt ?? ""))}</span>
+          <span className={r.uploadMatchesCurrentCrawl ? "text-gray-700" : "text-amber-700"}>
+            <span className="tnum">{Number(r.upload.uploaded ?? 0).toLocaleString()}</span>
+            {r.upload.failed ? (
+              <span className="tnum ml-1 text-red-600">({Number(r.upload.failed)} failed)</span>
+            ) : null}
+            <span className="ml-1.5 text-gray-400">{timeAgo(String(r.upload.uploadedAt ?? ""))}</span>
             {!r.uploadMatchesCurrentCrawl && (
               <span className="ml-1.5" title="Uploaded from an older crawl — re-upload to sync.">
                 stale
@@ -597,65 +649,46 @@ function Row({
             )}
           </span>
         ) : (
-          <span className="text-neutral-600">—</span>
+          <span className="text-gray-300">—</span>
         )}
       </td>
 
-      <td className="px-3 py-2.5">
-        <div className="flex items-center justify-end gap-1.5">
-          <RowButton
-            label={exploreFailedish ? "Retry" : "Explore"}
-            title={exploreFailedish ? "Retry the failed explore" : "Re-run site exploration (spends credits)"}
+      <td className="px-4 py-2.5">
+        <div className="flex items-center justify-end gap-1">
+          <Button
+            size="sm"
+            variant={exploreFailedish ? "warn" : "ghost"}
+            title={exploreFailedish ? "Retry the failed explore" : "Re-run site exploration (spends credits on non-Shopify sites)"}
             disabled={busy || anyRunning}
-            accent={exploreFailedish ? "amber" : undefined}
             onClick={onExplore}
-          />
-          <RowButton
-            label="Crawl"
+          >
+            {exploreFailedish ? "Retry" : "Explore"}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
             title="Collect all product URLs using the stored config"
             disabled={busy || anyRunning || r.exploreStatus !== "completed"}
             onClick={onCrawl}
-          />
-          <RowButton
-            label="Upload"
-            title="Extract products + push to R2/Supabase (resumes automatically)"
+          >
+            Crawl
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            title="Extract products and push to R2/Supabase (resumes automatically)"
             disabled={busy || anyRunning || !r.crawl}
             onClick={onUpload}
-          />
+          >
+            Upload
+          </Button>
           {r.latestJobId && (
-            <RowButton label="Log" title="Watch the latest job log" disabled={false} onClick={onWatch} />
+            <Button size="sm" variant="ghost" title="Watch the latest job log" onClick={onWatch}>
+              Log
+            </Button>
           )}
         </div>
       </td>
     </tr>
-  );
-}
-
-function RowButton({
-  label,
-  title,
-  disabled,
-  accent,
-  onClick,
-}: {
-  label: string;
-  title: string;
-  disabled: boolean;
-  accent?: "amber";
-  onClick: () => void;
-}) {
-  const cls =
-    accent === "amber"
-      ? "border-amber-600/40 bg-amber-600/10 text-amber-300 hover:bg-amber-600/20"
-      : "border-neutral-700 bg-neutral-800/60 text-neutral-300 hover:bg-neutral-700";
-  return (
-    <button
-      title={title}
-      disabled={disabled}
-      onClick={onClick}
-      className={`rounded-md border px-2.5 py-1 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${cls}`}
-    >
-      {label}
-    </button>
   );
 }
