@@ -136,6 +136,49 @@ export interface ErrorsResponse {
   counts: { byCode: Record<string, number>; byStage: Record<string, number>; total: number };
 }
 
+// --- Post-processing (MacBook workers: background removal, embeddings) ---
+
+export interface ProcessingTotals {
+  total: number;
+  nobg: number;
+  embedded: number;
+}
+
+export interface ProcessingResponse {
+  totals: ProcessingTotals;
+  rates: {
+    nobg: { last1h: number; last24h: number };
+    embeddings: { last1h: number; last24h: number };
+  };
+  perRetailer: { retailer: string; total: number; nobg: number; embedded: number }[];
+}
+
+// --- Systems health ---
+
+export interface SystemCheck {
+  ok: boolean;
+  latencyMs?: number;
+  error?: string;
+  [k: string]: unknown;
+}
+
+export interface QueueStat {
+  name: string;
+  waiting: number;
+  active: number;
+  failed: number;
+  completed: number;
+}
+
+export interface SystemsResponse {
+  checkedAt: string;
+  crawler: { ok: boolean; uptimeSeconds: number; rssMb: number };
+  database: SystemCheck & { sizeMb?: number; limitMb?: number; items?: number };
+  backend: SystemCheck & { status?: number; url?: string };
+  r2: SystemCheck & { bucket?: string };
+  queue: SystemCheck & { queues?: QueueStat[] };
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
@@ -277,4 +320,6 @@ export const api = {
     const q = qs.toString();
     return request<ErrorsResponse>(`/api/errors${q ? `?${q}` : ""}`);
   },
+  getProcessing: () => request<ProcessingResponse>("/api/processing"),
+  getSystems: () => request<SystemsResponse>("/api/systems"),
 };

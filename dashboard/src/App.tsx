@@ -1,26 +1,29 @@
 import { useState } from "react";
-import { BrandCuration } from "./components/BrandCuration.tsx";
-import { LeadsView } from "./components/LeadsView.tsx";
-import { RetailersView } from "./components/RetailersView.tsx";
+import { DiscoverView } from "./components/DiscoverView.tsx";
+import { ConfigureView } from "./components/ConfigureView.tsx";
+import { CrawlView } from "./components/CrawlView.tsx";
+import { ProcessView } from "./components/ProcessView.tsx";
+import { SystemsView } from "./components/SystemsView.tsx";
 import { cx } from "./components/ui.tsx";
 
-type Tab = "brands" | "leads" | "retailers";
-
-const TABS: { key: Tab; label: string }[] = [
-  { key: "brands", label: "Brands" },
-  { key: "leads", label: "Leads" },
-  { key: "retailers", label: "Retailers" },
-];
+type Tab = "discover" | "configure" | "crawl" | "process" | "systems";
 
 /**
- * App shell. The unified control panel for the clothing content pipeline.
- * Tabs follow the funnel: Brands (discover + approve), Leads (promote mined
- * stockist names), Retailers (explore → crawl → upload operations per site).
+ * Tabs mirror the pipeline itself, in order:
+ *   Discover (find + approve brands) → Configure (identify a crawl config per
+ *   site) → Crawl (collect URLs, upload products) → Process (MacBook
+ *   background-removal + embeddings) → Systems (third-party health).
  */
+const TABS: { key: Tab; label: string; step?: number }[] = [
+  { key: "discover", label: "Discover", step: 1 },
+  { key: "configure", label: "Configure", step: 2 },
+  { key: "crawl", label: "Crawl", step: 3 },
+  { key: "process", label: "Process", step: 4 },
+  { key: "systems", label: "Systems" },
+];
+
 export function App() {
-  const [tab, setTab] = useState<Tab>("brands");
-  // Bump to force a refresh of dependent views after cross-tab actions.
-  const [, setReloadKey] = useState(0);
+  const [tab, setTab] = useState<Tab>("discover");
 
   return (
     <div className="min-h-full bg-gray-50 text-gray-900">
@@ -32,18 +35,27 @@ export function App() {
             </span>
             <span className="text-sm font-semibold tracking-tight">Clothing Pipeline</span>
           </div>
-          <nav className="flex h-full items-stretch gap-5" aria-label="Sections">
+          <nav className="flex h-full items-stretch gap-5" aria-label="Pipeline stages">
             {TABS.map((t) => (
               <button
                 key={t.key}
                 onClick={() => setTab(t.key)}
                 className={cx(
-                  "relative inline-flex items-center text-sm transition-colors",
-                  tab === t.key
-                    ? "font-medium text-gray-900"
-                    : "text-gray-500 hover:text-gray-800",
+                  "relative inline-flex items-center gap-1.5 text-sm transition-colors",
+                  tab === t.key ? "font-medium text-gray-900" : "text-gray-500 hover:text-gray-800",
+                  t.key === "systems" && "ml-3",
                 )}
               >
+                {t.step !== undefined && (
+                  <span
+                    className={cx(
+                      "tnum flex size-4 items-center justify-center rounded-full text-[10px] font-semibold",
+                      tab === t.key ? "bg-gray-900 text-white" : "bg-gray-200 text-gray-500",
+                    )}
+                  >
+                    {t.step}
+                  </span>
+                )}
                 {t.label}
                 {tab === t.key && (
                   <span className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-gray-900" />
@@ -55,12 +67,16 @@ export function App() {
       </header>
 
       <main className="mx-auto max-w-7xl px-6 py-8">
-        {tab === "brands" ? (
-          <BrandCuration />
-        ) : tab === "leads" ? (
-          <LeadsView onAdded={() => setReloadKey((k) => k + 1)} />
+        {tab === "discover" ? (
+          <DiscoverView />
+        ) : tab === "configure" ? (
+          <ConfigureView />
+        ) : tab === "crawl" ? (
+          <CrawlView />
+        ) : tab === "process" ? (
+          <ProcessView />
         ) : (
-          <RetailersView />
+          <SystemsView />
         )}
       </main>
     </div>

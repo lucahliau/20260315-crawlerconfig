@@ -5,6 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { addToMasterList } from "./discoverBrands.js";
 import { tryShopifyExplore } from "./shopifyExplore.js";
+import { tryWooCommerceExplore, trySitemapExplore } from "./platformExplore.js";
+import { tryEvidenceExplore } from "./evidenceExplore.js";
 import { writeJsonAtomic } from "./jsonFs.js";
 import { retailerSlugFromUrl } from "./retailerSlug.js";
 import { estimateUsdFromStagehandMetrics } from "./pricing.js";
@@ -2404,28 +2406,45 @@ export async function exploreRetailer(
     configsDir = process.env.CONFIGS_DIR ?? path.join(process.cwd(), "configs");
     fs.mkdirSync(configsDir, { recursive: true });
 
-    // Shopify fast path: most target brands are Shopify stores whose catalog is
-    // fully enumerable via the public /products.json — no browser or LLM needed.
-    const shopifyConfig = await tryShopifyExplore(
-      url,
-      { retailer, displayName },
-      (msg) => log(session, msg),
-    );
-    if (shopifyConfig) {
-      writePartialConfig(configsDir, retailer, shopifyConfig);
-      if (baseUrl) {
-        await addToMasterList(baseUrl, shopifyConfig.retailerDisplayName as string | undefined);
+    // Explore ladder — cheapest method that works wins:
+    //   1. Shopify       /products.json           (deterministic, $0)
+    //   2. WooCommerce   /wp-json/wc/store/v1     (deterministic, $0)
+    //   3. Any platform  product sitemap + JSON-LD verification (deterministic, $0)
+    //   4. Evidence AI   one Gemini Flash call over fetched evidence (~$0.01)
+    //   5. Stagehand     browser + LLM loop (below) — JS-rendered/hostile sites only
+    const identity = { retailer, displayName };
+    const onFastPathLog = (msg: string) => log(session, msg);
+    const fastPaths: { name: string; run: () => Promise<Record<string, unknown> | null> }[] = [
+      { name: "Shopify fast path", run: () => tryShopifyExplore(url, identity, onFastPathLog) },
+      { name: "WooCommerce fast path", run: () => tryWooCommerceExplore(url, identity, onFastPathLog) },
+      { name: "sitemap fast path", run: () => trySitemapExplore(url, identity, onFastPathLog) },
+      { name: "evidence explore (single AI call)", run: () => tryEvidenceExplore(url, identity, onFastPathLog) },
+    ];
+    for (const fastPath of fastPaths) {
+      if (session.abortController.signal.aborted) throw new Error("Exploration timed out.");
+      let fastConfig: Record<string, unknown> | null = null;
+      try {
+        fastConfig = await fastPath.run();
+      } catch (err) {
+        log(session, `${fastPath.name} errored (continuing down the ladder): ${(err as Error).message}`);
       }
+      if (!fastConfig) continue;
+      writePartialConfig(configsDir, retailer, fastConfig);
+      if (baseUrl) {
+        await addToMasterList(baseUrl, fastConfig.retailerDisplayName as string | undefined);
+      }
+      const dq = fastConfig.dataQuality as { overallRecommendation?: string } | undefined;
+      const disc = fastConfig.discovery as { method?: string } | undefined;
       log(session, "\n--- Summary ---");
-      log(session, `  Retailer:         ${shopifyConfig.retailerDisplayName} (${retailer})`);
-      log(session, `  Discovery method: api (Shopify /products.json)`);
-      log(session, `  Recommendation:   ${(shopifyConfig.dataQuality as { overallRecommendation?: string }).overallRecommendation}`);
+      log(session, `  Retailer:         ${fastConfig.retailerDisplayName} (${retailer})`);
+      log(session, `  Discovery method: ${disc?.method} (${fastPath.name})`);
+      log(session, `  Recommendation:   ${dq?.overallRecommendation}`);
       log(session, `  Output:           configs/${retailer}.json`);
       log(session, "----------------\n");
-      log(session, "Done (Shopify fast path — no Stagehand/Gemini spend).");
-      return { config: shopifyConfig, metrics: null, estimatedUsd: 0 };
+      log(session, `Done (${fastPath.name} — no browser session needed).`);
+      return { config: fastConfig, metrics: null, estimatedUsd: 0 };
     }
-    log(session, "Not a Shopify store (or products.json unavailable) — using browser exploration.\n");
+    log(session, "No fast path produced a config — falling back to browser exploration.\n");
 
     log(session, formatStagehandInitMessage(false));
 

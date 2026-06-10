@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 import { Stagehand } from "@browserbasehq/stagehand";
 import { getStagehandModel } from "./stagehandModel.js";
 import { getStagehandBrowserOptions } from "./stagehandConfig.js";
@@ -132,12 +133,22 @@ async function fetchWithRetry(
   throw new Error(`Failed to fetch ${url} after ${MAX_RETRIES} attempts`);
 }
 
-function extractLocsFromXml(xml: string): string[] {
+/** Decode the XML entities that actually appear in sitemap <loc> values. */
+function decodeXmlEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'");
+}
+
+export function extractLocsFromXml(xml: string): string[] {
   const urls: string[] = [];
-  const re = /<loc>\s*(.*?)\s*<\/loc>/gi;
+  const re = /<loc>\s*(?:<!\[CDATA\[)?\s*(.*?)\s*(?:\]\]>)?\s*<\/loc>/gi;
   let match: RegExpExecArray | null;
   while ((match = re.exec(xml)) !== null) {
-    const u = match[1].trim();
+    const u = decodeXmlEntities(match[1].trim());
     if (u) urls.push(u);
   }
   return urls;
@@ -145,6 +156,83 @@ function extractLocsFromXml(xml: string): string[] {
 
 function isSitemapIndex(xml: string): boolean {
   return /<sitemapindex[\s>]/i.test(xml);
+}
+
+/** Fetch a sitemap URL, transparently gunzipping `.xml.gz` payloads. */
+export async function fetchSitemapXml(url: string): Promise<string | null> {
+  const res = await fetchWithRetry(url);
+  if (!res.ok) return null;
+  const buf = Buffer.from(await res.arrayBuffer());
+  // Magic bytes beat file extensions: some servers serve gzip without .gz.
+  if (buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
+    try {
+      return gunzipSync(buf).toString("utf-8");
+    } catch {
+      return null;
+    }
+  }
+  return buf.toString("utf-8");
+}
+
+/**
+ * Order sub-sitemaps so product ones come first and obvious non-product ones
+ * (blogs, pages, collections) come last — most sites yield everything from the
+ * product sitemaps, letting the crawl stop touching the rest.
+ */
+export function rankSubSitemaps(urls: string[]): string[] {
+  const score = (u: string): number => {
+    const l = u.toLowerCase();
+    if (/product/.test(l)) return 0;
+    if (/(blog|article|news|journal|page|post|category|collection|store-?locator)/.test(l)) return 2;
+    return 1;
+  };
+  return [...urls].sort((a, b) => score(a) - score(b));
+}
+
+/** All same-origin anchor hrefs in an HTML document, resolved absolute. */
+export function extractAnchorHrefs(html: string, baseUrl: string): string[] {
+  const out = new Set<string>();
+  const re = /<a\b[^>]*?href\s*=\s*("([^"]*)"|'([^']*)')/gi;
+  let m: RegExpExecArray | null;
+  let origin = "";
+  try {
+    origin = new URL(baseUrl).origin;
+  } catch {
+    return [];
+  }
+  while ((m = re.exec(html)) !== null) {
+    const raw = decodeXmlEntities(m[2] ?? m[3] ?? "").trim();
+    if (!raw || raw.startsWith("#") || raw.startsWith("mailto:") || raw.startsWith("tel:") || raw.startsWith("javascript:")) {
+      continue;
+    }
+    try {
+      const abs = new URL(raw, baseUrl);
+      abs.hash = "";
+      if (abs.origin === origin) out.add(abs.toString());
+    } catch {
+      /* skip malformed */
+    }
+  }
+  return [...out];
+}
+
+/** href of `<link rel="next">` / `<a rel="next">`, if the page declares one. */
+function extractRelNext(html: string, baseUrl: string): string | null {
+  const m =
+    html.match(/<link\b[^>]*rel\s*=\s*["']next["'][^>]*href\s*=\s*["']([^"']+)["']/i) ??
+    html.match(/<link\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*rel\s*=\s*["']next["']/i) ??
+    html.match(/<a\b[^>]*rel\s*=\s*["']next["'][^>]*href\s*=\s*["']([^"']+)["']/i);
+  if (!m) return null;
+  try {
+    return new URL(decodeXmlEntities(m[1]), baseUrl).toString();
+  } catch {
+    return null;
+  }
+}
+
+function maxCrawlUrls(): number {
+  const raw = parseInt(process.env.CRAWL_MAX_URLS ?? "", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 50_000;
 }
 
 // ---------------------------------------------------------------------------
@@ -179,47 +267,60 @@ async function crawlSitemap(
   const { url: sitemapUrl, productUrlPattern } = config.discovery.sitemap;
   const pattern = new RegExp(productUrlPattern);
   const delayMs = effectiveDelay(config);
+  const maxUrls = maxCrawlUrls();
+  const maxSubSitemaps = 60;
+  const visited = new Set<string>();
+  let fetched = 0;
 
-  log(`Fetching sitemap: ${sitemapUrl}`);
-  const res = await fetchWithRetry(sitemapUrl);
-  if (!res.ok) {
-    log(`  Failed to fetch sitemap: HTTP ${res.status}`);
-    return;
-  }
-  const xml = await res.text();
-
-  if (isSitemapIndex(xml)) {
-    const subSitemaps = extractLocsFromXml(xml);
-    log(`  Sitemap index with ${subSitemaps.length} sub-sitemaps`);
-
-    for (const subUrl of subSitemaps) {
-      await delay(delayMs);
-      log(`  Fetching sub-sitemap: ${subUrl}`);
-      try {
-        const subRes = await fetchWithRetry(subUrl);
-        if (!subRes.ok) {
-          log(`    Failed: HTTP ${subRes.status}`);
-          continue;
-        }
-        const subXml = await subRes.text();
-        const locs = extractLocsFromXml(subXml);
-        for (const loc of locs) {
-          if (pattern.test(loc)) addUrl(loc);
-        }
-        log(`    Extracted ${locs.length} URLs, ${urls.size} product URLs so far`);
-        onProgress(urls.size);
-      } catch (err) {
-        log(`    Error fetching sub-sitemap: ${(err as Error).message}`);
-      }
+  // Handles nested indexes (index → index → urlset) up to a small depth, with
+  // product-named sub-sitemaps first so most runs never touch blog/page maps.
+  const walk = async (url: string, depth: number): Promise<void> => {
+    if (visited.has(url) || fetched >= maxSubSitemaps || urls.size >= maxUrls) return;
+    visited.add(url);
+    fetched++;
+    if (fetched > 1) await delay(delayMs);
+    log(`  Fetching sitemap${depth > 0 ? ` (depth ${depth})` : ""}: ${url}`);
+    let xml: string | null;
+    try {
+      xml = await fetchSitemapXml(url);
+    } catch (err) {
+      log(`    Error: ${(err as Error).message}`);
+      return;
     }
-  } else {
+    if (!xml) {
+      log(`    Failed to fetch or decode sitemap`);
+      return;
+    }
+
+    if (isSitemapIndex(xml)) {
+      if (depth >= 3) {
+        log(`    Sitemap index nested deeper than 3 levels — skipping`);
+        return;
+      }
+      const subs = rankSubSitemaps(extractLocsFromXml(xml));
+      log(`    Sitemap index with ${subs.length} sub-sitemaps`);
+      for (const sub of subs) {
+        if (fetched >= maxSubSitemaps) {
+          log(`    Reached sub-sitemap cap (${maxSubSitemaps}) — stopping`);
+          break;
+        }
+        if (urls.size >= maxUrls) break;
+        await walk(sub, depth + 1);
+      }
+      return;
+    }
+
     const locs = extractLocsFromXml(xml);
     for (const loc of locs) {
+      if (urls.size >= maxUrls) break;
       if (pattern.test(loc)) addUrl(loc);
     }
-    log(`  Extracted ${locs.length} URLs, ${urls.size} match product pattern`);
+    log(`    ${locs.length} URLs in sitemap, ${urls.size} product URLs so far`);
     onProgress(urls.size);
-  }
+  };
+
+  await walk(sitemapUrl, 0);
+  if (urls.size >= maxUrls) log(`  Reached CRAWL_MAX_URLS cap (${maxUrls}).`);
 }
 
 // ---------------------------------------------------------------------------
@@ -273,19 +374,7 @@ async function crawlCategoryPagination(
           }
 
           const extractArgs = { sel: extraction.selector, attr: extraction.urlAttribute, base: config.baseUrl };
-          const links = await page.evaluate((args: { sel: string; attr: string; base: string }) => {
-              const els = document.querySelectorAll(args.sel);
-              const hrefs: string[] = [];
-              for (const el of els) {
-                const val = el.getAttribute(args.attr);
-                if (val) {
-                  try {
-                    hrefs.push(new URL(val, args.base).toString());
-                  } catch { /* skip */ }
-                }
-              }
-              return hrefs;
-            }, extractArgs);
+          const links = await page.evaluate(collectLinksInPage, extractArgs);
 
           const before = urls.size;
           for (const link of links) {
@@ -306,14 +395,17 @@ async function crawlCategoryPagination(
       await stagehand.close();
     }
   } else {
+    const maxUrls = maxCrawlUrls();
     for (const startUrl of startUrls) {
-      for (let p = 0; p < maxPages; p++) {
-        const pageNum = pageStartsAt + p * pageIncrement;
-        const separator = startUrl.includes("?") ? "&" : "?";
-        const pageUrl =
-          p === 0 ? startUrl : `${startUrl}${separator}${paginationParam}=${pageNum}`;
-
+      let pageUrl: string | null = startUrl;
+      let emptyStreak = 0;
+      for (let p = 0; p < maxPages && pageUrl; p++) {
+        if (urls.size >= maxUrls) {
+          log(`  Reached CRAWL_MAX_URLS cap (${maxUrls}).`);
+          return;
+        }
         log(`  Page ${p + 1}/${maxPages}: ${pageUrl}`);
+        let relNext: string | null = null;
         try {
           const res = await fetchWithRetry(pageUrl);
           if (!res.ok) {
@@ -321,35 +413,57 @@ async function crawlCategoryPagination(
             break;
           }
           const html = await res.text();
+          relNext = extractRelNext(html, pageUrl);
 
+          const before = urls.size;
+          // First try the configured selector (cheap regex approximation)…
           const linkRe = new RegExp(
             `<[^>]*${escapeRegex(extraction.selector.replace(/\[.*$/, ""))}[^>]*${escapeRegex(extraction.urlAttribute)}=["']([^"']+)["']`,
             "gi",
           );
-          const before = urls.size;
           let linkMatch: RegExpExecArray | null;
           while ((linkMatch = linkRe.exec(html)) !== null) {
             let href = linkMatch[1];
-            if (extraction.urlIsRelative) {
-              try {
-                href = new URL(href, config.baseUrl).toString();
-              } catch {
-                continue;
-              }
+            try {
+              href = new URL(href, config.baseUrl).toString();
+            } catch {
+              continue;
             }
             if (pattern.test(href)) addUrl(href);
+          }
+          // …and when it finds nothing, fall back to every anchor on the page.
+          // The product URL pattern is the real filter; selectors drift as
+          // sites redesign, and this keeps old configs working regardless.
+          if (urls.size === before) {
+            for (const href of extractAnchorHrefs(html, pageUrl)) {
+              if (pattern.test(href)) addUrl(href);
+            }
+            if (urls.size > before) {
+              log(`    Selector matched nothing; anchor-scan fallback found ${urls.size - before}`);
+            }
           }
           log(`    ${urls.size - before} new product URLs (${urls.size} total)`);
           onProgress(urls.size);
 
-          if (urls.size === before && p > 0) {
-            log(`    No new URLs found — stopping pagination for this category`);
+          emptyStreak = urls.size === before ? emptyStreak + 1 : 0;
+          if (emptyStreak >= 2) {
+            log(`    No new URLs on 2 consecutive pages — stopping this category`);
             break;
           }
         } catch (err) {
           log(`    Error: ${(err as Error).message}`);
+          break;
         }
 
+        // Prefer the page's own rel=next (handles /page/2/ style paths);
+        // otherwise synthesize the next page from the pagination params.
+        if (relNext && relNext !== pageUrl) {
+          pageUrl = relNext;
+        } else {
+          const pageNum = pageStartsAt + (p + 1) * pageIncrement;
+          const separator = startUrl.includes("?") ? "&" : "?";
+          pageUrl = `${startUrl}${separator}${paginationParam}=${pageNum}`;
+        }
         await delay(delayMs);
       }
     }
@@ -358,6 +472,32 @@ async function crawlCategoryPagination(
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Runs inside the browser page: collect hrefs via the configured selector, and
+ * when it matches nothing (selector drift after a site redesign), fall back to
+ * every anchor — the product URL pattern applied by the caller is the real gate.
+ */
+function collectLinksInPage(args: { sel: string; attr: string; base: string }): string[] {
+  const out: string[] = [];
+  const push = (val: string | null) => {
+    if (!val) return;
+    try {
+      out.push(new URL(val, args.base).toString());
+    } catch {
+      /* skip */
+    }
+  };
+  try {
+    for (const el of document.querySelectorAll(args.sel)) push(el.getAttribute(args.attr));
+  } catch {
+    /* invalid selector */
+  }
+  if (out.length === 0) {
+    for (const el of document.querySelectorAll("a[href]")) push(el.getAttribute("href"));
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -404,19 +544,7 @@ async function crawlInfiniteScroll(
         await delay(scrollPauseMs);
 
         const extractArgs = { sel: extraction.selector, attr: extraction.urlAttribute, base: config.baseUrl };
-        const links = await page.evaluate((args: { sel: string; attr: string; base: string }) => {
-            const els = document.querySelectorAll(args.sel);
-            const hrefs: string[] = [];
-            for (const el of els) {
-              const val = el.getAttribute(args.attr);
-              if (val) {
-                try {
-                  hrefs.push(new URL(val, args.base).toString());
-                } catch { /* skip */ }
-              }
-            }
-            return hrefs;
-          }, extractArgs);
+        const links = await page.evaluate(collectLinksInPage, extractArgs);
 
         const before = urls.size;
         for (const link of links) {
@@ -448,16 +576,28 @@ async function crawlApi(
 ): Promise<void> {
   if (config.discovery.method !== "api") return;
 
-  const { endpoint, method, headers, paginationParam, pageSize, productUrlTemplate, totalItemsPath } =
-    config.discovery.api;
+  const {
+    endpoint,
+    method,
+    headers,
+    paginationParam,
+    pageSizeParam,
+    pageSize,
+    startPage,
+    itemsPath,
+    productUrlTemplate,
+    totalItemsPath,
+  } = config.discovery.api;
   const delayMs = effectiveDelay(config);
+  const maxUrls = maxCrawlUrls();
+  const sizeParam = pageSizeParam ?? "limit";
 
-  let page = 1;
+  let page = startPage ?? 1;
   let hasMore = true;
 
-  while (hasMore) {
+  while (hasMore && urls.size < maxUrls) {
     const separator = endpoint.includes("?") ? "&" : "?";
-    const url = `${endpoint}${separator}${paginationParam}=${page}&limit=${pageSize}`;
+    const url = `${endpoint}${separator}${paginationParam}=${page}&${sizeParam}=${pageSize}`;
     log(`  API page ${page}: ${url}`);
 
     try {
@@ -473,12 +613,18 @@ async function crawlApi(
 
       const data = await res.json();
 
-      // Navigate to items array using a simple dot-path
+      // Navigate to the items array: explicit dot-path first, then common keys.
       let items: unknown[] = [];
-      if (Array.isArray(data)) {
+      if (itemsPath) {
+        let val: unknown = data;
+        for (const part of itemsPath.split(".")) {
+          val = (val as Record<string, unknown> | null)?.[part];
+        }
+        if (Array.isArray(val)) items = val;
+      }
+      if (items.length === 0 && Array.isArray(data)) {
         items = data;
-      } else if (typeof data === "object" && data !== null) {
-        // Try common paths: data.products, data.items, data.results
+      } else if (items.length === 0 && typeof data === "object" && data !== null) {
         for (const key of ["products", "items", "results", "data"]) {
           if (Array.isArray((data as Record<string, unknown>)[key])) {
             items = (data as Record<string, unknown>)[key] as unknown[];

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type Brand, type BrandStatus, type PriceTier } from "../api.ts";
-import { PipelineActions } from "./PipelineActions.tsx";
 import {
   Button,
   Card,
@@ -93,18 +92,7 @@ export function BrandCuration() {
   }
 
   return (
-    <section className="space-y-6">
-      <header>
-        <h1 className="text-lg font-semibold tracking-tight">Brand curation</h1>
-        <p className="mt-1 max-w-2xl text-sm text-gray-500">
-          Approve the cool, accessible ones. Shopify brands get a crawl config built automatically
-          (free) and appear in Retailers; the rest land in the Retailers backlog for a manual
-          explore.
-        </p>
-      </header>
-
-      <PipelineActions onChanged={() => void load()} />
-
+    <section className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
         <Segmented
           items={STATUS_TABS.map((t) => ({

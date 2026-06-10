@@ -53,12 +53,14 @@ import {
 } from "./queue.js";
 import { safeParseConfig } from "./schemas/config.js";
 import { createBrandsRouter } from "./routes/brands.js";
+import { createOpsRouter } from "./routes/ops.js";
 import { isShopifyStore } from "./shopifyExplore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 app.use(express.json());
+app.use(createOpsRouter());
 app.use(
   createBrandsRouter({
     // Approve → config, hands-free, when it's free: Shopify stores get their

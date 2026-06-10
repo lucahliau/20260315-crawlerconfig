@@ -36,7 +36,13 @@ const ApiDiscoverySchema = z.object({
     method: z.string(),
     headers: z.record(z.string()).optional(),
     paginationParam: z.string(),
+    /** Query param carrying the page size (e.g. "limit" for Shopify, "per_page" for WooCommerce). */
+    pageSizeParam: z.string().optional(),
     pageSize: z.number(),
+    /** First page number (defaults to 1). */
+    startPage: z.number().optional(),
+    /** Dot-path to the items array in the response (e.g. "products"); auto-detected when omitted. */
+    itemsPath: z.string().optional(),
     productUrlTemplate: z.string(),
     totalItemsPath: z.string().optional(),
   }),
