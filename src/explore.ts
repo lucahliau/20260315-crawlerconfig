@@ -2533,34 +2533,18 @@ export async function exploreRetailer(
     }
 
     if (!sitemapResult && !categoryResult) {
-      log(session, "\nBoth sitemap and category exploration failed. Writing minimal config...\n");
-
-      const minimalConfig: Record<string, unknown> = {
-        retailer,
-        retailerDisplayName: displayName,
-        baseUrl,
-        discovery: {
-          method: null,
-          notes: "Both sitemap check and category exploration failed. Manual investigation needed.",
-        },
-        requestConfig: {
-          blocksHeadlessBrowsers,
-          notes: blocksHeadlessBrowsers
-            ? "Site blocks headless browsers (403/CAPTCHA detected)."
-            : "",
-        },
-      };
-
-      writePartialConfig(configsDir, retailer, minimalConfig);
-      const masterUrl = minimalConfig.baseUrl as string | undefined;
-      const masterName = minimalConfig.retailerDisplayName as string | undefined;
-      if (masterUrl) await addToMasterList(masterUrl, masterName);
-      const metrics = await shutdownStagehand(stagehand);
+      // Surface this as a real explore failure so the retailer lands in the
+      // Configure tab's retry queue. Previously we wrote a stub config with
+      // `discovery.method: null`, which made the row look explore-completed
+      // and surfaced in the Crawl tab — but every crawl call then 400'd with
+      // "stored config is invalid".
+      log(session, "\nBoth sitemap and category exploration failed.\n");
+      await shutdownStagehand(stagehand);
       stagehand = null;
-      log(session, "Done.");
-      const estimatedUsd = metrics ? estimateUsdFromStagehandMetrics(metrics) : 0;
-      log(session, `Estimated Stagehand cost (this run): ~$${estimatedUsd.toFixed(4)}`);
-      return { config: minimalConfig, metrics, estimatedUsd };
+      const reason = blocksHeadlessBrowsers
+        ? "Site blocks headless browsers (403/CAPTCHA) — sitemap and category exploration both failed."
+        : "Sitemap and category exploration both failed; no usable discovery method found.";
+      throw new Error(reason);
     }
 
     if (session.abortController.signal.aborted) {

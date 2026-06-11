@@ -98,6 +98,8 @@ export interface RetailerRow {
   retailer: string;
   filename: string;
   config: { baseUrl?: string; retailerDisplayName?: string } & Record<string, unknown>;
+  configValid: boolean;
+  configMethod: string | null;
   recommendation: Recommendation;
   storedRecommendation: Recommendation;
   exploreStatus: ExploreStatus;

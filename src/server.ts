@@ -370,7 +370,18 @@ function getExploreFailureInfo(err: unknown): ExploreFailureInfo {
 function hasConfigError(config: Record<string, unknown> | null | undefined): boolean {
   if (!config || typeof config !== "object") return false;
   const error = config.error;
-  return !!(error && typeof error === "object" && typeof (error as { message?: unknown }).message === "string");
+  if (error && typeof error === "object" && typeof (error as { message?: unknown }).message === "string") {
+    return true;
+  }
+  // Schema-invalid configs (e.g. legacy stubs with `discovery.method: null`)
+  // must surface as a failed explore so they end up in the Configure retry
+  // queue instead of silently appearing as "ready to crawl".
+  return !safeParseConfig(config).success;
+}
+
+function isConfigValid(config: Record<string, unknown> | null | undefined): boolean {
+  if (!config || typeof config !== "object") return false;
+  return safeParseConfig(config).success;
 }
 
 function getExploreStatus(
@@ -379,6 +390,10 @@ function getExploreStatus(
   configHasError = false,
 ): ExploreUiStatus {
   const status = state?.status;
+  // A schema-invalid config always wins over a stored "completed" status —
+  // those rows came from the legacy stub-writer and must surface as failed
+  // so they end up in the Configure retry queue.
+  if (configHasError && status !== "running") return "failed";
   if (
     status === "running" ||
     status === "completed" ||
@@ -388,7 +403,6 @@ function getExploreStatus(
   ) {
     return status;
   }
-  if (configHasError) return "failed";
   return hasConfig ? "completed" : "idle";
 }
 
@@ -1952,6 +1966,12 @@ app.get("/api/retailers-overview", async (_req, res) => {
         retailer,
         filename,
         config,
+        configValid: isConfigValid(config),
+        configMethod:
+          (config.discovery as { method?: unknown } | undefined)?.method &&
+          typeof (config.discovery as { method?: unknown }).method === "string"
+            ? ((config.discovery as { method: string }).method)
+            : null,
         recommendation,
         storedRecommendation,
         exploreStatus,
@@ -2448,8 +2468,21 @@ app.post("/api/upload/:retailer", async (req, res) => {
 // from /swipe as well).
 const DASHBOARD_DIST = path.join(__dirname, "..", "dashboard", "dist");
 if (fs.existsSync(path.join(DASHBOARD_DIST, "index.html"))) {
-  app.use("/app", express.static(DASHBOARD_DIST));
+  // Vite emits hashed asset filenames under /assets, so those are safe to cache
+  // forever. The HTML entry must NOT be cached aggressively or browsers keep
+  // pointing at the previous deploy's bundle hashes.
+  app.use(
+    "/app",
+    express.static(DASHBOARD_DIST, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith("index.html")) {
+          res.setHeader("Cache-Control", "no-cache");
+        }
+      },
+    }),
+  );
   app.get(/^\/(app|swipe)(\/.*)?$/, (_req, res) => {
+    res.setHeader("Cache-Control", "no-cache");
     res.sendFile(path.join(DASHBOARD_DIST, "index.html"));
   });
   console.log("[dashboard] Serving React dashboard at /app (mobile swipe at /swipe)");

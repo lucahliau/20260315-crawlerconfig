@@ -27,7 +27,7 @@ import { safeParseConfig } from "./schemas/config.js";
 import { estimateUsdFromDiscoverUsage } from "./pricing.js";
 import { recordExploreUsage } from "./usageLedger.js";
 
-const DEFAULT_MODEL = "gemini-3-flash-preview";
+const DEFAULT_MODEL = "gemini-3.5-flash";
 
 function exploreModelId(): string {
   const m = process.env.GEMINI_EXPLORE_MODEL?.trim();

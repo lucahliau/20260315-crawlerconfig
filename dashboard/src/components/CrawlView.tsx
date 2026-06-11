@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { api, type RetailerRow } from "../api.ts";
+import { api, type Recommendation, type RetailerRow } from "../api.ts";
 import {
   Button,
   Card,
@@ -9,6 +9,7 @@ import {
   Segmented,
   Spinner,
   StatusDot,
+  type Tone,
 } from "./ui.tsx";
 import {
   JobDrawer,
@@ -37,20 +38,55 @@ function filterOf(r: RetailerRow): Exclude<Filter, "all"> {
   return "done";
 }
 
+// Sort priority for "likely to succeed". Lower = better. Crawled rows go last
+// so the top of the table is always "ready to crawl, high-confidence first".
+const RECOMMENDATION_RANK: Record<Recommendation, number> = {
+  recommended: 0,
+  usable: 1,
+  unknown: 2,
+  "not recommended": 3,
+};
+
+function confidenceTone(rec: Recommendation): Tone {
+  if (rec === "recommended") return "ok";
+  if (rec === "usable") return "info";
+  if (rec === "not recommended") return "warn";
+  return "idle";
+}
+
+function confidenceLabel(rec: Recommendation): string {
+  if (rec === "recommended") return "High";
+  if (rec === "usable") return "Medium";
+  if (rec === "not recommended") return "Low";
+  return "Unknown";
+}
+
 export function CrawlView() {
   const { data, errors, loadError, load } = useRetailersOverview();
   const { busyKey, actionError, setActionError, runJob, watchJob, drawer } = useJobRunner(load);
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
 
-  // Only sites whose config identification completed belong in this stage.
-  // Not-yet-crawled sites sort first so pending work is visible immediately
-  // (rows arrive alphabetical from the API, which keeps each group stable).
+  // Only sites whose config identification completed AND whose stored config
+  // is schema-valid belong in this stage. Invalid configs (e.g. legacy stubs
+  // with `discovery.method: null`) would 400 on crawl — they live in Configure.
+  // Sort: uncrawled high-confidence first, then crawled rows (alphabetical
+  // within each group, since the API returns rows sorted).
   const retailers = useMemo(
     () =>
       (data?.retailers ?? [])
-        .filter((r) => r.exploreStatus === "completed")
-        .sort((a, b) => Number(!!a.crawl) - Number(!!b.crawl)),
+        .filter((r) => r.exploreStatus === "completed" && r.configValid !== false)
+        .sort((a, b) => {
+          const aCrawled = a.crawl ? 1 : 0;
+          const bCrawled = b.crawl ? 1 : 0;
+          if (aCrawled !== bCrawled) return aCrawled - bCrawled;
+          if (!aCrawled) {
+            const ra = RECOMMENDATION_RANK[a.recommendation] ?? 2;
+            const rb = RECOMMENDATION_RANK[b.recommendation] ?? 2;
+            if (ra !== rb) return ra - rb;
+          }
+          return 0;
+        }),
     [data],
   );
   const crawledCount = useMemo(() => retailers.filter((r) => !!r.crawl).length, [retailers]);
@@ -156,6 +192,7 @@ export function CrawlView() {
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50 text-left text-[11px] font-medium uppercase tracking-wide text-gray-500">
               <th className="px-4 py-2.5">Site</th>
+              <th className="px-4 py-2.5">Confidence</th>
               <th className="px-4 py-2.5">Crawl</th>
               <th className="px-4 py-2.5">Upload</th>
               <th className="px-4 py-2.5 text-right">Actions</th>
@@ -164,7 +201,7 @@ export function CrawlView() {
           <tbody className="divide-y divide-gray-100">
             {visible.length === 0 && (
               <tr>
-                <td colSpan={4} className="px-4 py-12 text-center text-sm text-gray-400">
+                <td colSpan={5} className="px-4 py-12 text-center text-sm text-gray-400">
                   No sites match this filter.
                 </td>
               </tr>
@@ -221,6 +258,25 @@ function Row({
         >
           {hostOf(r.config?.baseUrl)}
         </a>
+      </td>
+
+      <td className="whitespace-nowrap px-4 py-2.5 text-xs">
+        <StatusDot
+          tone={confidenceTone(r.recommendation)}
+          title={
+            r.configMethod
+              ? `Discovery: ${r.configMethod} · ${r.recommendation}`
+              : r.recommendation
+          }
+          label={
+            <>
+              <span>{confidenceLabel(r.recommendation)}</span>
+              {r.configMethod && (
+                <span className="ml-1.5 text-gray-400">{r.configMethod}</span>
+              )}
+            </>
+          }
+        />
       </td>
 
       <td className="whitespace-nowrap px-4 py-2.5 text-xs">

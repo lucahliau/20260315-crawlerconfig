@@ -18,7 +18,7 @@ const DISCOVERED_BRANDS_PATH =
   process.env.DISCOVERED_BRANDS_PATH ?? path.join(process.cwd(), "discovered-brands.json");
 
 /** Default model for brand discovery (Gemini API id, not Stagehand `google/...` form). */
-const DEFAULT_GEMINI_DISCOVER_MODEL = "gemini-3-flash-preview";
+const DEFAULT_GEMINI_DISCOVER_MODEL = "gemini-3.5-flash";
 
 /**
  * Curated "cool but accessible" reference brands. Used two ways:

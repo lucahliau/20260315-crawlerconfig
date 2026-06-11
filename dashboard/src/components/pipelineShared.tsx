@@ -147,10 +147,27 @@ export function useJobRunner(reload: (silent?: boolean) => void) {
 }
 
 export function JobDrawer({ drawer }: { drawer: JobDrawerState }) {
-  const logEndRef = useRef<HTMLDivElement | null>(null);
+  const logRef = useRef<HTMLDivElement | null>(null);
+  // Only auto-scroll when the user is already pinned to the bottom. If they
+  // scroll up to read older lines, we leave the viewport alone. We also
+  // scroll the log container directly (not via scrollIntoView, which would
+  // shift the whole page).
+  const pinnedRef = useRef(true);
   const lineCount = drawer.jobLines.length;
+
+  const onScroll = () => {
+    const el = logRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    pinnedRef.current = distanceFromBottom < 40;
+  };
+
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = logRef.current;
+    if (!el) return;
+    if (pinnedRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [lineCount]);
 
   if (!drawer.activeJob) return null;
@@ -171,7 +188,11 @@ export function JobDrawer({ drawer }: { drawer: JobDrawerState }) {
             <XIcon />
           </button>
         </div>
-        <div className="max-h-48 overflow-y-auto rounded-md bg-gray-950 p-3 font-mono text-[11px] leading-relaxed text-gray-300">
+        <div
+          ref={logRef}
+          onScroll={onScroll}
+          className="max-h-72 overflow-y-auto overscroll-contain rounded-md bg-gray-950 p-3 font-mono text-[11px] leading-relaxed text-gray-300"
+        >
           {drawer.jobLines.length === 0 ? (
             <span className="text-gray-500">Waiting for log output…</span>
           ) : (
@@ -181,7 +202,6 @@ export function JobDrawer({ drawer }: { drawer: JobDrawerState }) {
               </div>
             ))
           )}
-          <div ref={logEndRef} />
         </div>
       </div>
     </div>
