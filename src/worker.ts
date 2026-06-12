@@ -34,6 +34,7 @@ import { uploadRetailer } from "./upload.js";
 import { safeParseConfig, type Config } from "./schemas/config.js";
 import {
   ensurePipelinePersistenceSchema,
+  getRetailerPipelineState,
   getSetting,
   isAutoPipelineEnabled,
   recordScrapeError,
@@ -81,10 +82,20 @@ async function loadConfigFor(retailer: string): Promise<Config | null> {
     return cached.config;
   }
   const filename = path.join(CONFIGS_DIR, `${retailer}.json`);
-  if (!fs.existsSync(filename)) return null;
   try {
-    const raw = fs.readFileSync(filename, "utf-8");
-    const parsed = safeParseConfig(JSON.parse(raw));
+    // Local file first; else the config persisted by the explore job in
+    // retailer_pipeline_state — a home worker's checkout may not have the
+    // config files for retailers explored on Railway after the last pull.
+    let rawConfig: unknown = null;
+    if (fs.existsSync(filename)) {
+      rawConfig = JSON.parse(fs.readFileSync(filename, "utf-8"));
+    } else {
+      const state = await getRetailerPipelineState(retailer);
+      rawConfig = state?.exploreState?.config ?? null;
+      if (!rawConfig) return null;
+      console.log(`[worker=${WORKER_ID}] config for ${retailer} loaded from Postgres (no local file).`);
+    }
+    const parsed = safeParseConfig(rawConfig);
     if (!parsed.success) {
       await recordScrapeError({
         code: ErrorCodes.EXPLORE_CONFIG_INVALID,
