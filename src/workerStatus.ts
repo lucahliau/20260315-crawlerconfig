@@ -99,19 +99,63 @@ function execOut(cmd: string, args: string[]): Promise<string> {
 }
 
 async function machineStats(): Promise<Record<string, unknown>> {
-  const [therm, batt] = await Promise.all([
+  const [therm, batt, df] = await Promise.all([
     process.platform === "darwin" ? execOut("pmset", ["-g", "therm"]) : Promise.resolve(""),
     process.platform === "darwin" ? execOut("pmset", ["-g", "batt"]) : Promise.resolve(""),
+    execOut("df", ["-k", os.homedir()]),
   ]);
   const speedMatch = therm.match(/CPU_Speed_Limit\s*=\s*(\d+)/);
+  // df -k: header line, then "<fs> <1k-blocks> <used> <avail> ..."
+  const dfFields = df.split("\n")[1]?.trim().split(/\s+/) ?? [];
+  const availKb = Number(dfFields[3]);
   return {
     loadAvg1m: Math.round(os.loadavg()[0] * 100) / 100,
     cpuCount: os.cpus().length,
     freeMemMb: Math.round(os.freemem() / 1024 / 1024),
     totalMemMb: Math.round(os.totalmem() / 1024 / 1024),
+    diskFreeGb: Number.isFinite(availKb) ? Math.round(availKb / 1024 / 1024) : null,
     cpuSpeedLimitPct: speedMatch ? Number(speedMatch[1]) : null,
     onACPower: batt ? batt.includes("AC Power") : null,
   };
+}
+
+let versionCache: { at: number; value: Record<string, unknown> } | null = null;
+/** Local commit vs origin HEAD — surfaces "update available" on the page. */
+async function versionStats(): Promise<Record<string, unknown>> {
+  if (versionCache && Date.now() - versionCache.at < 60 * 60_000) return versionCache.value;
+  const local = (await execOut("git", ["rev-parse", "HEAD"])).trim();
+  const remoteOut = await execOut("git", ["ls-remote", "origin", "HEAD"]);
+  const remote = remoteOut.split(/\s+/)[0]?.trim() || null;
+  const value = {
+    commit: local ? local.slice(0, 7) : null,
+    updateAvailable: Boolean(local && remote && local !== remote),
+  };
+  versionCache = { at: Date.now(), value };
+  return value;
+}
+
+/**
+ * Unattended boxes fill logs forever — cap them. The launchd redirect fd is
+ * O_APPEND, so truncation is safe (appends continue at the new EOF).
+ */
+function houseKeepLogs(): void {
+  const workerLog = path.join(os.homedir(), "Library", "Logs", "crawler-worker.log");
+  try {
+    if (fs.existsSync(workerLog) && fs.statSync(workerLog).size > 100 * 1024 * 1024) {
+      fs.truncateSync(workerLog, 0);
+      recordActivity("worker log exceeded 100MB — truncated");
+    }
+  } catch {
+    /* best effort */
+  }
+  try {
+    if (fs.existsSync(issuesFile) && fs.statSync(issuesFile).size > 5 * 1024 * 1024) {
+      const lines = fs.readFileSync(issuesFile, "utf8").split("\n");
+      fs.writeFileSync(issuesFile, lines.slice(-2000).join("\n"));
+    }
+  } catch {
+    /* best effort */
+  }
 }
 
 let cloudCache: { at: number; value: Record<string, unknown> } | null = null;
@@ -152,11 +196,12 @@ async function cloudStats(): Promise<Record<string, unknown>> {
 }
 
 async function buildStatus(): Promise<Record<string, unknown>> {
-  const [queues, backlog, machine, cloud] = await Promise.all([
+  const [queues, backlog, machine, cloud, version] = await Promise.all([
     getQueueStats().catch(() => []),
     getProcessingBacklog().catch(() => null),
     machineStats(),
     cloudStats(),
+    versionStats().catch(() => ({ commit: null, updateAvailable: false })),
   ]);
   return {
     worker: {
@@ -174,6 +219,7 @@ async function buildStatus(): Promise<Record<string, unknown>> {
     backlog,
     machine,
     cloud,
+    version,
     issuesFile,
     generatedAt: new Date().toISOString(),
   };
@@ -220,6 +266,8 @@ async function tick(){
  cards+=card("load (1m)",m.loadAvg1m+" / "+m.cpuCount+" cores",m.loadAvg1m>m.cpuCount?"warn":"");
  if(m.cpuSpeedLimitPct!==null)cards+=card("thermal",m.cpuSpeedLimitPct+"% speed"+(m.cpuSpeedLimitPct<100?" (throttling — normal under load)":""),m.cpuSpeedLimitPct<70?"warn":"");
  if(m.onACPower!==null)cards+=card("power",m.onACPower?"plugged in":"on battery — plug in!",m.onACPower?"ok":"bad");
+ if(m.diskFreeGb!==null)cards+=card("disk free",m.diskFreeGb+" GB",m.diskFreeGb<15?"warn":"");
+ if(d.version&&d.version.commit)cards+=card("code",d.version.commit+(d.version.updateAvailable?" — update available (run update.sh)":""),d.version.updateAvailable?"warn":"");
  document.getElementById("cards").innerHTML=cards;
  document.getElementById("queues").innerHTML="<table><tr><th>queue</th><th>waiting</th><th>active</th><th>failed</th></tr>"+d.queues.map(q=>"<tr><td>"+esc(q.name)+"</td><td>"+q.waiting+"</td><td>"+q.active+"</td><td class='"+(q.failed>0?"bad":"")+"'>"+q.failed+"</td></tr>").join("")+"</table>";
  document.getElementById("active").innerHTML=d.activeJobs.length?d.activeJobs.map(j=>esc(j.kind)+" job "+esc(j.id.slice(0,8))+"… since "+new Date(j.startedAt).toLocaleTimeString()+(j.detail?" — "+esc(j.detail):"")).join("<br>"):"idle — waiting for jobs";
@@ -265,4 +313,7 @@ export function startWorkerStatusServer(info: {
   server.listen(port, "127.0.0.1", () => {
     console.log(`[worker] local status dashboard: http://localhost:${port}`);
   });
+
+  houseKeepLogs();
+  setInterval(houseKeepLogs, 6 * 60 * 60 * 1000).unref();
 }
