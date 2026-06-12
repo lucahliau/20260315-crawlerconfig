@@ -69,18 +69,27 @@ be present here.
 ```
 
 - Adjust the npm path (`which npm` — often `/opt/homebrew/bin/npm` on Apple Silicon).
-- `caffeinate -dims` prevents sleep while the worker runs; on AC power also set
-  `sudo pmset -c sleep 0` so the lid can stay closed.
+- Keep-awake is automatic: the worker spawns `caffeinate -ims -w <pid>` itself
+  (no sudo, dies with the worker). For lid-closed operation on AC power, also
+  set `sudo pmset -c sleep 0 disablesleep 1` once.
 - Load: `launchctl load ~/Library/LaunchAgents/com.clothedd.crawler-worker.plist`
 - Logs: `tail -f ~/Library/Logs/crawler-worker.log`
 
 ## 4. Verify
 
-Within ~30s of starting, the dashboard **Process** tab (desktop `/app` or
-phone `/swipe`) shows **“Home server: online”** — that's the worker heartbeat
-(every 15s, stale after 120s; the heartbeat metadata lists its queues). Queue
-a tiny batch from the phone (Process tab → "Remove backgrounds") and watch the
-counts move.
+Two places:
+
+- **Locally on the Mac**: the worker serves a status dashboard at
+  **http://localhost:4577** (127.0.0.1 only; `WORKER_STATUS_PORT` overrides,
+  `0` disables) — worker activity, queue depth, processing backlog, Mac
+  health (load / memory / thermal throttle / power source), and cloud
+  reachability. Issues are listed there and appended durably to
+  `~/Library/Logs/crawler-worker-issues.log`.
+- **Remotely**: within ~30s of starting, the dashboard **Process** tab
+  (desktop `/app` or phone `/swipe`) shows **“Home server: online”** — the
+  worker heartbeat (every 15s, stale after 120s; metadata lists its queues).
+  Queue a tiny batch from the phone (Process tab → "Remove backgrounds") and
+  watch the counts move.
 
 ## 5. Operational notes
 
