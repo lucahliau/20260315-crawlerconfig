@@ -45,11 +45,12 @@ import { ErrorCodes, classifyError } from "./errorCodes.js";
 import {
   enqueueProcessing,
   getBoss,
+  getQueueStats,
   QUEUES,
   type ProcessingJobData,
   type UploadUrlJobData,
 } from "./queue.js";
-import { runEmbedBatch, runNobgBatch } from "./processing/bridge.js";
+import { getProcessingBacklog, runEmbedBatch, runNobgBatch } from "./processing/bridge.js";
 import {
   recordActivity,
   recordIssue,
@@ -279,6 +280,66 @@ async function maybeTriggerProcessingAfterDrain(): Promise<void> {
   }
 }
 
+/**
+ * Self-feeding backlog loop: whenever there is processing backlog but the
+ * queue is completely empty (nothing waiting, nothing running), bootstrap a
+ * sweep batch — the batch chain then carries it until the backlog is gone.
+ * Without this, an idle worker would sit on a backlog until the nightly
+ * cron or a manual tap. Respects the Autopilot kill switch + processing
+ * gate (checked here AND at claim time, since these are sweep batches).
+ */
+const IDLE_SWEEP_INTERVAL_MS = Math.max(
+  60_000,
+  parseInt(process.env.IDLE_SWEEP_INTERVAL_MS ?? "600000", 10),
+);
+
+async function idleBacklogLoop(): Promise<void> {
+  // Let boss/heartbeat settle before the first check.
+  await new Promise((r) => setTimeout(r, 60_000));
+  while (!stopping) {
+    try {
+      const autoOn = await isAutoPipelineEnabled();
+      const gateOn = await getSetting<boolean>("gate_processing", true);
+      if (autoOn && gateOn) {
+        const [stats, backlog] = await Promise.all([getQueueStats(), getProcessingBacklog()]);
+        const hourBucket = new Date().toISOString().slice(0, 13);
+        const targets = [
+          {
+            queue: QUEUES.PROCESS_NOBG,
+            kind: "nobg" as const,
+            needs: backlog.needsNobg,
+            limit: Math.max(1, parseInt(process.env.PROCESS_NOBG_DEFAULT_LIMIT ?? "100", 10)),
+          },
+          {
+            queue: QUEUES.PROCESS_EMBED,
+            kind: "embed" as const,
+            needs: backlog.needsEmbed,
+            limit: Math.max(1, parseInt(process.env.PROCESS_EMBED_DEFAULT_LIMIT ?? "2000", 10)),
+          },
+        ];
+        for (const t of targets) {
+          if (!WORKER_QUEUES.includes(t.queue) || t.needs <= 0) continue;
+          const stat = stats.find((s) => s.name === t.queue);
+          if (!stat || stat.waiting > 0 || stat.active > 0) continue;
+          const id = await enqueueProcessing(
+            { kind: t.kind, limit: t.limit, sweep: true },
+            { singletonKey: `${t.kind}:idle:${hourBucket}` },
+          );
+          if (id) {
+            console.log(
+              `[worker=${WORKER_ID}] idle + backlog (${t.needs} ${t.kind}) — bootstrapped batch ${id}`,
+            );
+            recordActivity(`idle backlog: started ${t.kind} (${t.needs} remaining)`);
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[worker=${WORKER_ID}] idle backlog check failed:`, err);
+    }
+    await new Promise((r) => setTimeout(r, IDLE_SWEEP_INTERVAL_MS));
+  }
+}
+
 async function heartbeatLoop(): Promise<void> {
   while (!stopping) {
     try {
@@ -313,6 +374,11 @@ async function main(): Promise<void> {
 
   // Heartbeat in the background.
   void heartbeatLoop();
+
+  // Self-feeding backlog drain (processing-capable workers only).
+  if (WORKER_QUEUES.includes(QUEUES.PROCESS_NOBG) || WORKER_QUEUES.includes(QUEUES.PROCESS_EMBED)) {
+    void idleBacklogLoop();
+  }
 
   // Local status dashboard (http://localhost:4577) + keep-awake assertion.
   startWorkerStatusServer({
