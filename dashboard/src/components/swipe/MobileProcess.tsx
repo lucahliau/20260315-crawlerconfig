@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type ProcessingResponse } from "../../api.ts";
+import { api, type ProcessingResponse, type WorkerTelemetry } from "../../api.ts";
 import { cx } from "../ui.tsx";
 
 /**
@@ -57,27 +57,32 @@ export function MobileProcess() {
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto px-5 pb-4">
-      {/* Home server status */}
-      <div className="flex items-center justify-between rounded-xl border border-gray-800 bg-gray-900 px-3.5 py-3">
-        <div>
-          <p className="text-sm font-semibold text-gray-100">Home server</p>
-          <p className="text-[11px] text-gray-500">
-            {online && homeWorker
-              ? `${homeWorker.hostname ?? homeWorker.workerId} · seen ${homeWorker.ageSeconds}s ago`
-              : "offline — queued jobs will wait"}
-          </p>
+      {/* Home server status + machine telemetry from its heartbeat */}
+      <div className="space-y-2.5 rounded-xl border border-gray-800 bg-gray-900 px-3.5 py-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-gray-100">Home server</p>
+            <p className="text-[11px] text-gray-500">
+              {online && homeWorker
+                ? `${homeWorker.hostname ?? homeWorker.workerId} · seen ${homeWorker.ageSeconds}s ago`
+                : "offline — queued jobs will wait"}
+            </p>
+          </div>
+          <span
+            className={cx(
+              "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium",
+              online
+                ? "border-emerald-800 bg-emerald-950/50 text-emerald-300"
+                : "border-amber-800 bg-amber-950/40 text-amber-300",
+            )}
+          >
+            <span className={cx("size-2 rounded-full", online ? "bg-emerald-500" : "bg-amber-500")} />
+            {online ? "online" : "offline"}
+          </span>
         </div>
-        <span
-          className={cx(
-            "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium",
-            online
-              ? "border-emerald-800 bg-emerald-950/50 text-emerald-300"
-              : "border-amber-800 bg-amber-950/40 text-amber-300",
-          )}
-        >
-          <span className={cx("size-2 rounded-full", online ? "bg-emerald-500" : "bg-amber-500")} />
-          {online ? "online" : "offline"}
-        </span>
+        {online && homeWorker?.metadata.telemetry && (
+          <MachineVitals t={homeWorker.metadata.telemetry} />
+        )}
       </div>
 
       {loadError && (
@@ -205,6 +210,65 @@ export function MobileProcess() {
           Jobs run on the M1 at home; the nightly sweep also picks up any backlog.
         </p>
       </div>
+    </div>
+  );
+}
+
+/** Compact machine-vitals grid for the home server (memory/disk/load/thermal/power). */
+function MachineVitals({ t }: { t: WorkerTelemetry }) {
+  const vitals: { label: string; value: string; warn?: boolean }[] = [];
+  if (t.freeMemMb !== undefined && t.totalMemMb) {
+    vitals.push({
+      label: "memory free",
+      value: `${((t.freeMemMb ?? 0) / 1024).toFixed(1)} / ${(t.totalMemMb / 1024).toFixed(0)} GB`,
+      warn: (t.freeMemMb ?? 0) < 500,
+    });
+  }
+  if (t.diskFreeGb != null) {
+    vitals.push({ label: "disk free", value: `${t.diskFreeGb} GB`, warn: t.diskFreeGb < 15 });
+  }
+  if (t.loadAvg1m !== undefined && t.cpuCount) {
+    vitals.push({
+      label: "cpu load",
+      value: `${t.loadAvg1m} / ${t.cpuCount}`,
+      warn: t.loadAvg1m > t.cpuCount,
+    });
+  }
+  if (t.cpuSpeedLimitPct != null) {
+    vitals.push({
+      label: "thermal",
+      value: `${t.cpuSpeedLimitPct}% speed`,
+      warn: t.cpuSpeedLimitPct < 70,
+    });
+  }
+  if (t.onACPower != null) {
+    vitals.push({
+      label: "power",
+      value: t.onACPower
+        ? `plugged in${t.batteryPct != null ? ` · ${t.batteryPct}%` : ""}`
+        : `on battery${t.batteryPct != null ? ` · ${t.batteryPct}%` : ""}`,
+      warn: !t.onACPower,
+    });
+  }
+  return (
+    <div className="space-y-1.5">
+      <div className="grid grid-cols-2 gap-1.5">
+        {vitals.map((v) => (
+          <div key={v.label} className="rounded-lg bg-gray-950 px-2.5 py-1.5">
+            <p className="text-[10px] text-gray-600">{v.label}</p>
+            <p className={cx("text-[12px]", v.warn ? "text-amber-300" : "text-gray-300")}>{v.value}</p>
+          </div>
+        ))}
+      </div>
+      {(t.activeJobs?.length ?? 0) > 0 && (
+        <p className="text-[11px] text-blue-300">working on: {t.activeJobs!.join(", ")}</p>
+      )}
+      {(t.recentIssues ?? 0) > 0 && (
+        <p className="text-[11px] text-red-400">{t.recentIssues} recent issue(s) — see localhost:4577 on the M1</p>
+      )}
+      {t.updateAvailable && (
+        <p className="text-[11px] text-amber-300">code update available — run update.sh on the M1</p>
+      )}
     </div>
   );
 }

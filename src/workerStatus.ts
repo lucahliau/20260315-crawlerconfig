@@ -98,17 +98,33 @@ function execOut(cmd: string, args: string[]): Promise<string> {
   });
 }
 
-async function machineStats(): Promise<Record<string, unknown>> {
+export interface MachineTelemetry {
+  loadAvg1m: number;
+  cpuCount: number;
+  freeMemMb: number;
+  totalMemMb: number;
+  diskFreeGb: number | null;
+  cpuSpeedLimitPct: number | null;
+  onACPower: boolean | null;
+  batteryPct: number | null;
+}
+
+let machineCache: { at: number; value: MachineTelemetry } | null = null;
+
+/** Mac health snapshot, cached 10s (also shipped in the worker heartbeat). */
+export async function getMachineTelemetry(): Promise<MachineTelemetry> {
+  if (machineCache && Date.now() - machineCache.at < 10_000) return machineCache.value;
   const [therm, batt, df] = await Promise.all([
     process.platform === "darwin" ? execOut("pmset", ["-g", "therm"]) : Promise.resolve(""),
     process.platform === "darwin" ? execOut("pmset", ["-g", "batt"]) : Promise.resolve(""),
     execOut("df", ["-k", os.homedir()]),
   ]);
   const speedMatch = therm.match(/CPU_Speed_Limit\s*=\s*(\d+)/);
+  const battPctMatch = batt.match(/(\d+)%/);
   // df -k: header line, then "<fs> <1k-blocks> <used> <avail> ..."
   const dfFields = df.split("\n")[1]?.trim().split(/\s+/) ?? [];
   const availKb = Number(dfFields[3]);
-  return {
+  const value: MachineTelemetry = {
     loadAvg1m: Math.round(os.loadavg()[0] * 100) / 100,
     cpuCount: os.cpus().length,
     freeMemMb: Math.round(os.freemem() / 1024 / 1024),
@@ -116,6 +132,26 @@ async function machineStats(): Promise<Record<string, unknown>> {
     diskFreeGb: Number.isFinite(availKb) ? Math.round(availKb / 1024 / 1024) : null,
     cpuSpeedLimitPct: speedMatch ? Number(speedMatch[1]) : null,
     onACPower: batt ? batt.includes("AC Power") : null,
+    batteryPct: battPctMatch ? Number(battPctMatch[1]) : null,
+  };
+  machineCache = { at: Date.now(), value };
+  return value;
+}
+
+/**
+ * Everything the cloud dashboard needs to show the home server's health —
+ * rides the worker heartbeat into worker_heartbeats.metadata every 15s.
+ */
+export async function getHeartbeatTelemetry(): Promise<Record<string, unknown>> {
+  const [machine, version] = await Promise.all([
+    getMachineTelemetry(),
+    versionStats().catch(() => ({ commit: null, updateAvailable: false })),
+  ]);
+  return {
+    ...machine,
+    ...version,
+    activeJobs: [...state.activeJobs.values()].map((j) => `${j.kind}${j.detail ? ` (${j.detail})` : ""}`),
+    recentIssues: state.issues.length,
   };
 }
 
@@ -199,7 +235,7 @@ async function buildStatus(): Promise<Record<string, unknown>> {
   const [queues, backlog, machine, cloud, version] = await Promise.all([
     getQueueStats().catch(() => []),
     getProcessingBacklog().catch(() => null),
-    machineStats(),
+    getMachineTelemetry(),
     cloudStats(),
     versionStats().catch(() => ({ commit: null, updateAvailable: false })),
   ]);

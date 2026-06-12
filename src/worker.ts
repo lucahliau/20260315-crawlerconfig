@@ -52,6 +52,7 @@ import {
 } from "./queue.js";
 import { getProcessingBacklog, runEmbedBatch, runNobgBatch } from "./processing/bridge.js";
 import {
+  getHeartbeatTelemetry,
   recordActivity,
   recordIssue,
   startCaffeinate,
@@ -343,6 +344,9 @@ async function idleBacklogLoop(): Promise<void> {
 async function heartbeatLoop(): Promise<void> {
   while (!stopping) {
     try {
+      // Machine telemetry rides the heartbeat so the CLOUD dashboard can show
+      // the home server's memory/disk/thermal/power from anywhere.
+      const telemetry = await getHeartbeatTelemetry().catch(() => null);
       await upsertWorkerHeartbeat({
         workerId: WORKER_ID,
         hostname: os.hostname(),
@@ -353,6 +357,7 @@ async function heartbeatLoop(): Promise<void> {
           arch: process.arch,
           nodeVersion: process.version,
           queues: WORKER_QUEUES,
+          ...(telemetry ? { telemetry } : {}),
         },
       });
     } catch (err) {

@@ -146,12 +146,28 @@ export interface ProcessingTotals {
   embedded: number;
 }
 
+/** Mac health shipped in the home worker's heartbeat (see src/workerStatus.ts). */
+export interface WorkerTelemetry {
+  loadAvg1m?: number;
+  cpuCount?: number;
+  freeMemMb?: number;
+  totalMemMb?: number;
+  diskFreeGb?: number | null;
+  cpuSpeedLimitPct?: number | null;
+  onACPower?: boolean | null;
+  batteryPct?: number | null;
+  commit?: string | null;
+  updateAvailable?: boolean;
+  activeJobs?: string[];
+  recentIssues?: number;
+}
+
 export interface WorkerHeartbeat {
   workerId: string;
   hostname: string | null;
   pid: number | null;
   concurrency: number;
-  metadata: { queues?: string[] } & Record<string, unknown>;
+  metadata: { queues?: string[]; telemetry?: WorkerTelemetry } & Record<string, unknown>;
   firstSeenAt: string;
   lastSeenAt: string;
   ageSeconds: number;
