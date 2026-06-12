@@ -146,6 +146,17 @@ export interface ProcessingTotals {
   embedded: number;
 }
 
+export interface WorkerHeartbeat {
+  workerId: string;
+  hostname: string | null;
+  pid: number | null;
+  concurrency: number;
+  metadata: { queues?: string[] } & Record<string, unknown>;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  ageSeconds: number;
+}
+
 export interface ProcessingResponse {
   totals: ProcessingTotals;
   rates: {
@@ -153,6 +164,17 @@ export interface ProcessingResponse {
     embeddings: { last1h: number; last24h: number };
   };
   perRetailer: { retailer: string; total: number; nobg: number; embedded: number }[];
+  backlog?: { needsNobg: number; needsEmbed: number };
+  queues?: QueueStat[];
+  workers?: WorkerHeartbeat[];
+  homeServerOnline?: boolean;
+}
+
+export interface PipelineSettings {
+  auto_pipeline: boolean;
+  gate_crawl: boolean;
+  gate_upload: boolean;
+  gate_processing: boolean;
 }
 
 // --- Mobile swipe queue ---
@@ -349,4 +371,36 @@ export const api = {
   getSystems: () => request<SystemsResponse>("/api/systems"),
   getSwipeQueue: (limit = 15) =>
     request<SwipeQueueResponse>(`/api/swipe-queue?limit=${limit}`),
+
+  // --- Processing control (jobs claimed by the home worker) ---
+  uploadEnqueue: (retailer: string, limit?: number) =>
+    request<{ retailer: string; totalUrls: number; enqueued: number; duplicates: number }>(
+      `/api/upload/${encodeURIComponent(retailer)}/enqueue`,
+      { method: "POST", body: JSON.stringify(limit ? { limit } : {}) },
+    ),
+  runProcessing: (kind: "nobg" | "embed" | "all", limit?: number) =>
+    request<{ jobIds: Record<string, string | null> }>("/api/processing/run", {
+      method: "POST",
+      body: JSON.stringify({ kind, ...(limit ? { limit } : {}) }),
+    }),
+  cancelProcessing: (kind: "nobg" | "embed") =>
+    request<{ cancelled: number }>("/api/processing/cancel", {
+      method: "POST",
+      body: JSON.stringify({ kind }),
+    }),
+  getPipelineSettings: () => request<PipelineSettings>("/api/pipeline/settings"),
+  getAutopilotOptout: (retailer: string) =>
+    request<{ retailer: string; optout: boolean }>(
+      `/api/pipeline/optout/${encodeURIComponent(retailer)}`,
+    ),
+  setAutopilotOptout: (retailer: string, optout: boolean) =>
+    request<{ retailer: string; optout: boolean }>("/api/pipeline/optout", {
+      method: "POST",
+      body: JSON.stringify({ retailer, optout }),
+    }),
+  setPipelineSettings: (patch: Partial<PipelineSettings>) =>
+    request<{ updated: Partial<PipelineSettings> }>("/api/pipeline/settings", {
+      method: "POST",
+      body: JSON.stringify(patch),
+    }),
 };

@@ -31,7 +31,9 @@ import {
   getPool,
   getRetailerPipelineState,
   getScrapeErrorCounts,
+  getSetting,
   getSuccessfulUploadUrls,
+  isAutoPipelineEnabled,
   listRecentScrapeErrors,
   listRetailerPipelineStates,
   listPipelineEvents,
@@ -46,16 +48,19 @@ import {
 import { ErrorCodes, classifyError, type ErrorCode } from "./errorCodes.js";
 import {
   enqueueUploadUrls,
+  getBoss,
   getQueueStats,
   listDeadLetter,
+  QUEUES,
   retryDeadLetterJob,
   stopBoss,
+  type PipelineSweepJobData,
 } from "./queue.js";
 import { safeParseConfig } from "./schemas/config.js";
 import { createBrandsRouter } from "./routes/brands.js";
 import { createOpsRouter } from "./routes/ops.js";
 import { installDashboardAuth } from "./dashboardAuth.js";
-import { isShopifyStore } from "./shopifyExplore.js";
+import { configureAutoChain, maybeChain } from "./autoChain.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -67,10 +72,11 @@ installDashboardAuth(app);
 app.use(createOpsRouter());
 app.use(
   createBrandsRouter({
-    // Approve → config, hands-free, when it's free: Shopify stores get their
-    // crawl config generated deterministically (no Stagehand/Gemini spend) via
+    // Approve → config, hands-free, when it's free: every approved brand gets
+    // an explore over the $0 rungs only (Shopify → WooCommerce → sitemap) via
     // the normal explore-job machinery, so state persists like any explore.
-    // Non-Shopify brands stay in the Retailers backlog for a manual (paid) explore.
+    // Sites needing the AI rungs fail as `needs_paid_explore` and land in the
+    // Configure retry queue for a manual (paid) Identify.
     onBrandApproved: (url) => {
       void (async () => {
         try {
@@ -81,12 +87,8 @@ app.use(
           const state = await getRetailerPipelineState(slug);
           const status = getExploreStatus(state?.exploreState, !!config, hasConfigError(config));
           if (shouldSkipExistingExplore(status)) return;
-          if (!(await isShopifyStore(clean))) {
-            console.log(`[auto-explore] ${slug}: not Shopify — left in backlog for manual explore.`);
-            return;
-          }
-          const { jobId } = await createExploreJob([clean], 1);
-          console.log(`[auto-explore] ${slug}: Shopify detected — explore job ${jobId} started.`);
+          const { jobId } = await createExploreJob([clean], 1, undefined, { freeRungsOnly: true });
+          console.log(`[auto-explore] ${slug}: free-rungs explore job ${jobId} started.`);
         } catch (err) {
           console.error("[auto-explore] Failed:", err);
         }
@@ -422,6 +424,7 @@ async function createExploreJob(
   urls: string[],
   parallelism?: number | string,
   skippedUrls?: string[],
+  opts?: { freeRungsOnly?: boolean },
 ): Promise<{ jobId: string; parallelism: number }> {
   const id = crypto.randomUUID();
   const normalizedParallelism = clampExploreParallelism(parallelism);
@@ -429,7 +432,7 @@ async function createExploreJob(
     id,
     kind: "explore",
     urls,
-    meta: { parallelism: normalizedParallelism },
+    meta: { parallelism: normalizedParallelism, ...(opts?.freeRungsOnly ? { freeRungsOnly: true } : {}) },
   });
   jobs.set(id, job);
   await createPipelineJob(job);
@@ -484,7 +487,9 @@ async function exploreRetailerWithRecovery(
     }
 
     try {
-      const { config, metrics, estimatedUsd } = await exploreRetailer(args.url, (msg) => pushLog(job.id, msg));
+      const { config, metrics, estimatedUsd } = await exploreRetailer(args.url, (msg) => pushLog(job.id, msg), {
+        freeRungsOnly: job.meta?.freeRungsOnly === true,
+      });
       const retailer = (config.retailer as string) ?? args.retailer;
       const dq = config.dataQuality as Record<string, unknown> | undefined;
       const recommendation = normalizeRecommendationValue(dq?.overallRecommendation);
@@ -619,6 +624,12 @@ async function processExploreUrl(job: Job, url: string) {
     });
     job.results.push(config);
     persistJob(job);
+    // Conveyor: a good config rolls straight into a crawl (gated + capped).
+    void maybeChain("explore-completed", {
+      retailer: outcome.retailer,
+      recommendation: outcome.recommendation,
+      log: (msg) => pushLog(job.id, `${msg}\n`),
+    });
     return;
   }
 
@@ -1788,55 +1799,106 @@ app.post("/api/queue/retry/:jobId", async (req, res) => {
  * online worker. This is the queue-driven equivalent of POST /api/upload/:retailer
  * — but instead of running the upload inside this process, it just enqueues.
  */
-app.post("/api/upload/:retailer/enqueue", async (req, res) => {
-  try {
-    const retailer = req.params.retailer;
-    const configPath = path.join(CONFIGS_DIR, `${retailer}.json`);
-    if (!fs.existsSync(configPath)) {
-      return res.status(404).json({ error: `No config for retailer "${retailer}"` });
+/**
+ * Fan a retailer's crawled URLs into the durable upload queue. Reads the
+ * local product-urls file when present, else falls back to the crawl
+ * checkpoint persisted in retailer_pipeline_state (survives redeploys).
+ * Callable from the route and the auto-chain (crawl → upload).
+ */
+async function enqueueUploadForRetailer(
+  retailer: string,
+  limitArg?: number,
+): Promise<
+  | {
+      retailer: string;
+      totalUrls: number;
+      targeted: number;
+      alreadyUploaded: number;
+      enqueued: number;
+      duplicates: number;
     }
-    const productUrlsPath = path.join(PRODUCT_URLS_DIR, `${retailer}.json`);
-    if (!fs.existsSync(productUrlsPath)) {
-      return res.status(404).json({ error: `No crawled URLs for retailer "${retailer}"` });
-    }
+  | { error: string; status?: number }
+> {
+  const config = await loadStoredConfig(retailer);
+  if (!config) {
+    return { error: `No config for retailer "${retailer}"`, status: 404 };
+  }
+
+  let urls: string[] = [];
+  let crawledAt: string | undefined;
+  const productUrlsPath = path.join(PRODUCT_URLS_DIR, `${retailer}.json`);
+  if (fs.existsSync(productUrlsPath)) {
     const urlsData = JSON.parse(fs.readFileSync(productUrlsPath, "utf-8")) as {
       urls?: string[];
       crawledAt?: string;
     };
-    const urls = Array.isArray(urlsData.urls) ? urlsData.urls : [];
-    const crawledAt = urlsData.crawledAt ?? new Date().toISOString();
+    urls = Array.isArray(urlsData.urls) ? urlsData.urls : [];
+    crawledAt = urlsData.crawledAt;
+  }
+  if (urls.length === 0) {
+    const state = await getRetailerPipelineState(retailer);
+    const crawlState = state?.crawlState as
+      | { urls?: unknown; crawledAt?: unknown; completedAt?: unknown }
+      | undefined;
+    if (Array.isArray(crawlState?.urls)) {
+      urls = crawlState.urls.filter((u): u is string => typeof u === "string");
+      crawledAt =
+        (typeof crawlState.crawledAt === "string" ? crawlState.crawledAt : undefined) ??
+        (typeof crawlState.completedAt === "string" ? crawlState.completedAt : undefined);
+    }
+  }
+  if (urls.length === 0) {
+    return { error: `No crawled URLs for retailer "${retailer}"`, status: 404 };
+  }
+  const effectiveCrawledAt = crawledAt ?? new Date().toISOString();
 
-    const limit = Math.max(1, Math.min(parseInt(String(req.body?.limit ?? urls.length), 10) || urls.length, urls.length));
-    const targetUrls = urls.slice(0, limit);
+  const limit = Math.max(
+    1,
+    Math.min(Number.isFinite(limitArg) && limitArg! > 0 ? Math.floor(limitArg!) : urls.length, urls.length),
+  );
+  const targetUrls = urls.slice(0, limit);
 
-    // Skip URLs already uploaded for this crawl checkpoint.
-    const alreadyDone = await getSuccessfulUploadUrls(retailer, crawledAt);
-    const toEnqueue = targetUrls.filter((u) => !alreadyDone.has(u));
+  // Skip URLs already uploaded for this crawl checkpoint.
+  const alreadyDone = await getSuccessfulUploadUrls(retailer, effectiveCrawledAt);
+  const toEnqueue = targetUrls.filter((u) => !alreadyDone.has(u));
 
-    const jobs = toEnqueue.map((url) => {
-      let domain = retailer;
-      try {
-        domain = new URL(url).hostname;
-      } catch {
-        /* fall back to retailer name */
-      }
-      return {
-        retailer,
-        url,
-        crawlSourceCrawledAt: crawledAt,
-        domain,
-      };
-    });
-
-    const { accepted, duplicates } = await enqueueUploadUrls(jobs);
-    res.json({
+  const queueJobs = toEnqueue.map((url) => {
+    let domain = retailer;
+    try {
+      domain = new URL(url).hostname;
+    } catch {
+      /* fall back to retailer name */
+    }
+    return {
       retailer,
-      totalUrls: urls.length,
-      targeted: targetUrls.length,
-      alreadyUploaded: alreadyDone.size,
-      enqueued: accepted,
-      duplicates,
-    });
+      url,
+      crawlSourceCrawledAt: effectiveCrawledAt,
+      domain,
+    };
+  });
+
+  const { accepted, duplicates } = await enqueueUploadUrls(queueJobs);
+  return {
+    retailer,
+    totalUrls: urls.length,
+    targeted: targetUrls.length,
+    alreadyUploaded: alreadyDone.size,
+    enqueued: accepted,
+    duplicates,
+  };
+}
+
+app.post("/api/upload/:retailer/enqueue", async (req, res) => {
+  try {
+    const rawLimit = Number(req.body?.limit);
+    const result = await enqueueUploadForRetailer(
+      req.params.retailer,
+      Number.isFinite(rawLimit) ? rawLimit : undefined,
+    );
+    if ("error" in result) {
+      return res.status(result.status ?? 500).json({ error: result.error });
+    }
+    res.json(result);
   } catch (err) {
     console.error("[api/upload/enqueue] Error:", err);
     res.status(500).json({
@@ -2119,21 +2181,26 @@ app.patch("/api/configs/:retailer/recommendation", async (req, res) => {
 // Crawl endpoints — use a generated config to discover all product URLs
 // ---------------------------------------------------------------------------
 
-app.post("/api/crawl/:retailer", async (req, res) => {
-  const retailer = req.params.retailer;
+/**
+ * Start a crawl job for a retailer with a stored config. Callable from the
+ * route, the auto-chain (explore → crawl), and the weekly re-crawl sweep.
+ */
+async function startCrawlJob(
+  retailer: string,
+  opts?: { auto?: boolean },
+): Promise<{ jobId?: string; error?: string; status?: number; details?: unknown }> {
   const config = await loadStoredConfig(retailer);
   if (!config) {
-    res.status(404).json({ error: "Config not found." });
-    return;
+    return { error: "Config not found.", status: 404 };
   }
 
   const parsedConfig = safeParseConfig(config);
   if (!parsedConfig.success) {
-    res.status(400).json({
+    return {
       error: "Stored config is invalid.",
+      status: 400,
       details: parsedConfig.error.flatten(),
-    });
-    return;
+    };
   }
   const crawlConfig = parsedConfig.data;
 
@@ -2143,6 +2210,7 @@ app.post("/api/crawl/:retailer", async (req, res) => {
     kind: "crawl",
     retailer,
     urls: [crawlConfig.baseUrl],
+    meta: opts?.auto ? { auto: true } : {},
   });
   jobs.set(id, job);
   await createPipelineJob(job);
@@ -2229,6 +2297,10 @@ app.post("/api/crawl/:retailer", async (req, res) => {
         totalUrls: result.totalUrls,
         ...(result.error ? { error: result.error } : {}),
       });
+      // Conveyor: a finished crawl rolls into a queued upload (gated).
+      if (result.completed !== false) {
+        void maybeChain("crawl-completed", { retailer });
+      }
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
       console.error(`[crawl job=${job.id}] Error crawling ${retailer}:`, err);
@@ -2245,7 +2317,19 @@ app.post("/api/crawl/:retailer", async (req, res) => {
     closeAllSseClients(job.id);
   })();
 
-  res.json({ jobId: id });
+  return { jobId: id };
+}
+
+app.post("/api/crawl/:retailer", async (req, res) => {
+  const result = await startCrawlJob(req.params.retailer);
+  if (result.error) {
+    res.status(result.status ?? 500).json({
+      error: result.error,
+      ...(result.details !== undefined ? { details: result.details } : {}),
+    });
+    return;
+  }
+  res.json({ jobId: result.jobId });
 });
 
 app.get("/api/product-urls", async (_req, res) => {
@@ -2420,6 +2504,9 @@ app.post("/api/upload/:retailer", async (req, res) => {
           crawlSourceCrawledAt: urlsData.crawledAt,
         },
       });
+      // Conveyor: fresh items roll into a processing batch (gated). The
+      // queued-upload path triggers via the worker's drain-check instead.
+      void maybeChain("upload-completed", { retailer });
 
       pushEvent(job.id, {
         type: "done",
@@ -2496,6 +2583,67 @@ app.get("/", (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Conveyor wiring + weekly re-crawl sweep
+// ---------------------------------------------------------------------------
+
+configureAutoChain({
+  startCrawlJob: (retailer, opts) => startCrawlJob(retailer, opts),
+  enqueueUploadForRetailer: async (retailer) => {
+    const result = await enqueueUploadForRetailer(retailer);
+    return "error" in result ? { error: result.error } : { enqueued: result.enqueued };
+  },
+  countRunningAutoCrawls: () => {
+    let n = 0;
+    for (const job of jobs.values()) {
+      if (job.kind === "crawl" && job.status === "running" && job.meta?.auto === true) n++;
+    }
+    return n;
+  },
+});
+
+/** Poll the in-memory job map until a job leaves "running" (or the cap hits). */
+async function waitForJobSettled(jobId: string, capMs: number): Promise<void> {
+  const deadline = Date.now() + capMs;
+  while (Date.now() < deadline) {
+    const job = jobs.get(jobId);
+    if (!job || job.status !== "running") return;
+    await sleep(5000);
+  }
+}
+
+/**
+ * Weekly conveyor sweep: re-crawl every retailer whose config is
+ * `recommended`, one at a time (stagger = wait for each crawl to settle, cap
+ * 10 min) to stay polite. Each completed crawl auto-chains its own upload.
+ */
+async function runWeeklyRecrawlSweep(): Promise<void> {
+  const states = await listRetailerPipelineStates();
+  let started = 0;
+  for (const state of states) {
+    if (!(await isAutoPipelineEnabled())) {
+      console.log("[sweep] kill switch off — stopping re-crawl sweep.");
+      return;
+    }
+    if (!(await getSetting<boolean>("gate_crawl", true))) return;
+    const retailer = state.retailer;
+    const rec = String(
+      (state.exploreState as { recommendation?: unknown } | undefined)?.recommendation ?? "",
+    ).toLowerCase();
+    if (rec !== "recommended") continue;
+    if (await getSetting<boolean>(`autopilot_optout:${retailer}`, false)) continue;
+    const result = await startCrawlJob(retailer, { auto: true });
+    if (result.error) {
+      console.log(`[sweep] ${retailer}: crawl not started (${result.error}).`);
+      continue;
+    }
+    started++;
+    console.log(`[sweep] ${retailer}: re-crawl started (job ${result.jobId}).`);
+    await waitForJobSettled(result.jobId!, 10 * 60_000);
+  }
+  console.log(`[sweep] weekly re-crawl sweep done — ${started} crawls started.`);
+}
+
+// ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
 
@@ -2506,6 +2654,24 @@ const server = app.listen(PORT, () => {
       await markRunningJobsInterrupted();
     } catch (err) {
       console.error("[startup] Failed to initialize pipeline persistence:", err);
+    }
+    try {
+      const { registerSchedules } = await import("./schedules.js");
+      await registerSchedules();
+      // The server claims the weekly sweep itself — crawl orchestration
+      // (jobs map, SSE, checkpoints) lives in this process.
+      const boss = await getBoss();
+      if (boss) {
+        await boss.work<PipelineSweepJobData>(
+          QUEUES.PIPELINE_SWEEP,
+          { batchSize: 1, pollingIntervalSeconds: 30 },
+          async () => {
+            await runWeeklyRecrawlSweep();
+          },
+        );
+      }
+    } catch (err) {
+      console.error("[startup] Failed to register schedules/sweep worker:", err);
     }
     try {
       // Seed the durable brand store from any local JSON on first boot (no-op

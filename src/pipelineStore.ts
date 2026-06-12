@@ -254,8 +254,61 @@ export async function ensurePipelinePersistenceSchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS worker_heartbeats_last_seen_idx
       ON worker_heartbeats (last_seen_at DESC);
     `);
+
+    // Global pipeline settings (conveyor kill switch, per-stage gates,
+    // per-retailer autopilot opt-outs/stamps). KV instead of columns on
+    // retailer_pipeline_state: these are toggles, not stage lifecycle docs.
+    await pg.query(`
+      CREATE TABLE IF NOT EXISTS pipeline_settings (
+        key TEXT PRIMARY KEY,
+        value JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
   })();
   return schemaReady;
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline settings KV
+// ---------------------------------------------------------------------------
+
+export async function getSetting<T>(key: string, fallback: T): Promise<T> {
+  const pg = getPool();
+  if (!pg) return fallback;
+  await ensurePipelinePersistenceSchema();
+  const { rows } = await pg.query(`SELECT value FROM pipeline_settings WHERE key = $1`, [key]);
+  if (rows.length === 0) return fallback;
+  return rows[0].value as T;
+}
+
+export async function setSetting(key: string, value: unknown): Promise<void> {
+  const pg = getPool();
+  if (!pg) return;
+  await ensurePipelinePersistenceSchema();
+  await pg.query(
+    `INSERT INTO pipeline_settings (key, value, updated_at)
+     VALUES ($1, $2::jsonb, NOW())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+    [key, JSON.stringify(value)],
+  );
+}
+
+export async function getSettings(prefix?: string): Promise<Record<string, unknown>> {
+  const pg = getPool();
+  if (!pg) return {};
+  await ensurePipelinePersistenceSchema();
+  const { rows } = prefix
+    ? await pg.query(`SELECT key, value FROM pipeline_settings WHERE key LIKE $1 || '%'`, [prefix])
+    : await pg.query(`SELECT key, value FROM pipeline_settings`);
+  const out: Record<string, unknown> = {};
+  for (const r of rows) out[String(r.key)] = r.value;
+  return out;
+}
+
+/** Conveyor kill switch — default comes from AUTO_PIPELINE env (on unless "false"). */
+export async function isAutoPipelineEnabled(): Promise<boolean> {
+  return getSetting<boolean>("auto_pipeline", process.env.AUTO_PIPELINE !== "false");
 }
 
 export async function markRunningJobsInterrupted(): Promise<void> {

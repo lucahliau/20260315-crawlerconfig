@@ -2374,6 +2374,16 @@ function writeDegradedExploration(
 export async function exploreRetailer(
   url: string,
   onLog?: (msg: string) => void,
+  opts?: {
+    /**
+     * Stop after the $0 deterministic rungs (Shopify / WooCommerce / sitemap).
+     * Used by the approve auto-explore hook so the conveyor never spends
+     * Gemini/Stagehand credits without a manual tap. When all free rungs
+     * refuse, throws a non-retryable `needs_paid_explore` failure that lands
+     * the brand in the Configure retry queue.
+     */
+    freeRungsOnly?: boolean;
+  },
 ): Promise<ExploreRetailerResult> {
   const session = createSession(onLog);
 
@@ -2414,12 +2424,13 @@ export async function exploreRetailer(
     //   5. Stagehand     browser + LLM loop (below) — JS-rendered/hostile sites only
     const identity = { retailer, displayName };
     const onFastPathLog = (msg: string) => log(session, msg);
-    const fastPaths: { name: string; run: () => Promise<Record<string, unknown> | null> }[] = [
-      { name: "Shopify fast path", run: () => tryShopifyExplore(url, identity, onFastPathLog) },
-      { name: "WooCommerce fast path", run: () => tryWooCommerceExplore(url, identity, onFastPathLog) },
-      { name: "sitemap fast path", run: () => trySitemapExplore(url, identity, onFastPathLog) },
-      { name: "evidence explore (single AI call)", run: () => tryEvidenceExplore(url, identity, onFastPathLog) },
+    const allFastPaths: { name: string; free: boolean; run: () => Promise<Record<string, unknown> | null> }[] = [
+      { name: "Shopify fast path", free: true, run: () => tryShopifyExplore(url, identity, onFastPathLog) },
+      { name: "WooCommerce fast path", free: true, run: () => tryWooCommerceExplore(url, identity, onFastPathLog) },
+      { name: "sitemap fast path", free: true, run: () => trySitemapExplore(url, identity, onFastPathLog) },
+      { name: "evidence explore (single AI call)", free: false, run: () => tryEvidenceExplore(url, identity, onFastPathLog) },
     ];
+    const fastPaths = opts?.freeRungsOnly ? allFastPaths.filter((p) => p.free) : allFastPaths;
     for (const fastPath of fastPaths) {
       if (session.abortController.signal.aborted) throw new Error("Exploration timed out.");
       let fastConfig: Record<string, unknown> | null = null;
@@ -2443,6 +2454,11 @@ export async function exploreRetailer(
       log(session, "----------------\n");
       log(session, `Done (${fastPath.name} — no browser session needed).`);
       return { config: fastConfig, metrics: null, estimatedUsd: 0 };
+    }
+    if (opts?.freeRungsOnly) {
+      throw new Error(
+        "needs_paid_explore: the free explore rungs (Shopify/WooCommerce/sitemap) found no config — run Identify manually to use the AI rungs.",
+      );
     }
     log(session, "No fast path produced a config — falling back to browser exploration.\n");
 

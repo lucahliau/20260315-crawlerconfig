@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type BrandStatus, type SwipeBrand } from "../../api.ts";
 import { SwipeCard } from "./SwipeCard.tsx";
 import { MobileDiscover } from "./MobileDiscover.tsx";
+import { MobilePipeline } from "./MobilePipeline.tsx";
+import { MobileProcess } from "./MobileProcess.tsx";
 import { cx } from "../ui.tsx";
 
 /**
@@ -22,8 +24,17 @@ interface Decision {
   status: BrandStatus;
 }
 
+type SwipeTab = "review" | "discover" | "pipeline" | "process";
+
+const TAB_TITLE: Record<SwipeTab, string> = {
+  review: "Brand swipe",
+  discover: "Discover",
+  pipeline: "Pipeline",
+  process: "Processing",
+};
+
 export function SwipeView() {
-  const [tab, setTab] = useState<"review" | "discover">("review");
+  const [tab, setTab] = useState<SwipeTab>("review");
   const [deck, setDeck] = useState<SwipeBrand[]>([]);
   const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -119,10 +130,10 @@ export function SwipeView() {
           <span className="flex size-6 items-center justify-center rounded-md bg-white text-[11px] font-semibold text-gray-900">
             CP
           </span>
-          <span className="text-sm font-semibold tracking-tight">Brand swipe</span>
+          <span className="text-sm font-semibold tracking-tight">{TAB_TITLE[tab]}</span>
         </div>
         <span className="tnum text-xs text-gray-500">
-          {total !== null ? `${total} to review` : ""}
+          {tab === "review" && total !== null ? `${total} to review` : ""}
         </span>
       </header>
 
@@ -161,9 +172,17 @@ export function SwipeView() {
               .reverse()
           )}
         </main>
-      ) : (
+      ) : tab === "discover" ? (
         <main className="min-h-0 flex-1">
           <MobileDiscover onChanged={() => void refill()} />
+        </main>
+      ) : tab === "pipeline" ? (
+        <main className="min-h-0 flex-1">
+          <MobilePipeline />
+        </main>
+      ) : (
+        <main className="min-h-0 flex-1">
+          <MobileProcess />
         </main>
       )}
 
@@ -184,6 +203,8 @@ export function SwipeView() {
           [
             { key: "review", label: "Review", icon: "▤" },
             { key: "discover", label: "Discover", icon: "✦" },
+            { key: "pipeline", label: "Pipeline", icon: "⛓" },
+            { key: "process", label: "Process", icon: "◐" },
           ] as const
         ).map((t) => (
           <button

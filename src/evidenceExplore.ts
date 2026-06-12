@@ -437,8 +437,9 @@ export async function tryEvidenceExplore(
     }
     const config = assembleConfig(ev, answer, identity, verdict.samples);
     if ("error" in config) {
-      log(`Rejected: ${config.error}`);
-      feedback = config.error;
+      const reason = typeof config.error === "string" ? config.error : String(config.error);
+      log(`Rejected: ${reason}`);
+      feedback = reason;
       continue;
     }
 

@@ -1,7 +1,18 @@
 import { Router, type Request, type Response } from "express";
 import { S3Client, HeadBucketCommand } from "@aws-sdk/client-s3";
-import { getPool } from "../pipelineStore.js";
-import { getQueueStats } from "../queue.js";
+import {
+  getPool,
+  getSetting,
+  listWorkerHeartbeats,
+  setSetting,
+} from "../pipelineStore.js";
+import {
+  cancelQueuedProcessing,
+  enqueueProcessing,
+  getQueueStats,
+  QUEUES,
+} from "../queue.js";
+import { getProcessingBacklog } from "../processing/bridge.js";
 
 /**
  * Operational endpoints for the dashboard's Process and Systems tabs.
@@ -54,11 +65,15 @@ export function createOpsRouter(): Router {
         FROM "ClothingItem"
         WHERE "hasNobg" = true
       `);
-      const [perRetailerR, embedRatesR, nobgRatesR] = await Promise.all([
-        perRetailerQ,
-        embedRatesQ,
-        nobgRatesQ,
-      ]);
+      const [perRetailerR, embedRatesR, nobgRatesR, backlog, allQueues, workers] =
+        await Promise.all([
+          perRetailerQ,
+          embedRatesQ,
+          nobgRatesQ,
+          getProcessingBacklog().catch(() => ({ needsNobg: 0, needsEmbed: 0 })),
+          getQueueStats().catch(() => []),
+          listWorkerHeartbeats().catch(() => []),
+        ]);
       const perRetailer = perRetailerR.rows as ProcessingRetailerRow[];
       const totals = perRetailer.reduce(
         (acc, r) => ({
@@ -68,6 +83,17 @@ export function createOpsRouter(): Router {
         }),
         { total: 0, nobg: 0, embedded: 0 },
       );
+      const processingQueues = allQueues.filter(
+        (q) => q.name === QUEUES.PROCESS_NOBG || q.name === QUEUES.PROCESS_EMBED,
+      );
+      // "Home server online" = a fresh heartbeat from a worker that claims a
+      // processing queue (heartbeats every 15s; stale after 120s).
+      const homeServerOnline = workers.some(
+        (w) =>
+          w.ageSeconds <= 120 &&
+          Array.isArray((w.metadata as { queues?: unknown }).queues) &&
+          ((w.metadata as { queues: string[] }).queues ?? []).includes(QUEUES.PROCESS_NOBG),
+      );
       res.json({
         totals,
         rates: {
@@ -75,10 +101,112 @@ export function createOpsRouter(): Router {
           embeddings: embedRatesR.rows[0] ?? { last1h: 0, last24h: 0 },
         },
         perRetailer,
+        backlog,
+        queues: processingQueues,
+        workers,
+        homeServerOnline,
       });
     } catch (err) {
       console.error("[api/processing] Error:", err);
       res.status(500).json({ error: err instanceof Error ? err.message : "Failed to load processing stats." });
+    }
+  });
+
+  // Enqueue processing batches (claimed by the home worker). Manual runs are
+  // sweep:false so they bypass the conveyor pause flag.
+  router.post("/api/processing/run", async (req: Request, res: Response) => {
+    const kind = req.body?.kind as string | undefined;
+    if (!kind || !["nobg", "embed", "all"].includes(kind)) {
+      return res.status(400).json({ error: 'kind must be "nobg", "embed" or "all"' });
+    }
+    const nobgDefault = Math.max(1, parseInt(process.env.PROCESS_NOBG_DEFAULT_LIMIT ?? "100", 10));
+    const embedDefault = Math.max(1, parseInt(process.env.PROCESS_EMBED_DEFAULT_LIMIT ?? "2000", 10));
+    const rawLimit = Number(req.body?.limit);
+    try {
+      const jobIds: Record<string, string | null> = {};
+      if (kind === "nobg" || kind === "all") {
+        const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : nobgDefault;
+        jobIds.nobg = await enqueueProcessing({ kind: "nobg", limit });
+      }
+      if (kind === "embed" || kind === "all") {
+        const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : embedDefault;
+        jobIds.embed = await enqueueProcessing({ kind: "embed", limit });
+      }
+      res.json({ jobIds });
+    } catch (err) {
+      console.error("[api/processing/run] Error:", err);
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to enqueue." });
+    }
+  });
+
+  // Drop queued (unclaimed) processing jobs; an active batch finishes cleanly.
+  router.post("/api/processing/cancel", async (req: Request, res: Response) => {
+    const kind = req.body?.kind as string | undefined;
+    if (!kind || !["nobg", "embed"].includes(kind)) {
+      return res.status(400).json({ error: 'kind must be "nobg" or "embed"' });
+    }
+    try {
+      const cancelled = await cancelQueuedProcessing(kind as "nobg" | "embed");
+      res.json({ cancelled });
+    } catch (err) {
+      console.error("[api/processing/cancel] Error:", err);
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to cancel." });
+    }
+  });
+
+  // Conveyor settings: kill switch + per-stage gates.
+  const SETTING_KEYS = ["auto_pipeline", "gate_crawl", "gate_upload", "gate_processing"] as const;
+
+  router.get("/api/pipeline/settings", async (_req: Request, res: Response) => {
+    try {
+      const autoDefault = process.env.AUTO_PIPELINE !== "false";
+      const out: Record<string, boolean> = {};
+      for (const key of SETTING_KEYS) {
+        out[key] = await getSetting<boolean>(key, key === "auto_pipeline" ? autoDefault : true);
+      }
+      res.json(out);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to load settings." });
+    }
+  });
+
+  // Per-retailer autopilot opt-out (read by the auto-chain gates).
+  router.get("/api/pipeline/optout/:retailer", async (req: Request, res: Response) => {
+    try {
+      const optout = await getSetting<boolean>(`autopilot_optout:${req.params.retailer}`, false);
+      res.json({ retailer: req.params.retailer, optout });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to load opt-out." });
+    }
+  });
+
+  router.post("/api/pipeline/optout", async (req: Request, res: Response) => {
+    const retailer = req.body?.retailer as string | undefined;
+    const optout = req.body?.optout;
+    if (!retailer || typeof optout !== "boolean") {
+      return res.status(400).json({ error: "Body must be {retailer, optout: boolean}" });
+    }
+    try {
+      await setSetting(`autopilot_optout:${retailer}`, optout);
+      res.json({ retailer, optout });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to save opt-out." });
+    }
+  });
+
+  router.post("/api/pipeline/settings", async (req: Request, res: Response) => {
+    try {
+      const patch: Record<string, boolean> = {};
+      for (const key of SETTING_KEYS) {
+        const v = req.body?.[key];
+        if (typeof v === "boolean") {
+          await setSetting(key, v);
+          patch[key] = v;
+        }
+      }
+      res.json({ updated: patch });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to save settings." });
     }
   });
 

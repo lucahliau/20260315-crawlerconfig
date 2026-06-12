@@ -31,6 +31,12 @@ let startPromise: Promise<PgBoss> | null = null;
 export const QUEUES = {
   UPLOAD_URL: "upload-url",
   CRAWL_RETAILER: "crawl-retailer",
+  /** Image background removal — bridged to the bgremover tools by the home worker. */
+  PROCESS_NOBG: "process-nobg",
+  /** CLIP embedding generation — bridged to embed_worker.py by the home worker. */
+  PROCESS_EMBED: "process-embed",
+  /** Control jobs claimed by the SERVER (weekly re-crawl sweep). */
+  PIPELINE_SWEEP: "pipeline-sweep",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -54,6 +60,62 @@ export interface CrawlRetailerJobData {
   parentJobId?: string;
 }
 
+export interface ProcessingJobData {
+  kind: "nobg" | "embed";
+  /**
+   * Bounded batch size — keeps every job comfortably under the 2h expiry.
+   * The worker re-enqueues a follow-up batch while backlog remains.
+   */
+  limit: number;
+  /** True when enqueued by cron/auto-chain; the worker honors the pause flag. */
+  sweep?: boolean;
+  /** Loop-until-done guard — incremented on each chained re-enqueue. */
+  chainDepth?: number;
+  parentJobId?: string;
+}
+
+export interface PipelineSweepJobData {
+  kind: "weekly-recrawl";
+}
+
+/**
+ * Enqueue a processing batch (background removal or embeddings).
+ * Sweep/cron callers pass a date-bucketed `singletonKey` so a double-fire
+ * can't stack identical jobs; chained re-enqueues pass none (a duplicate
+ * batch that finds nothing to do no-ops in seconds).
+ */
+export async function enqueueProcessing(
+  data: ProcessingJobData,
+  opts?: { singletonKey?: string },
+): Promise<string | null> {
+  const boss = await getBoss();
+  if (!boss) return null;
+  const queue = data.kind === "nobg" ? QUEUES.PROCESS_NOBG : QUEUES.PROCESS_EMBED;
+  return boss.send(queue, data as unknown as Record<string, unknown>, {
+    // Embed retries are cheap (DB-resumable; exit-124 MPS watchdog is expected
+    // occasionally), nobg batches re-list R2 so a retry only redoes failures.
+    retryLimit: data.kind === "embed" ? 5 : 2,
+    retryDelay: 30,
+    retryBackoff: true,
+    expireInHours: 2,
+    ...(opts?.singletonKey ? { singletonKey: opts.singletonKey } : {}),
+  });
+}
+
+/** Delete queued (not-yet-claimed) jobs for a processing queue. Active batches finish cleanly. */
+export async function cancelQueuedProcessing(kind: "nobg" | "embed"): Promise<number> {
+  const boss = await getBoss();
+  if (!boss) return 0;
+  const db = getBossDb(boss);
+  if (!db) return 0;
+  const queue = kind === "nobg" ? QUEUES.PROCESS_NOBG : QUEUES.PROCESS_EMBED;
+  const result = await db.executeSql(
+    `DELETE FROM pgboss.job WHERE name = $1 AND state = 'created'`,
+    [queue],
+  );
+  return result.rowCount ?? 0;
+}
+
 /**
  * Start (or return) the singleton pg-boss instance. Safe to call repeatedly.
  * Returns null if DATABASE_URL is not configured — callers should fall back to
@@ -70,10 +132,9 @@ export async function getBoss(): Promise<PgBoss | null> {
   startPromise = (async () => {
     const boss = new PgBoss({
       connectionString: dbUrl,
-      // Errors inside a job handler bubble up to onComplete; we want them
-      // captured but never crash the process.
-      noSupervisor: false,
-      // pg-boss creates its own `pgboss` schema by default — leave it.
+      // pg-boss creates its own `pgboss` schema by default — leave it. The
+      // maintenance/scheduling supervisor runs by default (needed for
+      // boss.schedule cron sweeps).
     });
     boss.on("error", (err) => {
       console.error("[pg-boss] error:", err);
@@ -140,6 +201,27 @@ function truncateKey(s: string): string {
   return s.slice(0, 40) + "…" + s.slice(-37);
 }
 
+interface BossDb {
+  executeSql: (
+    sql: string,
+    vals: unknown[],
+  ) => Promise<{ rows: Record<string, unknown>[]; rowCount?: number }>;
+}
+
+/**
+ * Raw SQL access to the pgboss schema. v10 keeps the db on a PRIVATE field
+ * (`#db`) — `(boss as any).db` is always undefined; the public accessor is
+ * `getDb()`. (This was silently no-op'ing every raw-SQL helper here.)
+ */
+function getBossDb(boss: PgBoss): BossDb | null {
+  const accessor = (boss as unknown as { getDb?: () => unknown }).getDb;
+  const db = typeof accessor === "function" ? accessor.call(boss) : undefined;
+  if (db && typeof (db as { executeSql?: unknown }).executeSql === "function") {
+    return db as BossDb;
+  }
+  return null;
+}
+
 /**
  * Dashboard helpers.
  */
@@ -186,8 +268,8 @@ async function getStateCountsForQueue(
   const boss = await getBoss();
   if (!boss) return { active: 0, failed: 0, completed: 0 };
   // pg-boss exposes the underlying pool via getDb() in v10.
-  const db = (boss as unknown as { db?: { executeSql: (sql: string, vals: unknown[]) => Promise<{ rows: { state: string; n: string }[] }> } }).db;
-  if (!db || typeof db.executeSql !== "function") {
+  const db = getBossDb(boss);
+  if (!db) {
     return { active: 0, failed: 0, completed: 0 };
   }
   const { rows } = await db.executeSql(
@@ -217,7 +299,7 @@ export interface DeadLetterRow {
 export async function listDeadLetter(opts?: { limit?: number; queue?: string }): Promise<DeadLetterRow[]> {
   const boss = await getBoss();
   if (!boss) return [];
-  const db = (boss as unknown as { db?: { executeSql: (sql: string, vals: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> } }).db;
+  const db = getBossDb(boss);
   if (!db) return [];
   const limit = Math.max(1, Math.min(opts?.limit ?? 50, 500));
   const params: unknown[] = [];
@@ -251,14 +333,14 @@ export async function listDeadLetter(opts?: { limit?: number; queue?: string }):
 export async function retryDeadLetterJob(jobId: string): Promise<string | null> {
   const boss = await getBoss();
   if (!boss) return null;
-  const db = (boss as unknown as { db?: { executeSql: (sql: string, vals: unknown[]) => Promise<{ rows: { name: string; data: unknown }[] }> } }).db;
+  const db = getBossDb(boss);
   if (!db) return null;
   const { rows } = await db.executeSql(
     `SELECT name, data FROM pgboss.job WHERE id = $1`,
     [jobId],
   );
   if (rows.length === 0) return null;
-  const queue = rows[0].name;
+  const queue = String(rows[0].name);
   const data = rows[0].data;
   // Don't reuse singletonKey — the failed job still occupies that slot. We
   // intentionally skip the dedup guard for a retry.
@@ -272,7 +354,7 @@ export async function retryDeadLetterJob(jobId: string): Promise<string | null> 
 export async function purgeCompletedOlderThan(hours: number): Promise<number> {
   const boss = await getBoss();
   if (!boss) return 0;
-  const db = (boss as unknown as { db?: { executeSql: (sql: string, vals: unknown[]) => Promise<{ rowCount?: number }> } }).db;
+  const db = getBossDb(boss);
   if (!db) return 0;
   const result = await db.executeSql(
     `DELETE FROM pgboss.job

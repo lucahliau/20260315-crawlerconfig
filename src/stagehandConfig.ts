@@ -9,6 +9,7 @@ export interface ExploreFailureInfo {
     | "network"
     | "navigation"
     | "browser_session"
+    | "needs_paid_explore"
     | "unknown";
   reason: string;
 }
@@ -68,6 +69,15 @@ export function augmentStagehandInitError(err: unknown): Error {
 export function classifyExploreFailure(err: unknown): ExploreFailureInfo {
   const message = err instanceof Error ? err.message : String(err);
   const lower = message.toLowerCase();
+
+  if (lower.includes("needs_paid_explore")) {
+    return {
+      retryable: false,
+      code: "needs_paid_explore",
+      reason:
+        "The $0 explore rungs found no config for this site — a manual Identify (AI rungs) is needed.",
+    };
+  }
 
   if (/\b402\b/.test(message) || lower.includes("payment required")) {
     return {
