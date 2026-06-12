@@ -2577,8 +2577,12 @@ if (fs.existsSync(path.join(DASHBOARD_DIST, "index.html"))) {
   console.log("[dashboard] React build not found; run `npm run build` in dashboard/ to enable /app");
 }
 
-// Legacy monolithic HTML UI at /.
+// The React dashboard is the primary UI — send the bare domain straight to it.
+// The legacy monolithic HTML UI stays reachable at /legacy as a fallback.
 app.get("/", (_req, res) => {
+  res.redirect("/app/");
+});
+app.get("/legacy", (_req, res) => {
   res.sendFile(path.join(__dirname, "Ui.html"));
 });
 
