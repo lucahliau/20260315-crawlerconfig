@@ -50,6 +50,14 @@ import {
   type UploadUrlJobData,
 } from "./queue.js";
 import { runEmbedBatch, runNobgBatch } from "./processing/bridge.js";
+import {
+  recordActivity,
+  recordIssue,
+  startCaffeinate,
+  startWorkerStatusServer,
+  statusJobFinished,
+  statusJobStarted,
+} from "./workerStatus.js";
 
 const WORKER_ID =
   process.env.WORKER_ID ?? `${os.hostname()}-${process.pid}-${crypto.randomBytes(3).toString("hex")}`;
@@ -189,7 +197,11 @@ async function handleUploadUrlJob(jobData: UploadUrlJobData, jobId: string): Pro
  * honored between batches (and before sweep batches start).
  */
 async function handleProcessingJob(data: ProcessingJobData, jobId: string): Promise<void> {
-  const log = (line: string) => console.log(`[worker=${WORKER_ID} job=${jobId}] ${line}`);
+  const log = (line: string) => {
+    console.log(`[worker=${WORKER_ID} job=${jobId}] ${line}`);
+    recordActivity(line);
+  };
+  statusJobStarted(jobId, data.kind, `limit ${data.limit}`);
 
   if (data.sweep) {
     const autoOn = await isAutoPipelineEnabled();
@@ -201,15 +213,27 @@ async function handleProcessingJob(data: ProcessingJobData, jobId: string): Prom
   }
 
   let moreRemains = false;
-  if (data.kind === "nobg") {
-    const result = await runNobgBatch({ limit: data.limit, log });
-    log(
-      `nobg batch done: processed=${result.processed} failed=${result.failed} remaining≈${result.remaining} hasNobg+=${result.hasNobgUpdated}`,
-    );
-    moreRemains = result.remaining > 0;
-  } else {
-    const result = await runEmbedBatch({ limit: data.limit, log });
-    moreRemains = result.hitLimit;
+  try {
+    if (data.kind === "nobg") {
+      const result = await runNobgBatch({ limit: data.limit, log });
+      log(
+        `nobg batch done: processed=${result.processed} failed=${result.failed} remaining≈${result.remaining} hasNobg+=${result.hasNobgUpdated}`,
+      );
+      if (result.failed > 0) {
+        recordIssue("nobg", `${result.failed} image(s) failed in batch ${jobId} (see activity log)`);
+      }
+      statusJobFinished(jobId, data.kind, `processed ${result.processed}, failed ${result.failed}`);
+      moreRemains = result.remaining > 0;
+    } else {
+      const result = await runEmbedBatch({ limit: data.limit, log });
+      statusJobFinished(jobId, data.kind, `batch complete (limit ${data.limit})`);
+      moreRemains = result.hitLimit;
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    statusJobFinished(jobId, data.kind, `FAILED: ${message}`);
+    recordIssue(data.kind, `job ${jobId} failed: ${message} (pg-boss will retry)`);
+    throw err;
   }
 
   const depth = data.chainDepth ?? 0;
@@ -272,6 +296,7 @@ async function heartbeatLoop(): Promise<void> {
       });
     } catch (err) {
       console.error(`[worker=${WORKER_ID}] heartbeat failed:`, err);
+      recordIssue("heartbeat", err instanceof Error ? err.message : String(err));
     }
     await new Promise((r) => setTimeout(r, HEARTBEAT_INTERVAL_MS));
   }
@@ -289,6 +314,14 @@ async function main(): Promise<void> {
   // Heartbeat in the background.
   void heartbeatLoop();
 
+  // Local status dashboard (http://localhost:4577) + keep-awake assertion.
+  startWorkerStatusServer({
+    workerId: WORKER_ID,
+    queues: WORKER_QUEUES,
+    concurrency: WORKER_CONCURRENCY,
+  });
+  startCaffeinate();
+
   // pg-boss v10 work() options:
   //   batchSize: claim up to N jobs per poll. We then run them concurrently
   //              inside the handler with Promise.all to get our concurrency.
@@ -304,7 +337,17 @@ async function main(): Promise<void> {
           list.map(async (j) => {
             const data = j.data;
             console.log(`[worker=${WORKER_ID}] claimed job ${j.id} (${data.retailer} ${data.url})`);
-            await handleUploadUrlJob(data, j.id);
+            recordActivity(`upload ${data.retailer}: ${data.url}`);
+            statusJobStarted(j.id, "upload", data.retailer);
+            try {
+              await handleUploadUrlJob(data, j.id);
+              statusJobFinished(j.id, "upload", `${data.retailer} ok`);
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              statusJobFinished(j.id, "upload", `FAILED: ${message}`);
+              recordIssue("upload", `${data.retailer} ${data.url}: ${message}`);
+              throw err;
+            }
           }),
         );
         void maybeTriggerProcessingAfterDrain();
@@ -323,6 +366,7 @@ async function main(): Promise<void> {
         const list = Array.isArray(jobs) ? jobs : [jobs];
         for (const j of list) {
           console.log(`[worker=${WORKER_ID}] claimed ${queue} job ${j.id} (limit=${j.data.limit})`);
+          recordActivity(`claimed ${queue} job ${j.id} (limit ${j.data.limit})`);
           await handleProcessingJob(j.data, j.id);
         }
       },
