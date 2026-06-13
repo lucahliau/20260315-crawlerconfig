@@ -16,6 +16,7 @@ import {
   extractMetaContent,
   normalizeOffers,
 } from "./htmlExtract.js";
+import { classifyItem, normalizeGender, type Gender } from "./classify.js";
 
 // ---------------------------------------------------------------------------
 // Logging — same swappable pattern as explore.ts / crawl.ts
@@ -107,6 +108,9 @@ interface ClothingItemInput {
   sizes: string[];
   tags: string[];
   gender: string | null;
+  productType: string | null;
+  isClothing: boolean;
+  classificationConfidence: number | null;
   sourceUrl: string;
   metadata: Record<string, unknown> | null;
   retailer: string;
@@ -462,10 +466,10 @@ function inferFromConfig(
   config: Config,
   html: string,
 ): void {
+  const breadcrumbText = extractBreadcrumbText(html);
+
   // Category / subcategory inference
   if (!partial.category) {
-    // Try breadcrumbs from JSON-LD BreadcrumbList
-    const breadcrumbText = extractBreadcrumbText(html);
     const inferred = inferCategory(breadcrumbText + " " + (partial.name ?? ""));
     if (inferred) {
       partial.category = inferred.category;
@@ -473,10 +477,25 @@ function inferFromConfig(
     }
   }
 
-  // Gender inference
-  if (!partial.gender) {
-    partial.gender = inferGender(url, partial.name ?? "", config, html);
-  }
+  // Heuristic classification — resolves gender (controlled vocab), productType,
+  // and clothing-vs-non-clothing from all signals at once. A per-retailer
+  // gender pattern in the config (if any) is authoritative over the generic
+  // inference; everything else comes from the shared classifier. Non-wearables
+  // (wallets, candles, camping gear…) get isClothing=false so the backend hides
+  // them — see src/classify.ts.
+  const classification = classifyItem({
+    name: partial.name,
+    category: partial.category,
+    subcategory: partial.subcategory,
+    tags: partial.tags,
+    sourceUrl: url,
+    breadcrumbs: breadcrumbText ? [breadcrumbText] : null,
+    retailer: partial.retailer ?? config.retailer,
+  });
+  partial.gender = genderFromConfig(url, config) ?? classification.gender;
+  partial.productType = classification.productType;
+  partial.isClothing = classification.isClothing;
+  partial.classificationConfidence = classification.confidence;
 
   // Colors from product name if still empty
   if (!partial.colors || partial.colors.length === 0) {
@@ -534,25 +553,17 @@ function inferCategory(text: string): { category: string; subcategory: string | 
   return null;
 }
 
-function inferGender(url: string, name: string, config: Config, _html: string): string | null {
-  // Check config patterns
-  if (config.productPage.genderInUrl?.detected) {
-    const patterns = config.productPage.genderInUrl.patterns;
-    const lowerUrl = url.toLowerCase();
-    for (const [gender, pattern] of Object.entries(patterns)) {
-      if (lowerUrl.includes(pattern.toLowerCase())) {
-        return gender === "male" ? "men" : gender === "female" ? "women" : gender;
-      }
+/** Per-retailer gender hint from the config's URL patterns, normalized to the
+ * controlled vocab. Authoritative when present (covers non-English path words
+ * the generic classifier wouldn't know); otherwise the classifier decides. */
+function genderFromConfig(url: string, config: Config): Gender | null {
+  if (!config.productPage.genderInUrl?.detected) return null;
+  const lowerUrl = url.toLowerCase();
+  for (const [gender, pattern] of Object.entries(config.productPage.genderInUrl.patterns)) {
+    if (pattern && lowerUrl.includes(pattern.toLowerCase())) {
+      return normalizeGender(gender);
     }
   }
-
-  // Check URL and name for gender keywords
-  const combined = (url + " " + name).toLowerCase();
-  if (/\bwomens?\b|\bfemale\b|\bladies\b/.test(combined)) return "women";
-  if (/\bmens?\b|\bmale\b/.test(combined)) return "men";
-  if (/\bkids?\b|\bchildren\b|\bboys?\b|\bgirls?\b/.test(combined)) return "kids";
-  if (/\bunisex\b/.test(combined)) return "unisex";
-
   return null;
 }
 
@@ -641,6 +652,9 @@ function extractProductData(html: string, url: string, config: Config): Clothing
     sizes: [],
     tags: [],
     gender: null,
+    productType: null,
+    isClothing: true,
+    classificationConfidence: null,
     sourceUrl: url,
     metadata: null,
     retailer: config.retailer,
@@ -826,13 +840,15 @@ async function upsertClothingItem(item: ClothingItemInput, pool: Pool): Promise<
       "id", "name", "description", "brand", "category", "subcategory",
       "price", "currency", "imageUrl", "images", "colors", "sizes",
       "tags", "gender", "sourceUrl", "metadata", "retailer",
-      "externalId", "manufacturerCode", "lastVerifiedAt", "active",
+      "externalId", "manufacturerCode", "productType", "isClothing",
+      "classificationConfidence", "classifiedAt", "lastVerifiedAt", "active",
       "createdAt", "updatedAt"
     ) VALUES (
       gen_random_uuid(), $1, $2, $3, $4, $5,
       $6, $7, $8, $9, $10, $11,
       $12, $13, $14, $15, $16,
-      $17, $18, NOW(), true,
+      $17, $18, $19, $20,
+      $21, NOW(), NOW(), true,
       NOW(), NOW()
     )
     ON CONFLICT ("retailer", "externalId") DO UPDATE SET
@@ -852,6 +868,10 @@ async function upsertClothingItem(item: ClothingItemInput, pool: Pool): Promise<
       "sourceUrl" = EXCLUDED."sourceUrl",
       "metadata" = EXCLUDED."metadata",
       "manufacturerCode" = EXCLUDED."manufacturerCode",
+      "productType" = EXCLUDED."productType",
+      "isClothing" = EXCLUDED."isClothing",
+      "classificationConfidence" = EXCLUDED."classificationConfidence",
+      "classifiedAt" = NOW(),
       "lastVerifiedAt" = NOW(),
       "updatedAt" = NOW()
   `;
@@ -875,6 +895,9 @@ async function upsertClothingItem(item: ClothingItemInput, pool: Pool): Promise<
     item.retailer,
     item.externalId,
     item.manufacturerCode,
+    item.productType,
+    item.isClothing,
+    item.classificationConfidence,
   ];
 
   await pool.query(query, values);
