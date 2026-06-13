@@ -113,6 +113,41 @@ Two places:
   check for corrupted deps after sync: `find node_modules -maxdepth 4 -name "* 2" | wc -l`
   (>0 → `rm -rf node_modules && npm install`).
 
+## 5b. Scoped auto-update (deploy M1 fixes from any machine)
+
+The M1 can pull + restart itself when a pushed change is **confined to the
+worker / processing / local-status code** — so you can fix and push the home
+worker from your other computer without touching this Mac. Anything broader
+(cloud server, React dashboard, DB schema, dependencies) is left for a manual
+`update.sh`, so unrelated pushes never silently redeploy the M1.
+
+Install once (after a manual `update.sh` that brings in this commit):
+
+```bash
+bash "$HOME/Desktop/20260315 crawlerconfig/scripts/install-m1-autoupdate.sh"
+```
+
+This adds a `com.clothedd.crawler-autoupdate` LaunchAgent that runs
+`scripts/auto-update.sh` every 10 min (`AUTOUPDATE_INTERVAL_SECONDS` to change).
+Each run: `git fetch`; if local≠origin/main AND **every** changed file matches
+`scripts/m1-autoupdate-allow.txt`, it `git reset --hard`, restarts the worker,
+and logs a breadcrumb; otherwise it logs "update available, manual update
+needed" and does nothing.
+
+- **Scope** lives in `scripts/m1-autoupdate-allow.txt` (edit to tune; changes to
+  it are themselves in-scope). Default: `src/worker.ts`, `src/workerStatus.ts`,
+  `src/domainGate.ts`, `src/queue.ts`, `src/processing/**`, the updater scripts.
+- **Visibility**: outcomes land in the cloud dashboard → **Errors → Worker
+  issues** (and `~/Library/Logs/crawler-autoupdate.log`).
+- **Backlog rule**: if an out-of-scope change is pending on origin/main, *all*
+  later in-scope changes are also held until you run `update.sh` once to clear
+  HEAD up to origin/main. (Conservative on purpose — never a partial apply.)
+- **Dry run / test**: `DRY_RUN=1 bash scripts/auto-update.sh` (reports, never
+  changes code). Uninstall: `launchctl unload` + `rm` the plist (see the script
+  header).
+- **bgremover repo** is not auto-updated — changes there need a manual
+  `update.sh`.
+
 ## 6. Schedules (registered by the Railway server, claimed by this worker)
 
 - 01:00 nightly — background-removal sweep (limit 200/batch, chains until done)

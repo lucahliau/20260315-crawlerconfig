@@ -1,0 +1,38 @@
+# M1 auto-update allowlist
+# ---------------------------------------------------------------------------
+# The home-server auto-updater (scripts/auto-update.sh, run by the
+# com.clothedd.crawler-autoupdate LaunchAgent) only pulls + restarts the worker
+# when EVERY file changed between the local commit and origin/main matches one
+# of the patterns below. If a pending change touches anything else (the cloud
+# server, the React dashboard, DB schema, dependencies), it is NOT auto-applied
+# — the worker logs "update available, manual update needed" and waits for you
+# to run the kit's update.sh.
+#
+# This is intentionally narrow: only code that is purely the M1's own worker /
+# processing / local-status concern auto-deploys. Tune it by editing this file
+# (changes to it are themselves in-scope, so they auto-apply).
+#
+# Syntax: one pattern per line. A line ending in "/" matches any file under
+# that directory; otherwise it must match the file path exactly. Blank lines
+# and lines starting with "#" are ignored. Paths are repo-root-relative, as
+# emitted by `git diff --name-only`.
+# ---------------------------------------------------------------------------
+
+# The worker entrypoint + its direct helpers
+src/worker.ts
+src/workerStatus.ts
+src/domainGate.ts
+src/queue.ts
+
+# Post-processing bridge (background removal + embeddings) — M1-only work
+src/processing/
+
+# The auto-update machinery itself (so you can iterate on it remotely)
+scripts/auto-update.sh
+scripts/m1-autoupdate-allow.txt
+scripts/record-worker-issue.ts
+scripts/install-m1-autoupdate.sh
+
+# NOTE deliberately OUT of scope (require a manual update.sh):
+#   src/server.ts, src/pipelineStore.ts (schema), dashboard/**, package*.json,
+#   configs/**, prisma/**, anything that also affects the Railway services.

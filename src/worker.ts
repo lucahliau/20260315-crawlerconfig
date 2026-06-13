@@ -39,6 +39,7 @@ import {
   isAutoPipelineEnabled,
   recordScrapeError,
   recordUploadUrlResult,
+  recordWorkerIssue,
   upsertWorkerHeartbeat,
 } from "./pipelineStore.js";
 import { ErrorCodes, classifyError } from "./errorCodes.js";
@@ -57,6 +58,7 @@ import {
   getHeartbeatTelemetry,
   recordActivity,
   recordIssue,
+  setIssueSink,
   startCaffeinate,
   startWorkerStatusServer,
   statusJobFinished,
@@ -419,6 +421,14 @@ async function heartbeatLoop(): Promise<void> {
 
 async function main(): Promise<void> {
   console.log(`[worker=${WORKER_ID}] starting (concurrency=${WORKER_CONCURRENCY})`);
+
+  // Mirror every local issue into the shared DB (worker_issues) so they're
+  // visible on the cloud dashboard, not just on this Mac's localhost:4577.
+  // Fire-and-forget; recordWorkerIssue swallows its own DB errors.
+  setIssueSink(({ workerId, source, message }) => {
+    void recordWorkerIssue({ workerId: workerId || WORKER_ID, source, message });
+  });
+
   await ensurePipelinePersistenceSchema();
   const boss = await getBoss();
   if (!boss) {

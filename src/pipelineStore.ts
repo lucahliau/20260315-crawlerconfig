@@ -255,6 +255,30 @@ export async function ensurePipelinePersistenceSchema(): Promise<void> {
       ON worker_heartbeats (last_seen_at DESC);
     `);
 
+    // Durable mirror of the home worker's operational issue feed. The worker
+    // keeps an in-memory ring + a local log file (workerStatus.ts), but those
+    // are only visible on the M1's localhost:4577. This table ships every issue
+    // to the shared DB so it's diagnosable from any machine via the dashboard.
+    await pg.query(`
+      CREATE TABLE IF NOT EXISTS worker_issues (
+        id BIGSERIAL PRIMARY KEY,
+        worker_id TEXT,
+        source TEXT NOT NULL DEFAULT '',
+        severity TEXT NOT NULL DEFAULT 'error',
+        message TEXT NOT NULL DEFAULT '',
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pg.query(`
+      CREATE INDEX IF NOT EXISTS worker_issues_occurred_idx
+      ON worker_issues (occurred_at DESC);
+    `);
+    await pg.query(`
+      CREATE INDEX IF NOT EXISTS worker_issues_source_idx
+      ON worker_issues (source, occurred_at DESC);
+    `);
+
     // Global pipeline settings (conveyor kill switch, per-stage gates,
     // per-retailer autopilot opt-outs/stamps). KV instead of columns on
     // retailer_pipeline_state: these are toggles, not stage lifecycle docs.
@@ -652,6 +676,99 @@ export async function listRecentScrapeErrors(opts?: {
       row.occurred_at instanceof Date
         ? row.occurred_at.toISOString()
         : String(row.occurred_at ?? ""),
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Worker issue feed (operational issues from the home worker — heartbeat
+// failures, batch failures, config purges, the local status server, etc.).
+// Durably mirrored here so they're visible on the cloud dashboard, not just on
+// the M1's localhost:4577.
+// ---------------------------------------------------------------------------
+
+export interface WorkerIssueRecord {
+  workerId: string | null;
+  source: string;
+  severity: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  occurredAt: string;
+}
+
+export async function recordWorkerIssue(input: {
+  workerId?: string | null;
+  source: string;
+  message: string;
+  severity?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  const pg = getPool();
+  if (!pg) return;
+  await ensurePipelinePersistenceSchema();
+  try {
+    await pg.query(
+      `
+        INSERT INTO worker_issues (worker_id, source, severity, message, metadata)
+        VALUES ($1, $2, $3, $4, $5::jsonb)
+      `,
+      [
+        input.workerId ?? null,
+        (input.source ?? "").slice(0, 80),
+        (input.severity ?? "error").slice(0, 20),
+        (input.message ?? "").slice(0, 4000),
+        JSON.stringify(input.metadata ?? {}),
+      ],
+    );
+  } catch (err) {
+    // Never throw from a logger — degrade silently to stderr.
+    console.error("[pipelineStore] Failed to record worker_issues row:", err);
+  }
+}
+
+export async function listRecentWorkerIssues(opts?: {
+  limit?: number;
+  sinceMinutes?: number;
+  source?: string;
+  workerId?: string;
+}): Promise<WorkerIssueRecord[]> {
+  const pg = getPool();
+  if (!pg) return [];
+  await ensurePipelinePersistenceSchema();
+  const limit = Math.max(1, Math.min(opts?.limit ?? 200, 1000));
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (opts?.sinceMinutes && Number.isFinite(opts.sinceMinutes)) {
+    params.push(opts.sinceMinutes);
+    where.push(`occurred_at >= NOW() - ($${params.length}::text || ' minutes')::interval`);
+  }
+  if (opts?.source) {
+    params.push(opts.source);
+    where.push(`source = $${params.length}`);
+  }
+  if (opts?.workerId) {
+    params.push(opts.workerId);
+    where.push(`worker_id = $${params.length}`);
+  }
+  params.push(limit);
+  const sql = `
+    SELECT worker_id, source, severity, message, metadata, occurred_at
+    FROM worker_issues
+    ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+    ORDER BY occurred_at DESC, id DESC
+    LIMIT $${params.length}
+  `;
+  const { rows } = await pg.query(sql, params);
+  return rows.map((row) => ({
+    workerId: typeof row.worker_id === "string" ? row.worker_id : null,
+    source: String(row.source ?? ""),
+    severity: String(row.severity ?? "error"),
+    message: String(row.message ?? ""),
+    metadata:
+      row.metadata && typeof row.metadata === "object"
+        ? (row.metadata as Record<string, unknown>)
+        : {},
+    occurredAt:
+      row.occurred_at instanceof Date ? row.occurred_at.toISOString() : String(row.occurred_at ?? ""),
   }));
 }
 

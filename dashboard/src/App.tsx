@@ -5,9 +5,10 @@ import { CrawlView } from "./components/CrawlView.tsx";
 import { ProcessView } from "./components/ProcessView.tsx";
 import { SystemsView } from "./components/SystemsView.tsx";
 import { AnalyticsView } from "./components/AnalyticsView.tsx";
+import { ErrorsView } from "./components/ErrorsView.tsx";
 import { cx } from "./components/ui.tsx";
 
-type Tab = "discover" | "configure" | "crawl" | "process" | "systems" | "analytics";
+type Tab = "discover" | "configure" | "crawl" | "process" | "systems" | "analytics" | "errors";
 
 /**
  * Tabs mirror the pipeline itself, in order:
@@ -21,6 +22,7 @@ const TABS: { key: Tab; label: string; step?: number }[] = [
   { key: "crawl", label: "Crawl", step: 3 },
   { key: "process", label: "Process", step: 4 },
   { key: "systems", label: "Systems" },
+  { key: "errors", label: "Errors" },
   { key: "analytics", label: "Analytics" },
 ];
 
@@ -79,6 +81,8 @@ export function App() {
           <ProcessView />
         ) : tab === "analytics" ? (
           <AnalyticsView />
+        ) : tab === "errors" ? (
+          <ErrorsView />
         ) : (
           <SystemsView />
         )}

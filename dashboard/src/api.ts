@@ -138,6 +138,20 @@ export interface ErrorsResponse {
   counts: { byCode: Record<string, number>; byStage: Record<string, number>; total: number };
 }
 
+/** Operational issue mirrored from the home worker (src/workerStatus.ts → worker_issues). */
+export interface WorkerIssue {
+  workerId: string | null;
+  source: string;
+  severity: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  occurredAt: string;
+}
+
+export interface WorkerIssuesResponse {
+  issues: WorkerIssue[];
+}
+
 // --- Post-processing (MacBook workers: background removal, embeddings) ---
 
 export interface ProcessingTotals {
@@ -431,6 +445,14 @@ export const api = {
     if (params?.limit) qs.set("limit", String(params.limit));
     const q = qs.toString();
     return request<ErrorsResponse>(`/api/errors${q ? `?${q}` : ""}`);
+  },
+  getWorkerIssues: (params?: { sinceMinutes?: number; source?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.sinceMinutes) qs.set("since", String(params.sinceMinutes));
+    if (params?.source) qs.set("source", params.source);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const q = qs.toString();
+    return request<WorkerIssuesResponse>(`/api/worker-issues${q ? `?${q}` : ""}`);
   },
   getProcessing: () => request<ProcessingResponse>("/api/processing"),
   getSystems: () => request<SystemsResponse>("/api/systems"),

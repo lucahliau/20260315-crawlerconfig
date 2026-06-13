@@ -41,6 +41,18 @@ const state = {
 
 const issuesFile = path.join(os.homedir(), "Library", "Logs", "crawler-worker-issues.log");
 
+/**
+ * Optional durable sink for issues — wired by the worker to mirror every issue
+ * into Postgres (worker_issues) so they're visible on the cloud dashboard, not
+ * just here on localhost. Kept as an injected callback so this module stays
+ * dependency-light (no DB import) and usable in contexts without a database.
+ */
+type IssueSink = (issue: { workerId: string; source: string; message: string }) => void;
+let issueSink: IssueSink | null = null;
+export function setIssueSink(sink: IssueSink | null): void {
+  issueSink = sink;
+}
+
 export function statusJobStarted(id: string, kind: string, detail?: string): void {
   state.activeJobs.set(id, { id, kind, startedAt: new Date().toISOString(), detail });
 }
@@ -66,6 +78,16 @@ export function recordIssue(source: string, message: string): void {
     fs.appendFileSync(issuesFile, `${at} [${source}] ${message.replace(/\n/g, " | ")}\n`);
   } catch {
     /* logging must never break the worker */
+  }
+  // Mirror to the durable sink (cloud DB) when wired. Fire-and-forget — the sink
+  // itself must never throw (it swallows its own errors), but guard anyway so a
+  // logging path can never break the worker.
+  if (issueSink) {
+    try {
+      issueSink({ workerId: state.workerId, source, message });
+    } catch {
+      /* never break the worker on a logging mirror */
+    }
   }
 }
 

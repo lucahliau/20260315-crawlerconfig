@@ -35,6 +35,7 @@ import {
   getSuccessfulUploadUrls,
   isAutoPipelineEnabled,
   listRecentScrapeErrors,
+  listRecentWorkerIssues,
   listRetailerPipelineStates,
   listPipelineEvents,
   listWorkerHeartbeats,
@@ -1757,6 +1758,29 @@ app.get("/api/errors", async (req, res) => {
       // Surface the failure of the errors endpoint itself so the dashboard can
       // show "errors API is down" rather than silently rendering an empty list.
       code: "ERRORS_API_FAILED",
+    });
+  }
+});
+
+// Operational issues mirrored from the home worker (heartbeat/batch/config/
+// auto-update). Durable copy of the M1's localhost:4577 feed, so it can be
+// diagnosed from any machine.
+app.get("/api/worker-issues", async (req, res) => {
+  try {
+    const limitParam = Number.parseInt(String(req.query.limit ?? "200"), 10);
+    const sinceParam = Number.parseInt(String(req.query.since ?? "1440"), 10);
+    const issues = await listRecentWorkerIssues({
+      limit: Number.isFinite(limitParam) ? limitParam : 200,
+      sinceMinutes: Number.isFinite(sinceParam) ? sinceParam : 1440,
+      source: typeof req.query.source === "string" ? req.query.source : undefined,
+      workerId: typeof req.query.workerId === "string" ? req.query.workerId : undefined,
+    });
+    res.json({ issues });
+  } catch (err) {
+    console.error("[api/worker-issues] Error:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to load worker issues.",
+      code: "WORKER_ISSUES_API_FAILED",
     });
   }
 });
