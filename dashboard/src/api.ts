@@ -311,6 +311,55 @@ export function subscribeStream(streamUrl: string, handlers: StreamHandlers): ()
   return () => es.close();
 }
 
+export type AnalyticsRange = "7d" | "30d" | "all";
+
+export interface AnalyticsTopItem {
+  itemId: string;
+  name: string;
+  brand: string;
+  n: number;
+}
+
+export interface AnalyticsSummary {
+  range: AnalyticsRange;
+  since: string;
+  checkedAt: string;
+  engagement: {
+    dau: number;
+    wau: number;
+    mau: number;
+    sessions: number;
+    events: number;
+    anonSessions: number;
+    identifiedSessions: number;
+    avgSessionMs: number;
+    medianSessionMs: number;
+  };
+  retention: {
+    cohortSize: number;
+    d1Eligible: number;
+    d1Returned: number;
+    d7Eligible: number;
+    d7Returned: number;
+  };
+  funnel: { registered: number; onboarded: number; swiped: number; collected: number };
+  features: {
+    screens: { screen: string; count: number }[];
+    searches: number;
+    zeroResultSearches: number;
+    swipeActions: { action: string; count: number }[];
+    itemViews: number;
+    uniqueItemsViewed: number;
+    follows: number;
+    messages: number;
+  };
+  content: {
+    topLoved: AnalyticsTopItem[];
+    topViewed: AnalyticsTopItem[];
+    topBrands: { brand: string; n: number }[];
+  };
+}
+
 export const api = {
   discover: (category?: string) =>
     request<{ jobId: string }>("/api/discover-brands", {
@@ -385,6 +434,8 @@ export const api = {
   },
   getProcessing: () => request<ProcessingResponse>("/api/processing"),
   getSystems: () => request<SystemsResponse>("/api/systems"),
+  getAnalytics: (range: AnalyticsRange = "30d") =>
+    request<AnalyticsSummary>(`/api/analytics/summary?range=${range}`),
   getSwipeQueue: (limit = 15) =>
     request<SwipeQueueResponse>(`/api/swipe-queue?limit=${limit}`),
 
