@@ -21,9 +21,9 @@ const TABS: { key: Tab; label: string; step?: number }[] = [
   { key: "configure", label: "Configure", step: 2 },
   { key: "crawl", label: "Crawl", step: 3 },
   { key: "process", label: "Process", step: 4 },
-  { key: "systems", label: "Systems" },
+  { key: "systems", label: "System health" },
   { key: "errors", label: "Errors" },
-  { key: "analytics", label: "Analytics" },
+  { key: "analytics", label: "User analytics" },
 ];
 
 export function App() {
