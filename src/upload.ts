@@ -160,6 +160,11 @@ async function fetchWithRetry(
   url: string,
   timeoutMs = FETCH_TIMEOUT_MS,
 ): Promise<Response> {
+  // Track the last failure so the final throw carries a real cause (HTTP
+  // status or network error) instead of an opaque "after N attempts" — the
+  // detail surfaces in scrape_errors and the worker issue feed, and lets
+  // classifyError tag rate-limiting (429) distinctly from a genuine bug.
+  let lastReason = "no response";
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -171,7 +176,11 @@ async function fetchWithRetry(
       clearTimeout(timeout);
       if (res.ok) return res;
       if (res.status === 429 || res.status >= 500) {
-        const backoff = BACKOFF_BASE_MS * 2 ** (attempt - 1);
+        lastReason = `HTTP ${res.status}`;
+        // Honor Retry-After when the site provides it (seconds or HTTP date),
+        // capped so a hostile header can't stall the worker for minutes.
+        const retryAfterMs = parseRetryAfter(res.headers.get("retry-after"));
+        const backoff = retryAfterMs ?? BACKOFF_BASE_MS * 2 ** (attempt - 1);
         log(`    HTTP ${res.status} on attempt ${attempt}/${MAX_RETRIES}, retrying in ${backoff}ms...`);
         await delay(backoff);
         continue;
@@ -179,13 +188,33 @@ async function fetchWithRetry(
       return res;
     } catch (err) {
       clearTimeout(timeout);
+      lastReason = err instanceof Error ? err.message : String(err);
       if (attempt === MAX_RETRIES) throw err;
       const backoff = BACKOFF_BASE_MS * 2 ** (attempt - 1);
-      log(`    Fetch error attempt ${attempt}/${MAX_RETRIES}: ${(err as Error).message}, retrying in ${backoff}ms...`);
+      log(`    Fetch error attempt ${attempt}/${MAX_RETRIES}: ${lastReason}, retrying in ${backoff}ms...`);
       await delay(backoff);
     }
   }
-  throw new Error(`Failed to fetch ${url} after ${MAX_RETRIES} attempts`);
+  throw new Error(`Failed to fetch ${url} after ${MAX_RETRIES} attempts (last: ${lastReason})`);
+}
+
+/**
+ * Parse a Retry-After header into milliseconds. Accepts a delta-seconds value
+ * or an HTTP-date. Returns null when absent/unparseable; clamps to [0, 30s] so
+ * a single hostile response can't park the worker.
+ */
+function parseRetryAfter(header: string | null): number | null {
+  if (!header) return null;
+  const seconds = Number(header.trim());
+  let ms: number | null = null;
+  if (Number.isFinite(seconds)) {
+    ms = seconds * 1000;
+  } else {
+    const when = Date.parse(header);
+    if (!Number.isNaN(when)) ms = when - Date.now();
+  }
+  if (ms === null || !Number.isFinite(ms)) return null;
+  return Math.max(0, Math.min(ms, 30_000));
 }
 
 // ---------------------------------------------------------------------------

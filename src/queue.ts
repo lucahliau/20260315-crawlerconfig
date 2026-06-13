@@ -117,6 +117,29 @@ export async function cancelQueuedProcessing(kind: "nobg" | "embed"): Promise<nu
 }
 
 /**
+ * Delete pending upload-url jobs for one retailer. Used when the worker
+ * discovers a retailer has no valid config: rather than let every queued URL
+ * churn through its full retry budget (each emitting an identical "No config"
+ * issue), drop them in one shot. Only `created`/`retry` jobs are removed —
+ * any in-flight `active` job finishes, and terminal rows are left for history.
+ * Returns the number of rows deleted.
+ */
+export async function purgeQueuedUploadsForRetailer(retailer: string): Promise<number> {
+  const boss = await getBoss();
+  if (!boss) return 0;
+  const db = getBossDb(boss);
+  if (!db) return 0;
+  const result = await db.executeSql(
+    `DELETE FROM pgboss.job
+       WHERE name = $1
+         AND state IN ('created', 'retry')
+         AND data->>'retailer' = $2`,
+    [QUEUES.UPLOAD_URL, retailer],
+  );
+  return result.rowCount ?? 0;
+}
+
+/**
  * Start (or return) the singleton pg-boss instance. Safe to call repeatedly.
  * Returns null if DATABASE_URL is not configured — callers should fall back to
  * the in-process path in that case.

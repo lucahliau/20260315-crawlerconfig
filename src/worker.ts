@@ -46,10 +46,12 @@ import {
   enqueueProcessing,
   getBoss,
   getQueueStats,
+  purgeQueuedUploadsForRetailer,
   QUEUES,
   type ProcessingJobData,
   type UploadUrlJobData,
 } from "./queue.js";
+import { runForDomain, domainKey } from "./domainGate.js";
 import { getProcessingBacklog, runEmbedBatch, runNobgBatch } from "./processing/bridge.js";
 import {
   getHeartbeatTelemetry,
@@ -85,6 +87,13 @@ let stopping = false;
 /** Lazy config cache so the same retailer's config isn't re-read on every job. */
 const configCache = new Map<string, { config: Config; loadedAt: number }>();
 const CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Retailers whose queued uploads we've already purged this process lifetime
+ * after finding no valid config — so a batch of doomed jobs triggers exactly
+ * one purge + one issue, not one per URL.
+ */
+const purgedNoConfigRetailers = new Set<string>();
 
 async function loadConfigFor(retailer: string): Promise<Config | null> {
   const cached = configCache.get(retailer);
@@ -138,58 +147,98 @@ async function handleUploadUrlJob(jobData: UploadUrlJobData, jobId: string): Pro
   const { retailer, url, crawlSourceCrawledAt, parentJobId } = jobData;
   const config = await loadConfigFor(retailer);
   if (!config) {
-    // No config => can't process. Treat as terminal failure so pg-boss DLQs.
-    throw new Error(`No config available for retailer "${retailer}"`);
+    // Missing/invalid config is a RETAILER-level fault, not a per-URL transient:
+    // retrying this URL — or churning through the other queued URLs — can never
+    // succeed. Record it once, purge the retailer's remaining pending uploads so
+    // they don't each burn their retry budget, then COMPLETE this job (no throw)
+    // so pg-boss doesn't retry-storm it. The fix is to (re)explore the retailer.
+    if (!purgedNoConfigRetailers.has(retailer)) {
+      purgedNoConfigRetailers.add(retailer);
+      await recordScrapeError({
+        code: ErrorCodes.EXPLORE_CONFIG_INVALID,
+        detail: `No valid config for retailer "${retailer}" — queued uploads purged. Re-explore to fix.`,
+        retailer,
+        stage: "upload",
+        url,
+        jobId: parentJobId ?? jobId,
+        metadata: { workerId: WORKER_ID, queueJobId: jobId },
+      });
+      let purged = 0;
+      try {
+        purged = await purgeQueuedUploadsForRetailer(retailer);
+      } catch (err) {
+        console.error(`[worker=${WORKER_ID}] purge for ${retailer} failed:`, err);
+      }
+      recordIssue(
+        "upload",
+        `${retailer}: no valid config — purged ${purged} queued upload(s); re-explore needed.`,
+      );
+      console.warn(`[worker=${WORKER_ID}] ${retailer} has no valid config — purged ${purged} queued upload(s).`);
+    }
+    return; // complete the job; do not retry
   }
+
+  // Capture the per-item error so the batch-level failure throw carries a real
+  // cause into the issue feed instead of an opaque "upload-url job failed".
+  let lastItemError: string | undefined;
 
   // Reuse the existing single-process upload code for a single URL. This is
   // intentionally simple; the per-job browser-init cost is acceptable at our
   // target scale (10K/week ÷ N workers). Optimize later by extracting a
   // long-lived per-worker Stagehand session if profiling shows it matters.
-  const result = await uploadRetailer(
-    config,
-    [url],
-    (msg) => console.log(`[worker=${WORKER_ID} job=${jobId}] ${msg}`),
-    undefined,
-    {
-      onItemResult: async (itemResult) => {
-        await recordUploadUrlResult({
-          retailer,
-          crawlSourceCrawledAt,
-          url: itemResult.url,
-          jobId: parentJobId ?? jobId,
-          status: itemResult.status,
-          externalId: itemResult.externalId,
-          itemName: itemResult.itemName,
-          imageCount: itemResult.imageCount,
-          uploadedToR2: itemResult.uploadedToR2,
-          upsertedToDb: itemResult.upsertedToDb,
-          error: itemResult.error,
-          metadata: { ...(itemResult.metadata ?? {}), workerId: WORKER_ID, queueJobId: jobId },
-        });
-        if (itemResult.status === "failed") {
-          await recordScrapeError({
-            code: classifyError(itemResult.error, ErrorCodes.UPLOAD_UNCAUGHT),
-            detail: itemResult.error ?? "Unknown upload failure",
+  //
+  // Serialize per domain (concurrency 1 + politeness gap) so the queue's
+  // batch-claim + Promise.all fan-out never hits one site with concurrent,
+  // undelayed fetches — that self-inflicted burst is what rate-limits us.
+  const domain = domainKey(url, retailer);
+  const result = await runForDomain(domain, () =>
+    uploadRetailer(
+      config,
+      [url],
+      (msg) => console.log(`[worker=${WORKER_ID} job=${jobId}] ${msg}`),
+      undefined,
+      {
+        onItemResult: async (itemResult) => {
+          await recordUploadUrlResult({
             retailer,
-            stage: "upload",
+            crawlSourceCrawledAt,
             url: itemResult.url,
             jobId: parentJobId ?? jobId,
-            metadata: {
-              workerId: WORKER_ID,
-              queueJobId: jobId,
-              itemName: itemResult.itemName,
-              imageCount: itemResult.imageCount,
-            },
+            status: itemResult.status,
+            externalId: itemResult.externalId,
+            itemName: itemResult.itemName,
+            imageCount: itemResult.imageCount,
+            uploadedToR2: itemResult.uploadedToR2,
+            upsertedToDb: itemResult.upsertedToDb,
+            error: itemResult.error,
+            metadata: { ...(itemResult.metadata ?? {}), workerId: WORKER_ID, queueJobId: jobId },
           });
-        }
+          if (itemResult.status === "failed") {
+            lastItemError = itemResult.error ?? "Unknown upload failure";
+            await recordScrapeError({
+              code: classifyError(itemResult.error, ErrorCodes.UPLOAD_UNCAUGHT),
+              detail: lastItemError,
+              retailer,
+              stage: "upload",
+              url: itemResult.url,
+              jobId: parentJobId ?? jobId,
+              metadata: {
+                workerId: WORKER_ID,
+                queueJobId: jobId,
+                itemName: itemResult.itemName,
+                imageCount: itemResult.imageCount,
+              },
+            });
+          }
+        },
       },
-    },
+    ),
   );
 
   if (result.failed > 0 && result.uploaded === 0 && result.skipped === 0) {
-    // Throw so pg-boss schedules a retry (with the configured backoff).
-    throw new Error(`upload-url job failed for ${url}`);
+    // Throw so pg-boss schedules a retry (with the configured backoff). Include
+    // the real per-item cause so the issue feed is diagnosable at a glance.
+    throw new Error(`upload-url job failed for ${url}: ${lastItemError ?? "unknown error"}`);
   }
 }
 

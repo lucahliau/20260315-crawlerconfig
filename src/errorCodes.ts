@@ -42,6 +42,7 @@ export const ErrorCodes = {
   UPLOAD_DB_FAILED: "UPLOAD_DB_FAILED",
   UPLOAD_NO_IMAGES: "UPLOAD_NO_IMAGES",
   UPLOAD_BLOCKED: "UPLOAD_BLOCKED",
+  UPLOAD_RATE_LIMITED: "UPLOAD_RATE_LIMITED",
   UPLOAD_UNCAUGHT: "UPLOAD_UNCAUGHT",
 
   // Discover brands
@@ -63,6 +64,8 @@ export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 export function classifyError(err: unknown, fallback: ErrorCode = ErrorCodes.UNKNOWN): ErrorCode {
   const msg = (err instanceof Error ? err.message : String(err ?? "")).toLowerCase();
   if (!msg) return fallback;
+  if (msg.includes("429") || msg.includes("rate limit") || msg.includes("too many requests"))
+    return ErrorCodes.UPLOAD_RATE_LIMITED;
   if (msg.includes("timeout") || msg.includes("timed out")) return ErrorCodes.TIMEOUT;
   if (msg.includes("econnrefused") || msg.includes("enotfound") || msg.includes("network"))
     return ErrorCodes.NETWORK;
@@ -101,6 +104,7 @@ export const ErrorCodeDescriptions: Record<string, string> = {
   UPLOAD_DB_FAILED: "Postgres upsert failed.",
   UPLOAD_NO_IMAGES: "Product had no usable images.",
   UPLOAD_BLOCKED: "Product page returned 403 / captcha.",
+  UPLOAD_RATE_LIMITED: "Site rate-limited the fetch (HTTP 429 / Retry-After).",
   UPLOAD_UNCAUGHT: "Unhandled exception during upload.",
   DISCOVER_LLM_FAILED: "Brand discovery LLM call failed.",
   DISCOVER_NO_RESULTS: "Brand discovery returned no usable brands.",

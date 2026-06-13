@@ -59,6 +59,7 @@ import {
 import { safeParseConfig } from "./schemas/config.js";
 import { createBrandsRouter } from "./routes/brands.js";
 import { createOpsRouter } from "./routes/ops.js";
+import { createAnalyticsRouter } from "./routes/analytics.js";
 import { installDashboardAuth } from "./dashboardAuth.js";
 import { configureAutoChain, maybeChain } from "./autoChain.js";
 
@@ -70,6 +71,7 @@ app.use(express.json());
 // behind the dashboard password when DASHBOARD_PASSWORD is set (Railway).
 installDashboardAuth(app);
 app.use(createOpsRouter());
+app.use(createAnalyticsRouter());
 app.use(
   createBrandsRouter({
     // Approve → config, hands-free, when it's free: every approved brand gets
@@ -987,10 +989,25 @@ function summarizeConfigValidationIssues(
 async function loadStoredConfig(retailer: string): Promise<Record<string, unknown> | null> {
   const filePath = path.join(CONFIGS_DIR, `${retailer}.json`);
   const fromFile = readJsonFile<Record<string, unknown>>(filePath);
-  if (fromFile) return fromFile;
-  const state = await getRetailerPipelineState(retailer);
-  const config = state?.exploreState?.config;
-  return config && typeof config === "object" ? (config as Record<string, unknown>) : null;
+  let config: Record<string, unknown> | null = null;
+  if (fromFile) {
+    config = fromFile;
+  } else {
+    const state = await getRetailerPipelineState(retailer);
+    const stored = state?.exploreState?.config;
+    config = stored && typeof stored === "object" ? (stored as Record<string, unknown>) : null;
+  }
+  if (!config) return null;
+  // Validation parity with the worker (worker.ts loadConfigFor runs
+  // safeParseConfig). An invalid/stub config (e.g. legacy `discovery.method:
+  // null`) must NOT pass the crawl/upload-enqueue gates — otherwise it slips
+  // through and floods the worker with jobs that can never process. Reject it
+  // here so the retailer lands in the Configure retry queue instead.
+  if (hasConfigError(config)) {
+    console.warn(`[config] stored config for "${retailer}" failed validation — treating as missing.`);
+    return null;
+  }
+  return config;
 }
 
 async function loadStoredCrawlResult(retailer: string): Promise<CrawlResult | null> {
