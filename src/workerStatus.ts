@@ -123,6 +123,14 @@ function execOut(cmd: string, args: string[]): Promise<string> {
 export interface MachineTelemetry {
   loadAvg1m: number;
   cpuCount: number;
+  /**
+   * AVAILABLE memory in MB — what people mean by "free". On macOS this is NOT
+   * os.freemem(): the OS keeps almost all RAM occupied with reclaimable file
+   * cache (inactive/speculative/purgeable pages), so os.freemem() reads ~1% on
+   * an idle machine and falsely looks alarming. We compute free + inactive +
+   * speculative + purgeable from vm_stat instead, matching Activity Monitor's
+   * low memory pressure. Off darwin, this is os.freemem().
+   */
   freeMemMb: number;
   totalMemMb: number;
   diskFreeGb: number | null;
@@ -131,15 +139,34 @@ export interface MachineTelemetry {
   batteryPct: number | null;
 }
 
+/**
+ * Reclaimable-aware "available" memory in MB from `vm_stat`. macOS counts only
+ * fully-unused pages as free; the large inactive/speculative/purgeable pools
+ * are reclaimed on demand and should count as available. Falls back to
+ * os.freemem() off darwin or if parsing fails.
+ */
+function parseAvailableMemMb(vmStat: string): number {
+  const freemem = Math.round(os.freemem() / 1024 / 1024);
+  if (!vmStat) return freemem;
+  const pageSize = Number(vmStat.match(/page size of (\d+) bytes/)?.[1] ?? 0);
+  const pages = (label: string) =>
+    Number(vmStat.match(new RegExp(`Pages ${label}:\\s+(\\d+)`))?.[1] ?? 0);
+  const availablePages =
+    pages("free") + pages("inactive") + pages("speculative") + pages("purgeable");
+  if (!pageSize || !availablePages) return freemem;
+  return Math.round((availablePages * pageSize) / 1024 / 1024);
+}
+
 let machineCache: { at: number; value: MachineTelemetry } | null = null;
 
 /** Mac health snapshot, cached 10s (also shipped in the worker heartbeat). */
 export async function getMachineTelemetry(): Promise<MachineTelemetry> {
   if (machineCache && Date.now() - machineCache.at < 10_000) return machineCache.value;
-  const [therm, batt, df] = await Promise.all([
+  const [therm, batt, df, vmstat] = await Promise.all([
     process.platform === "darwin" ? execOut("pmset", ["-g", "therm"]) : Promise.resolve(""),
     process.platform === "darwin" ? execOut("pmset", ["-g", "batt"]) : Promise.resolve(""),
     execOut("df", ["-k", os.homedir()]),
+    process.platform === "darwin" ? execOut("vm_stat", []) : Promise.resolve(""),
   ]);
   const speedMatch = therm.match(/CPU_Speed_Limit\s*=\s*(\d+)/);
   const battPctMatch = batt.match(/(\d+)%/);
@@ -149,7 +176,8 @@ export async function getMachineTelemetry(): Promise<MachineTelemetry> {
   const value: MachineTelemetry = {
     loadAvg1m: Math.round(os.loadavg()[0] * 100) / 100,
     cpuCount: os.cpus().length,
-    freeMemMb: Math.round(os.freemem() / 1024 / 1024),
+    freeMemMb:
+      process.platform === "darwin" ? parseAvailableMemMb(vmstat) : Math.round(os.freemem() / 1024 / 1024),
     totalMemMb: Math.round(os.totalmem() / 1024 / 1024),
     diskFreeGb: Number.isFinite(availKb) ? Math.round(availKb / 1024 / 1024) : null,
     cpuSpeedLimitPct: speedMatch ? Number(speedMatch[1]) : null,
@@ -320,7 +348,7 @@ async function tick(){
  cards+=card("cloud server",c.crawler.ok?("reachable · "+c.crawler.latencyMs+"ms"):"unreachable",c.crawler.ok?"ok":"bad");
  cards+=card("app backend",c.backend.ok?("healthy · "+c.backend.latencyMs+"ms"):"unreachable",c.backend.ok?"ok":"bad");
  if(b)cards+=card("backlog",b.needsNobg+" nobg · "+b.needsEmbed+" embed",(b.needsNobg+b.needsEmbed)>0?"warn":"ok");
- cards+=card("memory free",m.freeMemMb+" / "+m.totalMemMb+" MB",m.freeMemMb<500?"warn":"");
+ cards+=card("memory available",m.freeMemMb+" / "+m.totalMemMb+" MB"+(m.totalMemMb?" ("+Math.round(m.freeMemMb/m.totalMemMb*100)+"%)":""),m.totalMemMb&&m.freeMemMb<m.totalMemMb*0.1?"warn":"");
  cards+=card("load (1m)",m.loadAvg1m+" / "+m.cpuCount+" cores",m.loadAvg1m>m.cpuCount?"warn":"");
  if(m.cpuSpeedLimitPct!==null)cards+=card("thermal",m.cpuSpeedLimitPct+"% speed"+(m.cpuSpeedLimitPct<100?" (throttling — normal under load)":""),m.cpuSpeedLimitPct<70?"warn":"");
  if(m.onACPower!==null)cards+=card("power",m.onACPower?"plugged in":"on battery — plug in!",m.onACPower?"ok":"bad");
