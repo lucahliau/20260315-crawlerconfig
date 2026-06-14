@@ -374,7 +374,7 @@ async function crawlCategoryPagination(
           }
 
           const extractArgs = { sel: extraction.selector, attr: extraction.urlAttribute, base: config.baseUrl };
-          const links = await page.evaluate(collectLinksInPage, extractArgs);
+          const links = await page.evaluate<string[]>(pageEvalExpr(collectLinksInPage, extractArgs));
 
           const before = urls.size;
           for (const link of links) {
@@ -500,6 +500,29 @@ function collectLinksInPage(args: { sel: string; attr: string; base: string }): 
   return out;
 }
 
+/**
+ * Build a self-contained IIFE that runs `fn(arg)` inside the page DOM.
+ *
+ * We deliberately avoid Stagehand's `page.evaluate(fn, arg)` overload: it serializes
+ * `fn` with `.toString()` and re-evaluates the text in the browser, but our prod
+ * runtime (tsx → esbuild with `keepNames: true`) rewrites nested named functions as
+ * `__name(fn, "name")` — a module-local helper that doesn't exist in the page. The
+ * serialized source then throws `ReferenceError: __name is not defined`, which
+ * Stagehand 3.1 reports opaquely as `StagehandEvalError: Uncaught` (it surfaces the
+ * CDP `exceptionDetails.text` "Uncaught" instead of `.exception.description`).
+ *
+ * Passing a STRING expression skips Stagehand's serializer; the inline `__name` shim
+ * satisfies the transpiled source. `arg` is JSON-injected, so `fn` must be
+ * self-contained (no closed-over module references).
+ */
+function pageEvalExpr<A>(fn: (arg: A) => unknown, arg: A): string {
+  return `(() => {
+    const __name = (target) => target; // esbuild keepNames helper, absent in the browser
+    const __fn = ${fn.toString()};
+    return __fn(${JSON.stringify(arg)});
+  })()`;
+}
+
 // ---------------------------------------------------------------------------
 // Strategy: Infinite Scroll
 // ---------------------------------------------------------------------------
@@ -544,7 +567,7 @@ async function crawlInfiniteScroll(
         await delay(scrollPauseMs);
 
         const extractArgs = { sel: extraction.selector, attr: extraction.urlAttribute, base: config.baseUrl };
-        const links = await page.evaluate(collectLinksInPage, extractArgs);
+        const links = await page.evaluate<string[]>(pageEvalExpr(collectLinksInPage, extractArgs));
 
         const before = urls.size;
         for (const link of links) {
