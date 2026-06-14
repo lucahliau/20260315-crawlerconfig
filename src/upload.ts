@@ -726,12 +726,16 @@ function mergeInto(target: ClothingItemInput, source: Partial<ClothingItemInput>
 
 const _imageCache = new Map<string, string>();
 
+// Returns the public R2 URL on success, or `null` when the image can't be
+// fetched/stored (after fetchWithRetry's own retries). Callers MUST treat null
+// as "this image is unavailable" and drop it — never fall back to the source
+// URL, which would hotlink-break in the app and skip background-removal.
 async function uploadImageToR2(
   imageUrl: string,
   retailer: string,
   externalId: string,
   index: number,
-): Promise<string> {
+): Promise<string | null> {
   // Check cache for deduplication
   if (_imageCache.has(imageUrl)) {
     return _imageCache.get(imageUrl)!;
@@ -745,7 +749,7 @@ async function uploadImageToR2(
     const res = await fetchWithRetry(resolvedUrl, IMAGE_TIMEOUT_MS);
     if (!res.ok) {
       log(`    Image fetch failed (HTTP ${res.status}): ${imageUrl}`);
-      return imageUrl;
+      return null;
     }
 
     const buffer = Buffer.from(await res.arrayBuffer());
@@ -767,7 +771,7 @@ async function uploadImageToR2(
     return publicUrl;
   } catch (err) {
     log(`    Image upload failed: ${(err as Error).message}`);
-    return imageUrl;
+    return null;
   }
 }
 
@@ -1086,14 +1090,37 @@ export async function uploadRetailer(
 
           for (let imgIdx = 0; imgIdx < allImages.length; imgIdx++) {
             const r2Url = await uploadImageToR2(allImages[imgIdx], config.retailer, externalId, imgIdx);
-            r2Images.push(r2Url);
+            if (r2Url) r2Images.push(r2Url);
           }
           uploadedToR2 = r2Images.length > 0;
 
-          if (r2Images.length > 0) {
-            item.imageUrl = r2Images[0];
-            item.images = r2Images;
+          // Every image failed to upload to R2 (after fetchWithRetry's own retries).
+          // Don't persist a row pointing at un-uploaded source URLs: they hotlink-break
+          // in the app, never get background-removal (so they can't reach the feed), and
+          // would be silently mislabeled as a successful upload. Skip the product the same
+          // way we skip missing required fields — a later crawl re-attempts the images.
+          if (r2Images.length === 0) {
+            log(`    SKIPPED: all ${allImages.length} image(s) failed to upload to R2`);
+            progress.skipped++;
+            consecutiveFailures = 0;
+            onProgress?.(progress);
+            if (options?.onItemResult) {
+              await options.onItemResult({
+                url,
+                status: "skipped",
+                itemName: item.name ?? undefined,
+                externalId,
+                imageCount: allImages.length,
+                uploadedToR2: false,
+                upsertedToDb: false,
+                metadata: { reason: "images_upload_failed", attemptedImages: allImages.length },
+              });
+            }
+            break;
           }
+
+          item.imageUrl = r2Images[0];
+          item.images = r2Images;
 
           // Ensure externalId is set for upsert
           item.externalId = externalId;
