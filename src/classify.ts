@@ -97,6 +97,16 @@ function tailTokens(normText: string, n: number): string {
   return toks.slice(Math.max(0, toks.length - n)).join(" ");
 }
 
+/** Drop a trailing " - Color" / " | Variant" / " / Size" segment when it's short
+ * (≤3 words) so the real product noun stays the head. Run on the RAW name
+ * before norm() (which would erase the separators). "Coat Long Wallet - Tumbled
+ * Black" → "Coat Long Wallet" so the head noun is "wallet", not "black". */
+function stripVariantSuffix(raw: string): string {
+  const m = raw.match(/^(.*?)\s*[-–—|/]\s*([^-–—|/]+)$/);
+  if (m && m[1].trim() && m[2].trim().split(/\s+/).length <= 3) return m[1];
+  return raw;
+}
+
 // ---------------------------------------------------------------------------
 // Lexicons
 // ---------------------------------------------------------------------------
@@ -157,11 +167,14 @@ const WEARABLE: WearEntry[] = [
 
 // Non-wearable products → hide (isClothing = false).
 const NONWEARABLE: DenyEntry[] = [
-  { re: w("wallets?|card ?holders?|card ?cases?|money ?clips?"), w: 1.5 },
-  { re: w("keychains?|key ?chains?|key ?rings?|key ?fobs?|lanyards?") },
-  { re: w("candles?|incense|diffusers?|reed diffusers?|room sprays?") },
-  { re: w("fragrances?|perfumes?|colognes?|eau de|after ?shave|shaving|pomade") },
-  { re: w("soaps?|shower gels?|skin ?care|moisturis(?:er|ers)|moisturiz(?:er|ers)|lip balms?|grooming|deodorants?") },
+  // "Hard" non-wearable nouns — these essentially never name a real garment, so
+  // weight them high enough to beat a single bogus "outerwear"/"mens" category
+  // that mis-scraped source data sometimes attaches to home/fragrance products.
+  { re: w("wallets?|card ?holders?|card ?cases?|money ?clips?"), w: 2 },
+  { re: w("keychains?|key ?chains?|key ?rings?|key ?fobs?|lanyards?|split rings?"), w: 1.5 },
+  { re: w("candles?|incense|censers?|diffusers?|reed diffusers?|room sprays?|potpourri|vide poche"), w: 2 },
+  { re: w("fragrances?|perfumes?|colognes?|eau de|after ?shave|shaving|pomade|air fresheners?|fresheners?|car scents?|scents?"), w: 2 },
+  { re: w("soaps?|body wash|shower gels?|shampoos?|conditioners?|skin ?care|moisturis(?:er|ers)|moisturiz(?:er|ers)|lip balms?|grooming|deodorants?"), w: 1.5 },
   { re: w("phone ?cases?|airpods?|earbuds?|chargers?|cables?") },
   { re: w("mugs?|tumblers?|flasks?|bottles?|cups?|glasses ware|glassware|kettles?|pans?|cookware|cook ?sets?|dinnerware|cutlery|chopsticks?|coasters?") },
   { re: w("cushions?|pillows?|blankets?|throws?|towels?|homeware|rugs?|bedding|duvets?") },
@@ -205,7 +218,7 @@ function buildSources(input: ClassifyInput): Source[] {
     { text: norm(input.category), weight: 2.5, label: "category" },
     { text: norm((input.breadcrumbs ?? []).join(" ")), weight: 2, label: "breadcrumb" },
     { text: name, weight: 1.5, label: "name" },
-    { text: tailTokens(name, 3), weight: 1.5, label: "name-head" },
+    { text: tailTokens(norm(stripVariantSuffix(input.name ?? "")), 3), weight: 1.5, label: "name-head" },
     { text: urlPathText(input.sourceUrl), weight: 1, label: "url" },
     { text: norm((input.tags ?? []).join(" ")), weight: 0.8, label: "tags" },
     { text: norm(input.description), weight: 0.4, label: "description" },
