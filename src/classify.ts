@@ -167,14 +167,15 @@ const WEARABLE: WearEntry[] = [
 
 // Non-wearable products → hide (isClothing = false).
 const NONWEARABLE: DenyEntry[] = [
-  // "Hard" non-wearable nouns — these essentially never name a real garment, so
-  // weight them high enough to beat a single bogus "outerwear"/"mens" category
-  // that mis-scraped source data sometimes attaches to home/fragrance products.
-  { re: w("wallets?|card ?holders?|card ?cases?|money ?clips?"), w: 2 },
-  { re: w("keychains?|key ?chains?|key ?rings?|key ?fobs?|lanyards?|split rings?"), w: 1.5 },
-  { re: w("candles?|incense|censers?|diffusers?|reed diffusers?|room sprays?|potpourri|vide poche"), w: 2 },
-  { re: w("fragrances?|perfumes?|colognes?|eau de|after ?shave|shaving|pomade|air fresheners?|fresheners?|car scents?|scents?"), w: 2 },
-  { re: w("soaps?|body wash|shower gels?|shampoos?|conditioners?|skin ?care|moisturis(?:er|ers)|moisturiz(?:er|ers)|lip balms?|grooming|deodorants?"), w: 1.5 },
+  // Non-wearables. Mis-scraped data sometimes attaches a bogus "outerwear"/"mens"
+  // category to these; the head-noun override (HARD_NONWEAR_HEAD) handles the
+  // case where the name itself names the product, so weights stay moderate here
+  // to avoid hiding garments that merely mention one of these words.
+  { re: w("wallets?|card ?holders?|card ?cases?|money ?clips?"), w: 1.5 },
+  { re: w("keychains?|key ?chains?|key ?rings?|key ?fobs?|lanyards?|split rings?") },
+  { re: w("candles?|incense|censers?|diffusers?|reed diffusers?|room sprays?|potpourri|vide poche") },
+  { re: w("fragrances?|perfumes?|colognes?|eau de|after ?shave|shaving|pomade|air fresheners?|fresheners?|car scents?|scents?") },
+  { re: w("soaps?|body wash|shower gels?|shampoos?|conditioners?|skin ?care|moisturis(?:er|ers)|moisturiz(?:er|ers)|lip balms?|grooming|deodorants?") },
   { re: w("phone ?cases?|airpods?|earbuds?|chargers?|cables?") },
   { re: w("mugs?|tumblers?|flasks?|bottles?|cups?|glasses ware|glassware|kettles?|pans?|cookware|cook ?sets?|dinnerware|cutlery|chopsticks?|coasters?") },
   { re: w("cushions?|pillows?|blankets?|throws?|towels?|homeware|rugs?|bedding|duvets?") },
@@ -198,6 +199,47 @@ const DRESS_ADJ = /\bdress(?:es)?\s+(?:shirt|shirts|pant|pants|trouser|trousers|
 const GOWN = /\bgowns?\b/;
 const DRESSING_GOWN = /\bdressing gowns?\b/;
 const MALE_GARMENT = w("boxer briefs?|boxer shorts?");
+
+// Head-noun override. A product's LAST noun is what it actually is, which beats
+// a mis-scraped category (e.g. Ironheart's "Coat Long Wallet" tagged
+// outerwear/coat). But many of these words can also ADJECTIVE a garment
+// ("Blanket Jacket", "Tent T-Shirt"), so the rule is layered:
+//   1. If the literal last token is a garment/accessory → never override.
+//   2. SUPER_HARD words never modify a garment, so they're decisive anywhere in
+//      the head window (catches "Incense Cones", "Air Freshener").
+//   3. SOFT_HARD words can be adjectives, so only decisive as the literal head
+//      ("Wool Blanket" hides, "Blanket Jacket" doesn't).
+const WEARABLE_HEAD = w(
+  "shirts?|tees?|polos?|henleys?|hoodies?|hoody|sweaters?|sweatshirts?|cardigans?|jumpers?|knits?|knitwear|" +
+    "jackets?|blazers?|coats?|parkas?|bombers?|vests?|gilets?|fleeces?|overshirts?|shackets?|waistcoats?|" +
+    "trousers?|pants?|chinos?|jeans|shorts?|skirts?|dress(?:es)?|blouses?|leggings?|joggers?|sweatpants?|" +
+    "shoes?|sneakers?|trainers?|boots?|loafers?|sandals?|heels?|mules?|slides?|oxfords?|chukkas?|brogues?|" +
+    "bags?|totes?|backpacks?|rucksacks?|satchels?|holdalls?|" +
+    "hats?|caps?|beanies?|fedoras?|berets?|scarves|scarf|belts?|ties?|gloves?|socks?|sunglasses|" +
+    "robes?|kimonos?|ponchos?|jumpsuits?|rompers?|tanks?|camisoles?",
+);
+const SUPER_HARD = w(
+  "wallets?|cardholders?|card cases?|money clips?|keychains?|key ?rings?|key ?fobs?|split rings?|lanyards?|" +
+    "candles?|incense|censers?|colognes?|perfumes?|fragrances?|diffusers?|potpourri|vide poche|" +
+    "mugs?|tumblers?|flasks?|kettles?|cookware|dinnerware|cutlery|chopsticks?|air fresheners?|fresheners?",
+);
+const SOFT_HARD = w(
+  "blankets?|throws?|towels?|cushions?|pillows?|rugs?|coasters?|duvets?|" +
+    "lanterns?|grills?|tents?|tarps?|stakes?|pegs?|mallets?|coolers?|" +
+    "posters?|stickers?|notebooks?|magazines?|soaps?|shampoos?|deodorants?",
+);
+
+function headNounHardNonwear(rawName: string | null | undefined): boolean {
+  const t = norm(stripVariantSuffix(rawName ?? ""));
+  if (!t) return false;
+  const toks = t.split(" ");
+  const last = toks[toks.length - 1] ?? "";
+  const last2 = toks.slice(-2).join(" ");
+  if (WEARABLE_HEAD.test(last)) return false; // real garment head → never override
+  if (SUPER_HARD.test(last2)) return true; // decisive even as a modifier
+  if (SOFT_HARD.test(last)) return true; // only when it's literally the head noun
+  return false;
+}
 
 // Gender word tokens (deliberately omit bare "man"/"w"/"m" — too noisy / brand-laden).
 const G_FEMALE = w("women|womens|woman|womans|ladies|lady|wmn|wmns|female|womenswear");
@@ -366,7 +408,16 @@ export function classifyItem(input: ClassifyInput): Classification {
     return { isClothing: true, gender: "unisex", genderSource: "none", productType: "other", confidence: 0.2, signal: "no text signal → kept" };
   }
 
-  const { isClothing, productType, wearScore, nonwearScore } = classifyClothing(sources);
+  const scored = classifyClothing(sources);
+  const { wearScore, nonwearScore } = scored;
+  let { isClothing, productType } = scored;
+  // Head-noun override: a name ending in a hard non-wearable noun is that thing,
+  // even if a mis-scraped category/subcategory claims otherwise.
+  const headOverride = isClothing && headNounHardNonwear(input.name);
+  if (headOverride) {
+    isClothing = false;
+    productType = "other";
+  }
   const { gender, reason, source: genderSource } = classifyGender(input, sources);
 
   // Confidence: a blend of the clothing-decision margin and gender certainty.
@@ -378,7 +429,7 @@ export function classifyItem(input: ClassifyInput): Classification {
     reason.startsWith("no gender") ? 0.4 : reason === "retailer default" ? 0.55 : reason.includes("female garment") ? 0.7 : 0.85;
   const confidence = Math.round(((clothingConf + genderConf) / 2) * 100) / 100;
 
-  const signal = `${isClothing ? "clothing" : "NON-CLOTHING"} (wear ${wearScore.toFixed(1)} vs deny ${nonwearScore.toFixed(1)}); ${productType}; gender=${gender} [${reason}]`;
+  const signal = `${isClothing ? "clothing" : "NON-CLOTHING"} (wear ${wearScore.toFixed(1)} vs deny ${nonwearScore.toFixed(1)}${headOverride ? ", head-noun override" : ""}); ${productType}; gender=${gender} [${reason}]`;
 
   return { isClothing, gender, genderSource, productType, confidence, signal };
 }

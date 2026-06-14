@@ -31,6 +31,17 @@ const cases: Case[] = [
   { desc: "iron-on patch (standalone)", input: { name: "Tarpon Iron-On Patch", category: "Embroidered Patches" }, expect: { isClothing: false } },
   { desc: "pet collar", input: { name: "Clayton's Canopy Hammock Dog Collar", category: "Pet (collar)" }, expect: { isClothing: false } },
   { desc: "candle", input: { name: "Cedar & Sage Candle", category: "Home" }, expect: { isClothing: false } },
+  { desc: "Coat Long Wallet (poisoned category=outerwear/coat)", input: { name: "OGL Kingsman Coat Long Wallet - Tumbled Black", category: "outerwear", subcategory: "coat", sourceUrl: "https://ironheart.co.uk/products/ogl-km-coatwal-tblk" }, expect: { isClothing: false } },
+  { desc: "Incense Cones mis-tagged outerwear", input: { name: "Harvest | Japanese Yuzu Incense Cones", category: "outerwear" }, expect: { isClothing: false } },
+  { desc: "Air Freshener mis-tagged MENS", input: { name: "Disband Air Freshener", category: "MENS" }, expect: { isClothing: false } },
+  // head-noun override must NOT fire when the head is a real garment
+  { desc: "Wallet Chain Jeans stay clothing", input: { name: "Wallet Chain Selvedge Jeans", category: "bottoms" }, expect: { isClothing: true, productType: "bottoms" } },
+  { desc: "Roman Candle graphic tee stays clothing", input: { name: "Roman Candle Graphic Tee", category: "tops" }, expect: { isClothing: true, productType: "tops" } },
+  { desc: "Blanket Jacket stays clothing", input: { name: "Cotton Jacquard Blanket Jacket", category: "outerwear" }, expect: { isClothing: true, productType: "jackets" } },
+  { desc: "Tent T-Shirt stays clothing", input: { name: "Choose Your Tent T-Shirt", category: "tops" }, expect: { isClothing: true, productType: "tops" } },
+  { desc: "Car Coat with Blanket Lining stays clothing", input: { name: "Brown Suede Car Coat with Blanket Lining", category: "outerwear", subcategory: "coat" }, expect: { isClothing: true, productType: "jackets" } },
+  { desc: "Wool Blanket hides (literal head)", input: { name: "Lambswool Tartan Blanket", category: "Home" }, expect: { isClothing: false } },
+  { desc: "Signet ring stays clothing (jewelry)", input: { name: "Sterling Signet Ring", category: "accessories" }, expect: { isClothing: true, productType: "accessories" } },
   { desc: "mug", input: { name: "Enamel Camp Mug", category: "Camping Cookware & Dinnerware" }, expect: { isClothing: false } },
 
   // --- False-positive traps: wearable signal must WIN a denylist mention -----
