@@ -154,7 +154,7 @@ async function main() {
          "productType" = u.product_type,
          "classificationConfidence" = u.conf,
          "classifiedAt" = NOW()
-       FROM unnest($1::uuid[], $2::boolean[], $3::text[], $4::text[], $5::float8[])
+       FROM unnest($1::text[], $2::boolean[], $3::text[], $4::text[], $5::float8[])
             AS u(id, is_clothing, gender, product_type, conf)
        WHERE ci.id = u.id`,
       [ids, isCl, gen, pt, conf],
