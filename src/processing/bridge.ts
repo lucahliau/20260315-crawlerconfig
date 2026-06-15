@@ -33,6 +33,9 @@ export class RetryableExitError extends Error {
 interface BridgedResult {
   exitCode: number;
   timedOut: boolean;
+  /** Last lines of combined stdout/stderr — surfaced on failure so a crash is
+   *  diagnosable remotely (the full stream only reaches the M1's local log). */
+  tail: string[];
 }
 
 function runBridged(
@@ -52,10 +55,19 @@ function runBridged(
       stdio: ["ignore", "pipe", "pipe"],
     });
 
+    // Keep the last N lines so a non-zero exit can carry real detail (the full
+    // stream is only logged on the M1; the tail rides the thrown error to PG).
+    const tail: string[] = [];
+    const emit = (line: string) => {
+      tail.push(line);
+      if (tail.length > 40) tail.shift();
+      opts.onLine(line);
+    };
+
     let timedOut = false;
     const killTimer = setTimeout(() => {
       timedOut = true;
-      opts.onLine(`[bridge] timeout after ${Math.round(opts.timeoutMs / 60000)}min — SIGTERM`);
+      emit(`[bridge] timeout after ${Math.round(opts.timeoutMs / 60000)}min — SIGTERM`);
       child.kill("SIGTERM");
       setTimeout(() => child.kill("SIGKILL"), 30_000).unref();
     }, opts.timeoutMs);
@@ -68,11 +80,11 @@ function runBridged(
         while ((idx = buf.indexOf("\n")) >= 0) {
           const line = buf.slice(0, idx).trimEnd();
           buf = buf.slice(idx + 1);
-          if (line) opts.onLine(line);
+          if (line) emit(line);
         }
       });
       stream.on("end", () => {
-        if (buf.trim()) opts.onLine(buf.trim());
+        if (buf.trim()) emit(buf.trim());
       });
     };
     if (child.stdout) lineBuffer(child.stdout);
@@ -84,7 +96,7 @@ function runBridged(
     });
     child.on("close", (code) => {
       clearTimeout(killTimer);
-      resolve({ exitCode: code ?? -1, timedOut });
+      resolve({ exitCode: code ?? -1, timedOut, tail });
     });
   });
 }
@@ -139,6 +151,9 @@ export interface NobgBatchResult {
   /** Unprocessed images the tool reported beyond this batch (backlog estimate). */
   remaining: number;
   hasNobgUpdated: number;
+  /** Per-image failures from this batch, with the reason parsed from the tool's
+   *  stdout — recorded to scrape_errors so they're diagnosable off the M1. */
+  failures: { key: string; reason: string }[];
 }
 
 /**
@@ -154,7 +169,11 @@ export async function runNobgBatch(opts: {
 
   const parallel = process.env.PROCESS_NOBG_PARALLEL ?? "5";
   let remaining = -1;
-  const { exitCode, timedOut } = await runBridged(
+  // The tool logs the cause as "...failed for <key>: <message>" before it
+  // appends the {key,status:"failed"} history line — capture it so each failed
+  // key carries a real reason instead of just a count.
+  const reasonByKey = new Map<string, string>();
+  const { exitCode, timedOut, tail } = await runBridged(
     "npx",
     ["tsx", "remove-bg-parallel.ts", String(opts.limit)],
     {
@@ -165,17 +184,23 @@ export async function runNobgBatch(opts: {
       onLine: (line) => {
         const m = line.match(/Found (\d+) unprocessed images/);
         if (m) remaining = Math.max(0, Number(m[1]) - opts.limit);
+        const f = line.match(/failed for (.+?): (.+)$/);
+        if (f) reasonByKey.set(f[1]!, f[2]!.slice(0, 500));
         opts.log(line);
       },
     },
   );
 
   if (timedOut || exitCode !== 0) {
-    throw new Error(`remove-bg-parallel exited ${exitCode}${timedOut ? " (timeout)" : ""}`);
+    const detail = tail.slice(-6).join(" | ").slice(0, 1000);
+    throw new Error(
+      `remove-bg-parallel exited ${exitCode}${timedOut ? " (timeout)" : ""}${detail ? ` — ${detail}` : ""}`,
+    );
   }
 
   // history.jsonl lines appended during this run: {key, status, ts}
   const successKeys: string[] = [];
+  const failedKeys: string[] = [];
   let failed = 0;
   if (fs.existsSync(historyFile)) {
     const fd = fs.openSync(historyFile, "r");
@@ -189,7 +214,10 @@ export async function runNobgBatch(opts: {
           try {
             const entry = JSON.parse(line) as { key?: string; status?: string };
             if (entry.status === "success" && entry.key) successKeys.push(entry.key);
-            else if (entry.status === "failed") failed++;
+            else if (entry.status === "failed") {
+              failed++;
+              if (entry.key) failedKeys.push(entry.key);
+            }
           } catch {
             // Partial/corrupt line — skip.
           }
@@ -211,7 +239,12 @@ export async function runNobgBatch(opts: {
     );
   }
 
-  return { processed: successKeys.length, failed, remaining, hasNobgUpdated };
+  const failures = failedKeys.map((key) => ({
+    key,
+    reason: reasonByKey.get(key) ?? "background removal failed (no detail captured)",
+  }));
+
+  return { processed: successKeys.length, failed, remaining, hasNobgUpdated, failures };
 }
 
 export interface EmbedBatchResult {
@@ -228,7 +261,7 @@ export async function runEmbedBatch(opts: {
   log: (line: string) => void;
 }): Promise<EmbedBatchResult> {
   const python = path.join(BGREMOVER_DIR, "venv", "bin", "python");
-  const { exitCode, timedOut } = await runBridged(
+  const { exitCode, timedOut, tail } = await runBridged(
     python,
     [
       "embed_worker.py",
@@ -253,7 +286,10 @@ export async function runEmbedBatch(opts: {
     throw new RetryableExitError(124, "embed_worker MPS watchdog (exit 124) — retry resumes");
   }
   if (timedOut || exitCode !== 0) {
-    throw new Error(`embed_worker exited ${exitCode}${timedOut ? " (timeout)" : ""}`);
+    const detail = tail.slice(-6).join(" | ").slice(0, 1000);
+    throw new Error(
+      `embed_worker exited ${exitCode}${timedOut ? " (timeout)" : ""}${detail ? ` — ${detail}` : ""}`,
+    );
   }
 
   // The worker decides whether to chain another batch from the live backlog.

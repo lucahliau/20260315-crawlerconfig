@@ -33,6 +33,10 @@ scripts/m1-autoupdate-allow.txt
 scripts/record-worker-issue.ts
 scripts/install-m1-autoupdate.sh
 
+# Read-only remote diagnostics (inert on the M1 — runs from any machine against
+# the shared Postgres; safe to auto-pull so the M1's copy stays current)
+scripts/diagnose-remote.ts
+
 # NOTE deliberately OUT of scope (require a manual update.sh):
 #   src/server.ts, src/pipelineStore.ts (schema), dashboard/**, package*.json,
 #   configs/**, prisma/**, anything that also affects the Railway services.

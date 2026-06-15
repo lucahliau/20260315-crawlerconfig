@@ -34,6 +34,7 @@ import { uploadRetailer } from "./upload.js";
 import { safeParseConfig, type Config } from "./schemas/config.js";
 import {
   ensurePipelinePersistenceSchema,
+  getPool,
   getRetailerPipelineState,
   getSetting,
   isAutoPipelineEnabled,
@@ -244,6 +245,61 @@ async function handleUploadUrlJob(jobData: UploadUrlJobData, jobId: string): Pro
   }
 }
 
+// Per-image processing failures are deduped over this window so the poison-image
+// loop (a few permanently-broken images re-tried every sweep) records each
+// broken image once, not on every batch. Codes are string literals on purpose:
+// errorCodes.ts is outside the M1 auto-update allowlist, so adding enum members
+// there would block this file from auto-deploying.
+const PROCESS_FAILURE_DEDUPE_HOURS = 20;
+
+/** R2 keys look like `products/<retailer>/<id>/<file>` — pull the retailer. */
+function retailerFromR2Key(key: string): string | null {
+  const parts = key.split("/");
+  return parts[0] === "products" && parts[1] ? parts[1] : null;
+}
+
+/**
+ * Record this batch's per-image nobg failures into scrape_errors so they're
+ * diagnosable from any machine (the per-image reason otherwise only reaches the
+ * M1's local activity log). Deduped against the last ~20h so a permanently
+ * broken image doesn't spam the feed every sweep. Returns the count of NEW
+ * (not-recently-seen) failures.
+ */
+async function recordNobgFailures(
+  failures: { key: string; reason: string }[],
+  jobId: string,
+): Promise<number> {
+  if (failures.length === 0) return 0;
+  let fresh = failures;
+  const pg = getPool();
+  if (pg) {
+    try {
+      const { rows } = await pg.query(
+        `SELECT DISTINCT url FROM scrape_errors
+          WHERE code = 'NOBG_IMAGE_FAILED' AND url = ANY($1::text[])
+            AND occurred_at > NOW() - ($2 || ' hours')::interval`,
+        [failures.map((f) => f.key), String(PROCESS_FAILURE_DEDUPE_HOURS)],
+      );
+      const known = new Set(rows.map((r) => r.url as string));
+      fresh = failures.filter((f) => !known.has(f.key));
+    } catch {
+      // Dedupe is best-effort — if the probe fails, record everything.
+    }
+  }
+  for (const f of fresh.slice(0, 25)) {
+    await recordScrapeError({
+      code: "NOBG_IMAGE_FAILED",
+      detail: f.reason,
+      retailer: retailerFromR2Key(f.key),
+      stage: "process",
+      url: f.key,
+      jobId,
+      metadata: { workerId: WORKER_ID },
+    });
+  }
+  return fresh.length;
+}
+
 /**
  * Process one bounded processing batch (nobg or embed). Chained re-enqueue
  * keeps draining the backlog in expiry-safe slices; the kill switch is
@@ -272,8 +328,17 @@ async function handleProcessingJob(data: ProcessingJobData, jobId: string): Prom
       log(
         `nobg batch done: processed=${result.processed} failed=${result.failed} remaining≈${result.remaining} hasNobg+=${result.hasNobgUpdated}`,
       );
-      if (result.failed > 0) {
-        recordIssue("nobg", `${result.failed} image(s) failed in batch ${jobId} (see activity log)`);
+      if (result.failures.length > 0) {
+        const fresh = await recordNobgFailures(result.failures, jobId);
+        // Only surface a NEW issue when there are genuinely new failures — a
+        // repeating poison image is already on the Errors tab and shouldn't
+        // re-alert every sweep.
+        if (fresh > 0) {
+          recordIssue(
+            "nobg",
+            `${fresh} new image failure(s) in batch ${jobId} — see Errors tab (scrape_errors, code NOBG_IMAGE_FAILED)`,
+          );
+        }
       }
       statusJobFinished(jobId, data.kind, `processed ${result.processed}, failed ${result.failed}`);
       moreRemains = result.remaining > 0;
@@ -285,6 +350,16 @@ async function handleProcessingJob(data: ProcessingJobData, jobId: string): Prom
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     statusJobFinished(jobId, data.kind, `FAILED: ${message}`);
+    // Mirror the batch-level crash to scrape_errors (with the tool's output tail
+    // baked into `message`) so embed/nobg subprocess crashes are diagnosable off
+    // the M1, not just in the local issue ring.
+    await recordScrapeError({
+      code: data.kind === "embed" ? "EMBED_WORKER_CRASH" : "NOBG_BATCH_CRASH",
+      detail: message,
+      stage: "process",
+      jobId,
+      metadata: { workerId: WORKER_ID, kind: data.kind, limit: data.limit },
+    }).catch(() => {});
     recordIssue(data.kind, `job ${jobId} failed: ${message} (pg-boss will retry)`);
     throw err;
   }
