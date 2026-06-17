@@ -30,6 +30,7 @@ import {
   getPipelineJob,
   getPool,
   getRetailerPipelineState,
+  getDeadUploadUrls,
   getScrapeErrorCounts,
   getSetting,
   getSuccessfulUploadUrls,
@@ -1855,6 +1856,7 @@ async function enqueueUploadForRetailer(
       totalUrls: number;
       targeted: number;
       alreadyUploaded: number;
+      deadSkipped: number;
       enqueued: number;
       duplicates: number;
     }
@@ -1899,9 +1901,22 @@ async function enqueueUploadForRetailer(
   );
   const targetUrls = urls.slice(0, limit);
 
-  // Skip URLs already uploaded for this crawl checkpoint.
+  // Skip URLs already uploaded for this crawl checkpoint, AND URLs that are
+  // tombstoned (a definitive 404/410 on their latest attempt across any
+  // checkpoint) — otherwise every re-crawl re-fetches permanently-dead product
+  // pages, which is the bulk of the worker's scrape_errors noise + wasted
+  // fetches. UPLOAD_DEAD_URL_MIN_404 (default 1) tunes how many 404s tombstone
+  // a URL; raise it (or clear the failed upload_url_results rows) to un-quarantine.
   const alreadyDone = await getSuccessfulUploadUrls(retailer, effectiveCrawledAt);
-  const toEnqueue = targetUrls.filter((u) => !alreadyDone.has(u));
+  const deadMinFailures = Math.max(1, Math.floor(Number(process.env.UPLOAD_DEAD_URL_MIN_404)) || 1);
+  const dead = await getDeadUploadUrls(retailer, deadMinFailures);
+  const toEnqueue = targetUrls.filter((u) => !alreadyDone.has(u) && !dead.has(u));
+  const deadSkipped = targetUrls.filter((u) => !alreadyDone.has(u) && dead.has(u)).length;
+  if (deadSkipped > 0) {
+    console.log(
+      `[upload:${retailer}] skipped ${deadSkipped} tombstoned URL(s) (404/410, minFailures=${deadMinFailures}).`,
+    );
+  }
 
   const queueJobs = toEnqueue.map((url) => {
     let domain = retailer;
@@ -1924,6 +1939,7 @@ async function enqueueUploadForRetailer(
     totalUrls: urls.length,
     targeted: targetUrls.length,
     alreadyUploaded: alreadyDone.size,
+    deadSkipped,
     enqueued: accepted,
     duplicates,
   };

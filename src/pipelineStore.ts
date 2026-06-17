@@ -899,3 +899,54 @@ export async function getSuccessfulUploadUrls(
       .filter((url): url is string => typeof url === "string" && url.length > 0),
   );
 }
+
+/**
+ * Product URLs for this retailer that are TOMBSTONED — their most recent upload
+ * attempt (across ALL crawl checkpoints) ended in a definitive HTTP 404/410, so
+ * the product page is gone. Used to stop re-fetching dead URLs on every re-crawl
+ * sweep (the upload-stage analog of the nobg poison-image quarantine).
+ *
+ * Unlike getSuccessfulUploadUrls (per-checkpoint successes), this looks ACROSS
+ * checkpoints: each re-crawl mints a new crawl_source_crawled_at, which would
+ * otherwise reset the skip set and re-enqueue known-dead URLs on every sweep.
+ *
+ * Conservative so a transient outage or a restock is never dropped forever:
+ *   - only 404/410 ("gone") count, never 5xx/429/403/timeout (transient);
+ *   - the LATEST attempt must still be the 404 (a later success un-tombstones it);
+ *   - requires >= minFailures distinct 404 attempts (default 1).
+ */
+export async function getDeadUploadUrls(retailer: string, minFailures = 1): Promise<Set<string>> {
+  const pg = getPool();
+  if (!pg) return new Set();
+  await ensurePipelinePersistenceSchema();
+  const { rows } = await pg.query(
+    `
+      SELECT url,
+             (ARRAY_AGG(status ORDER BY processed_at DESC))[1] AS latest_status,
+             (ARRAY_AGG(error  ORDER BY processed_at DESC))[1] AS latest_error,
+             COUNT(*) FILTER (
+               WHERE status = 'failed'
+                 AND (error ILIKE '%HTTP 404%' OR error ILIKE '%HTTP 410%')
+             )::int AS dead_hits
+      FROM upload_url_results
+      WHERE retailer = $1
+      GROUP BY url
+    `,
+    [retailer],
+  );
+  const dead = new Set<string>();
+  const gone = /HTTP\s*4(?:04|10)\b/i;
+  for (const row of rows) {
+    if (
+      Number(row.dead_hits) >= minFailures &&
+      row.latest_status === "failed" &&
+      typeof row.latest_error === "string" &&
+      gone.test(row.latest_error) &&
+      typeof row.url === "string" &&
+      row.url.length > 0
+    ) {
+      dead.add(row.url);
+    }
+  }
+  return dead;
+}
