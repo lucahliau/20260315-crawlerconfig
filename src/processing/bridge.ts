@@ -163,11 +163,18 @@ export interface NobgBatchResult {
 export async function runNobgBatch(opts: {
   limit: number;
   log: (line: string) => void;
+  /** Adaptive parallel rembg chains chosen by the worker's capacity governor.
+   *  Falls back to PROCESS_NOBG_PARALLEL / 6 when not supplied. */
+  parallel?: number;
 }): Promise<NobgBatchResult> {
   const historyFile = path.join(BGREMOVER_DIR, "history.jsonl");
   const startOffset = fs.existsSync(historyFile) ? fs.statSync(historyFile).size : 0;
 
-  const parallel = process.env.PROCESS_NOBG_PARALLEL ?? "5";
+  const parallel = String(
+    opts.parallel && opts.parallel > 0
+      ? opts.parallel
+      : Math.max(1, parseInt(process.env.PROCESS_NOBG_PARALLEL ?? "6", 10)),
+  );
   let remaining = -1;
   // The tool logs the cause as "...failed for <key>: <message>" before it
   // appends the {key,status:"failed"} history line — capture it so each failed
@@ -265,8 +272,12 @@ export async function runEmbedBatch(opts: {
     python,
     [
       "embed_worker.py",
+      // Download workers are network-bound (R2 fetch) — raising them fills the
+      // I/O wait that leaves the CPU ~60% idle, at negligible RAM cost. Batch
+      // size stays 32: that's the MPS/GPU memory knob and 8GB unified RAM is the
+      // ceiling, so we do NOT inflate it.
       "--download-workers",
-      process.env.PROCESS_EMBED_DOWNLOAD_WORKERS ?? "12",
+      process.env.PROCESS_EMBED_DOWNLOAD_WORKERS ?? "16",
       "--batch-size",
       process.env.PROCESS_EMBED_BATCH_SIZE ?? "32",
       "--limit",

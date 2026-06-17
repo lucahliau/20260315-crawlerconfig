@@ -124,6 +124,15 @@ export interface MachineTelemetry {
   loadAvg1m: number;
   cpuCount: number;
   /**
+   * Real CPU utilisation 0–100 (busy %), averaged across all cores over the
+   * interval since the previous telemetry sample (~10–15s). Computed from
+   * os.cpus() time deltas — NOT load average. This is the number that matches
+   * Activity Monitor's "% used" (≈ 100 − %idle). null on the very first sample
+   * (no prior baseline to diff against). Load average alone made the machine
+   * look busier than it was; this exposes the true headroom.
+   */
+  cpuUsagePct: number | null;
+  /**
    * AVAILABLE memory in MB — what people mean by "free". On macOS this is NOT
    * os.freemem(): the OS keeps almost all RAM occupied with reclaimable file
    * cache (inactive/speculative/purgeable pages), so os.freemem() reads ~1% on
@@ -137,6 +146,34 @@ export interface MachineTelemetry {
   cpuSpeedLimitPct: number | null;
   onACPower: boolean | null;
   batteryPct: number | null;
+}
+
+/**
+ * Rolling CPU-utilisation sampler. os.cpus() returns cumulative time counters
+ * per core; busy% over an interval = 1 − Δidle/Δtotal. We keep the previous
+ * cumulative snapshot module-side and diff on each telemetry refresh (~10–15s),
+ * which is exactly the window the dashboard cares about.
+ */
+let prevCpuSample: { idle: number; total: number } | null = null;
+function sampleCpuTimes(): { idle: number; total: number } {
+  let idle = 0;
+  let total = 0;
+  for (const c of os.cpus()) {
+    const tmes = c.times;
+    idle += tmes.idle;
+    total += tmes.user + tmes.nice + tmes.sys + tmes.idle + tmes.irq;
+  }
+  return { idle, total };
+}
+function cpuUsagePctSince(): number | null {
+  const cur = sampleCpuTimes();
+  const prev = prevCpuSample;
+  prevCpuSample = cur;
+  if (!prev) return null;
+  const idleDelta = cur.idle - prev.idle;
+  const totalDelta = cur.total - prev.total;
+  if (totalDelta <= 0) return null;
+  return Math.max(0, Math.min(100, Math.round((1 - idleDelta / totalDelta) * 100)));
 }
 
 /**
@@ -176,6 +213,7 @@ export async function getMachineTelemetry(): Promise<MachineTelemetry> {
   const value: MachineTelemetry = {
     loadAvg1m: Math.round(os.loadavg()[0] * 100) / 100,
     cpuCount: os.cpus().length,
+    cpuUsagePct: cpuUsagePctSince(),
     freeMemMb:
       process.platform === "darwin" ? parseAvailableMemMb(vmstat) : Math.round(os.freemem() / 1024 / 1024),
     totalMemMb: Math.round(os.totalmem() / 1024 / 1024),
@@ -349,6 +387,7 @@ async function tick(){
  cards+=card("app backend",c.backend.ok?("healthy · "+c.backend.latencyMs+"ms"):"unreachable",c.backend.ok?"ok":"bad");
  if(b)cards+=card("backlog",b.needsNobg+" nobg · "+b.needsEmbed+" embed",(b.needsNobg+b.needsEmbed)>0?"warn":"ok");
  cards+=card("memory available",m.freeMemMb+" / "+m.totalMemMb+" MB"+(m.totalMemMb?" ("+Math.round(m.freeMemMb/m.totalMemMb*100)+"%)":""),m.totalMemMb&&m.freeMemMb<m.totalMemMb*0.1?"warn":"");
+ if(m.cpuUsagePct!==null&&m.cpuUsagePct!==undefined)cards+=card("cpu used",m.cpuUsagePct+"% busy · "+(100-m.cpuUsagePct)+"% idle",m.cpuUsagePct>90?"warn":"ok");
  cards+=card("load (1m)",m.loadAvg1m+" / "+m.cpuCount+" cores",m.loadAvg1m>m.cpuCount?"warn":"");
  if(m.cpuSpeedLimitPct!==null)cards+=card("thermal",m.cpuSpeedLimitPct+"% speed"+(m.cpuSpeedLimitPct<100?" (throttling — normal under load)":""),m.cpuSpeedLimitPct<70?"warn":"");
  if(m.onACPower!==null)cards+=card("power",m.onACPower?"plugged in":"on battery — plug in!",m.onACPower?"ok":"bad");

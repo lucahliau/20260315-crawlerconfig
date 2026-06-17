@@ -57,6 +57,8 @@ import { runForDomain, domainKey } from "./domainGate.js";
 import { getProcessingBacklog, runEmbedBatch, runNobgBatch } from "./processing/bridge.js";
 import {
   getHeartbeatTelemetry,
+  getMachineTelemetry,
+  type MachineTelemetry,
   recordActivity,
   recordIssue,
   setIssueSink,
@@ -84,6 +86,52 @@ const WORKER_QUEUES = (process.env.WORKER_QUEUES ?? QUEUES.UPLOAD_URL)
   .filter(Boolean);
 
 const PROCESS_CHAIN_DEPTH_MAX = 50;
+
+// ---------------------------------------------------------------------------
+// Capacity governor (background removal)
+// ---------------------------------------------------------------------------
+// The home box is the 8GB fanless M1 Air. nobg work is network/GPU-bound, so
+// the CPU sits ~60% idle even at "full" load — but 8GB unified RAM (each rembg
+// chain ≈ 0.6–0.8GB on top of an embed batch's CLIP model) and the fanless
+// thermal envelope ARE the real limits. So instead of a fixed PARALLEL_CHAINS,
+// we choose it per-batch from LIVE telemetry: push to the ceiling when RAM is
+// free, cool, and on AC; back off when RAM is tight, the SoC is throttling, or
+// we're on battery. Set PROCESS_NOBG_PARALLEL to pin a fixed value (bypasses
+// the governor); PROCESS_NOBG_PARALLEL_MAX caps the adaptive ceiling.
+const NOBG_PARALLEL_MAX = Math.max(2, parseInt(process.env.PROCESS_NOBG_PARALLEL_MAX ?? "7", 10));
+const NOBG_PARALLEL_FIXED = process.env.PROCESS_NOBG_PARALLEL
+  ? Math.max(1, parseInt(process.env.PROCESS_NOBG_PARALLEL, 10))
+  : null;
+
+function governNobgParallel(t: MachineTelemetry | null): { chains: number; reason: string } {
+  if (NOBG_PARALLEL_FIXED) return { chains: NOBG_PARALLEL_FIXED, reason: `pinned via env=${NOBG_PARALLEL_FIXED}` };
+  if (!t) return { chains: 5, reason: "no telemetry → 5" };
+  // Memory bands (available MB, reclaimable-aware). Anchored so the common
+  // embed-concurrent case (~3–3.5GB free) keeps today's 5 chains — never a
+  // regression — and only climbs when embed is idle and RAM is genuinely free.
+  let chains: number;
+  if (t.freeMemMb < 1500) chains = 2;
+  else if (t.freeMemMb < 2500) chains = 3;
+  else if (t.freeMemMb < 3500) chains = 5;
+  else if (t.freeMemMb < 4500) chains = 6;
+  else chains = NOBG_PARALLEL_MAX;
+  const why = [`mem ${t.freeMemMb}MB→${chains}`];
+  // Thermal (pmset CPU_Speed_Limit < 100 ⇒ throttling on the fanless chassis).
+  if (t.cpuSpeedLimitPct != null && t.cpuSpeedLimitPct < 60) {
+    chains = Math.min(chains, 2);
+    why.push(`throttle ${t.cpuSpeedLimitPct}%`);
+  } else if (t.cpuSpeedLimitPct != null && t.cpuSpeedLimitPct < 85) {
+    chains = Math.min(chains, 4);
+    why.push(`warm ${t.cpuSpeedLimitPct}%`);
+  }
+  // Power: don't hammer the battery; this box is meant to live on AC.
+  if (t.onACPower === false) {
+    chains = Math.min(chains, 3);
+    why.push("on battery");
+  }
+  chains = Math.max(2, Math.min(NOBG_PARALLEL_MAX, chains));
+  return { chains, reason: why.join(", ") };
+}
 
 let stopping = false;
 
@@ -324,7 +372,12 @@ async function handleProcessingJob(data: ProcessingJobData, jobId: string): Prom
   let moreRemains = false;
   try {
     if (data.kind === "nobg") {
-      const result = await runNobgBatch({ limit: data.limit, log });
+      const telem = await getMachineTelemetry().catch(() => null);
+      const { chains, reason } = governNobgParallel(telem);
+      log(
+        `nobg capacity governor → ${chains} parallel chains (${reason}; cpu ${telem?.cpuUsagePct ?? "?"}% used, ${telem?.freeMemMb ?? "?"}MB free, thermal ${telem?.cpuSpeedLimitPct ?? "?"}%)`,
+      );
+      const result = await runNobgBatch({ limit: data.limit, log, parallel: chains });
       log(
         `nobg batch done: processed=${result.processed} failed=${result.failed} remaining≈${result.remaining} hasNobg+=${result.hasNobgUpdated}`,
       );
@@ -341,7 +394,12 @@ async function handleProcessingJob(data: ProcessingJobData, jobId: string): Prom
         }
       }
       statusJobFinished(jobId, data.kind, `processed ${result.processed}, failed ${result.failed}`);
-      moreRemains = result.remaining > 0;
+      // Chain while we're still making progress. `remaining` is the tool's
+      // "Found N − limit" estimate (0 once fewer than `limit` candidates are
+      // left). If that estimate failed to parse (−1) but the batch DID process
+      // images, chain once more and let the next batch discover the true floor —
+      // a batch that processes 0 (only quarantined/none left) stops the chain.
+      moreRemains = result.processed > 0 && result.remaining !== 0;
     } else {
       const result = await runEmbedBatch({ limit: data.limit, log });
       statusJobFinished(jobId, data.kind, `batch complete (limit ${data.limit})`);
@@ -415,9 +473,13 @@ async function maybeTriggerProcessingAfterDrain(): Promise<void> {
  * cron or a manual tap. Respects the Autopilot kill switch + processing
  * gate (checked here AND at claim time, since these are sweep batches).
  */
+// Re-feed cadence for the self-healing backlog loop. Was 10min — too slack:
+// after an embed/upload burst frees a slot, nobg should resume within a couple
+// minutes, not sit idle for ten. The enqueue is singleton-guarded so a faster
+// tick can't stack duplicate batches.
 const IDLE_SWEEP_INTERVAL_MS = Math.max(
-  60_000,
-  parseInt(process.env.IDLE_SWEEP_INTERVAL_MS ?? "600000", 10),
+  30_000,
+  parseInt(process.env.IDLE_SWEEP_INTERVAL_MS ?? "120000", 10),
 );
 
 async function idleBacklogLoop(): Promise<void> {
@@ -467,12 +529,25 @@ async function idleBacklogLoop(): Promise<void> {
   }
 }
 
+// Surface "running on battery" at most every 30 min — on battery the Mac
+// sleeps on lid-close (worker suspends → multi-hour idle gaps) and the capacity
+// governor throttles, so this is usually the real reason throughput stalls.
+let lastBatteryWarnAt = 0;
+
 async function heartbeatLoop(): Promise<void> {
   while (!stopping) {
     try {
       // Machine telemetry rides the heartbeat so the CLOUD dashboard can show
       // the home server's memory/disk/thermal/power from anywhere.
       const telemetry = await getHeartbeatTelemetry().catch(() => null);
+      const power = telemetry as { onACPower?: boolean; batteryPct?: number } | null;
+      if (power && power.onACPower === false && Date.now() - lastBatteryWarnAt > 30 * 60_000) {
+        lastBatteryWarnAt = Date.now();
+        recordIssue(
+          "power",
+          `Home server is on BATTERY (${power.batteryPct ?? "?"}%), not AC. Plug it in: on battery the Mac sleeps on lid-close (worker suspends) and processing is throttled — the main cause of multi-hour idle gaps in nobg/embed.`,
+        );
+      }
       await upsertWorkerHeartbeat({
         workerId: WORKER_ID,
         hostname: os.hostname(),
