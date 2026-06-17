@@ -55,6 +55,8 @@ export function ConfigureView() {
   const [search, setSearch] = useState("");
   const [showBacklog, setShowBacklog] = useState(true);
 
+  const [addUrl, setAddUrl] = useState("");
+
   const retailers = useMemo(() => data?.retailers ?? [], [data]);
   const counts = useMemo(() => {
     const c: Record<Filter, number> = { all: retailers.length, identified: 0, running: 0, failed: 0 };
@@ -111,6 +113,48 @@ export function ConfigureView() {
           </Button>
         )}
       </header>
+
+      {/* Add a brand by URL → adds to the template + runs the full pipeline. */}
+      <Card>
+        <form
+          className="space-y-2 p-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const url = addUrl.trim();
+            if (!url || busyKey !== null) return;
+            const label = `Add & run ${hostOf(url) || url}`;
+            void runJob(`add-url:${url}`, label, () => api.addBrandUrl(url));
+            setAddUrl("");
+          }}
+        >
+          <label htmlFor="add-brand-url" className="block text-sm font-medium text-gray-900">
+            Add a brand by URL{" "}
+            <span className="font-normal text-gray-400">
+              — identifies the config (AI rungs allowed), then auto crawls, uploads &amp; processes
+            </span>
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              id="add-brand-url"
+              data-testid="add-brand-url"
+              type="url"
+              inputMode="url"
+              value={addUrl}
+              onChange={(e) => setAddUrl(e.target.value)}
+              disabled={busyKey !== null}
+              placeholder="https://brand.com"
+              className="h-9 min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:border-gray-400 focus:outline-none disabled:cursor-not-allowed disabled:bg-gray-50"
+            />
+            <Button type="submit" variant="primary" disabled={busyKey !== null || !addUrl.trim()}>
+              Add &amp; run
+            </Button>
+          </div>
+          <p className="text-xs text-gray-400">
+            Non-Shopify sites may spend Gemini/browser credits. Requires Autopilot on to roll all the
+            way to processing.
+          </p>
+        </form>
+      </Card>
 
       {/* Backlog first — it's the work queue for this stage. */}
       {backlog.length > 0 && (

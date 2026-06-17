@@ -15,6 +15,7 @@ import {
   bootstrapBrandsFromJson,
   listBrands,
   isPipelineEligible,
+  addToMasterList,
   type DiscoveredBrand,
   type DiscoverBrandsOptions,
 } from "./discoverBrands.js";
@@ -788,6 +789,56 @@ app.post("/api/explore", async (req, res) => {
     skippedUrls,
     skippedCount: skippedUrls.length,
     parallelism: jobInfo.parallelism,
+  });
+});
+
+/**
+ * One-shot "add a brand by URL and run the whole pipeline" — the dashboard's
+ * paste-a-URL box (desktop + mobile). Adds the URL to the master list (the
+ * brand template/curation), then kicks the FULL identify ladder — paid rungs
+ * (Gemini, then a Browserbase session) ALLOWED, so it works for non-Shopify
+ * sites the free rungs can't configure. On a usable config the conveyor
+ * auto-chain (maybeChain) carries it straight through crawl → upload →
+ * processing, so no further taps are needed (when Autopilot is on, which it is
+ * by default). Returns the explore jobId so the UI can stream its log.
+ */
+app.post("/api/pipeline/add-url", async (req, res) => {
+  const { url: rawUrl, name } = req.body as { url?: string; name?: string };
+  const url = cleanUrl(String(rawUrl ?? ""));
+  if (!url) {
+    res.status(400).json({ error: "Provide a brand URL (e.g. https://brand.com)." });
+    return;
+  }
+  try {
+    new URL(url);
+  } catch {
+    res.status(400).json({ error: `Not a valid URL: ${rawUrl}` });
+    return;
+  }
+
+  const retailer = retailerSlugFromUrl(url);
+  // 1. Add to the master list (the template / curation) so the brand is tracked
+  //    even if identify later needs a retry. Non-fatal: ON CONFLICT DO NOTHING.
+  try {
+    await addToMasterList(url, typeof name === "string" && name.trim() ? name.trim() : undefined);
+  } catch (err) {
+    console.error("[api/pipeline/add-url] addToMasterList failed (continuing):", err);
+  }
+
+  // 2. Full identify ladder (NO freeRungsOnly → paid AI rungs allowed). The
+  //    explore-completed conveyor hook chains crawl → upload → processing.
+  fs.mkdirSync(CONFIGS_DIR, { recursive: true });
+  const jobInfo = await createExploreJob([url], 1);
+
+  const autopilotOn = await isAutoPipelineEnabled();
+  res.json({
+    jobId: jobInfo.jobId,
+    url,
+    retailer,
+    autopilotOn,
+    message: autopilotOn
+      ? "Identifying config (AI rungs allowed); auto-crawl → upload → process will follow."
+      : "Identifying config (AI rungs allowed). Autopilot is OFF — turn it on so it auto-crawls, uploads and processes.",
   });
 });
 

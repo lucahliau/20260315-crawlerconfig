@@ -72,6 +72,7 @@ export function MobilePipeline() {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [addUrl, setAddUrl] = useState("");
 
   useEffect(() => {
     api
@@ -176,6 +177,46 @@ export function MobilePipeline() {
           ))}
         </div>
       </div>
+
+      {/* Add a brand by URL → template + full auto pipeline */}
+      <form
+        className="space-y-2 rounded-xl border border-gray-800 bg-gray-900 p-3.5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const url = addUrl.trim();
+          if (!url || busy !== null) return;
+          void runAction(`add-url:${url}`, async () => {
+            const r = await api.addBrandUrl(url);
+            setAddUrl("");
+            setLogTarget({ url: api.jobStreamUrl(r.jobId), title: `Add & run · ${r.retailer}` });
+          });
+        }}
+      >
+        <p className="text-sm font-semibold text-gray-100">Add a brand by URL</p>
+        <p className="text-[11px] text-gray-500">
+          identifies the config (AI rungs allowed), then auto crawls, uploads &amp; processes
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            type="url"
+            inputMode="url"
+            autoCapitalize="none"
+            autoCorrect="off"
+            value={addUrl}
+            onChange={(e) => setAddUrl(e.target.value)}
+            disabled={busy !== null}
+            placeholder="https://brand.com"
+            className="h-10 min-w-0 flex-1 rounded-xl border border-gray-700 bg-gray-950 px-3 text-[13px] text-gray-100 placeholder:text-gray-600 focus:border-gray-500 focus:outline-none disabled:opacity-40"
+          />
+          <button
+            type="submit"
+            disabled={busy !== null || !addUrl.trim()}
+            className="h-10 shrink-0 rounded-xl bg-emerald-500 px-4 text-[13px] font-semibold text-white active:bg-emerald-600 disabled:opacity-40"
+          >
+            {busy?.startsWith("add-url") ? "Starting…" : "Add & run"}
+          </button>
+        </div>
+      </form>
 
       {error && (
         <div className="rounded-xl border border-red-900 bg-red-950/60 px-3.5 py-2.5 text-xs text-red-300">

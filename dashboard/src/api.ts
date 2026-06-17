@@ -412,6 +412,16 @@ export const api = {
 
   // --- Retailer pipeline ---
   getRetailersOverview: () => request<RetailersOverviewResponse>("/api/retailers-overview"),
+  /**
+   * One-shot: add a brand by URL to the template, then run the FULL identify
+   * ladder (paid AI rungs allowed) — the conveyor auto-chains crawl → upload →
+   * process. Returns the explore jobId so the caller can stream its log.
+   */
+  addBrandUrl: (url: string, name?: string) =>
+    request<{ jobId: string; url: string; retailer: string; autopilotOn: boolean; message: string }>(
+      "/api/pipeline/add-url",
+      { method: "POST", body: JSON.stringify({ url, name }) },
+    ),
   explore: (urls: string[], skipExisting = true) =>
     request<{ jobId: string; skippedUrls: string[]; skippedCount: number }>("/api/explore", {
       method: "POST",
