@@ -60,7 +60,11 @@ function runBridged(
     const tail: string[] = [];
     const emit = (line: string) => {
       tail.push(line);
-      if (tail.length > 40) tail.shift();
+      // Keep a generous tail: a crash traceback can sit behind dozens of noisy
+      // per-item "download failed" lines, and a too-small tail evicted the real
+      // error before it reached Postgres (embed_worker exit -1 was undiagnosable
+      // remotely for exactly this reason).
+      if (tail.length > 120) tail.shift();
       opts.onLine(line);
     };
 
@@ -199,7 +203,7 @@ export async function runNobgBatch(opts: {
   );
 
   if (timedOut || exitCode !== 0) {
-    const detail = tail.slice(-6).join(" | ").slice(0, 1000);
+    const detail = tail.slice(-25).join(" | ").slice(0, 4000);
     throw new Error(
       `remove-bg-parallel exited ${exitCode}${timedOut ? " (timeout)" : ""}${detail ? ` — ${detail}` : ""}`,
     );
@@ -297,7 +301,7 @@ export async function runEmbedBatch(opts: {
     throw new RetryableExitError(124, "embed_worker MPS watchdog (exit 124) — retry resumes");
   }
   if (timedOut || exitCode !== 0) {
-    const detail = tail.slice(-6).join(" | ").slice(0, 1000);
+    const detail = tail.slice(-25).join(" | ").slice(0, 4000);
     throw new Error(
       `embed_worker exited ${exitCode}${timedOut ? " (timeout)" : ""}${detail ? ` — ${detail}` : ""}`,
     );
