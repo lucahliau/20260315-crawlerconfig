@@ -55,6 +55,7 @@ import {
 } from "./queue.js";
 import { runForDomain, domainKey } from "./domainGate.js";
 import { getProcessingBacklog, runEmbedBatch, runNobgBatch } from "./processing/bridge.js";
+import { reconcileHasNobg } from "./processing/reconcile.js";
 import {
   getHeartbeatTelemetry,
   getMachineTelemetry,
@@ -529,6 +530,46 @@ async function idleBacklogLoop(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// hasNobg ⇄ R2 reconciliation loop — the safety net populate-has-nobg never had
+// ---------------------------------------------------------------------------
+// The live per-image flip (setHasNobgForKeys) can't see items already done in R2
+// but stale in the DB (re-crawls, swallowed writes, the migration default) — the
+// tool skips them as "done" so they're never processed → never flipped →
+// permanent phantom backlog. This loop heals it from R2 truth automatically: a
+// cheap FORWARD pass (only hasNobg=false rows) every RECONCILE_INTERVAL_MS, and a
+// FULL bidirectional pass (also demotes rows whose -nobg.png 404s) every
+// RECONCILE_FULL_EVERY ticks. HEAD-only, so it's light enough to run often.
+const RECONCILE_INTERVAL_MS = Math.max(
+  10 * 60_000,
+  parseInt(process.env.RECONCILE_INTERVAL_MS ?? String(2 * 60 * 60_000), 10), // default 2h
+);
+const RECONCILE_FULL_EVERY = Math.max(1, parseInt(process.env.RECONCILE_FULL_EVERY ?? "6", 10)); // full ~every 12h
+let reconcileTick = 0;
+
+async function reconcileLoop(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 3 * 60_000)); // let boss/heartbeat settle first
+  while (!stopping) {
+    try {
+      // Respect the kill switch + processing gate, like the sweeps do.
+      if ((await isAutoPipelineEnabled()) && (await getSetting<boolean>("gate_processing", true))) {
+        const mode = reconcileTick % RECONCILE_FULL_EVERY === 0 ? "full" : "forward"; // tick 0 = full
+        reconcileTick++;
+        await reconcileHasNobg({
+          mode,
+          log: (line) => {
+            console.log(`[worker=${WORKER_ID}] ${line}`);
+            recordActivity(line);
+          },
+        });
+      }
+    } catch (err) {
+      console.error(`[worker=${WORKER_ID}] reconcile loop failed:`, err);
+    }
+    await new Promise((r) => setTimeout(r, RECONCILE_INTERVAL_MS));
+  }
+}
+
 // Surface "running on battery" at most every 30 min — on battery the Mac
 // sleeps on lid-close (worker suspends → multi-hour idle gaps) and the capacity
 // governor throttles, so this is usually the real reason throughput stalls.
@@ -589,9 +630,11 @@ async function main(): Promise<void> {
   // Heartbeat in the background.
   void heartbeatLoop();
 
-  // Self-feeding backlog drain (processing-capable workers only).
+  // Self-feeding backlog drain + hasNobg⇄R2 reconciliation (processing-capable
+  // workers only — they have the R2 access these need).
   if (WORKER_QUEUES.includes(QUEUES.PROCESS_NOBG) || WORKER_QUEUES.includes(QUEUES.PROCESS_EMBED)) {
     void idleBacklogLoop();
+    void reconcileLoop();
   }
 
   // Local status dashboard (http://localhost:4577) + keep-awake assertion.
