@@ -54,6 +54,33 @@ in_scope() {
   return 1
 }
 
+# Keep the background-removal / embedding tools current too. They live in a
+# SEPARATE repo (bgremoverimages) the worker shells out to per batch
+# (`npx tsx remove-bg-parallel.ts`), so a code fix there takes effect on the
+# NEXT batch with no worker restart. We checkout ONLY code (*.ts/*.py/*.sh) from
+# origin and NEVER reset --hard: that repo tracks dirty runtime artifacts
+# (embed-*.jsonl/.json/.log) and the worker writes untracked progress
+# (history.jsonl, progress.json) that a hard reset would wipe → reprocessing.
+update_bgremover() {
+  local BG BR NEW MARK
+  BG="${BGREMOVER_DIR:-$HOME/Desktop/20260315 bgremoverimages}"
+  [ -d "$BG/.git" ] || return 0
+  BR="$(git -C "$BG" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
+  git -C "$BG" fetch --quiet origin "$BR" 2>>"$LOG" || { log "bgremover fetch failed"; return 0; }
+  NEW="$(git -C "$BG" rev-parse "origin/$BR" 2>/dev/null)"
+  [ -z "$NEW" ] && return 0
+  MARK="$HOME/Library/Logs/.bgremover-applied"
+  [ -f "$MARK" ] && [ "$(cat "$MARK" 2>/dev/null)" = "$NEW" ] && return 0   # already synced
+  if git -C "$BG" checkout "origin/$BR" -- '*.ts' '*.py' '*.sh' 2>>"$LOG"; then
+    echo "$NEW" > "$MARK"
+    log "bgremover code synced to ${NEW:0:7} (applies on next batch; no restart)"
+    crumb "bgremover code synced to ${NEW:0:7} (applies on next nobg/embed batch)" "info"
+  else
+    log "bgremover checkout warned — left as-is"
+  fi
+}
+update_bgremover
+
 git fetch --quiet origin "$BRANCH" 2>>"$LOG" || { log "git fetch failed — skipping"; exit 0; }
 
 LOCAL="$(git rev-parse HEAD 2>/dev/null)"
@@ -64,27 +91,31 @@ if [ "$LOCAL" = "$REMOTE" ]; then exit 0; fi   # up to date — quiet no-op
 CHANGED="$(git diff --name-only HEAD "origin/$BRANCH")"
 if [ -z "$CHANGED" ]; then exit 0; fi
 
+IN_SCOPE=""
 OUT_OF_SCOPE=""
 while IFS= read -r f; do
   [ -z "$f" ] && continue
-  in_scope "$f" || OUT_OF_SCOPE+="$f "
+  if in_scope "$f"; then IN_SCOPE+="$f "; else OUT_OF_SCOPE+="$f "; fi
 done <<< "$CHANGED"
 
 SHORT_LOCAL="${LOCAL:0:7}"; SHORT_REMOTE="${REMOTE:0:7}"
 
-if [ -n "$OUT_OF_SCOPE" ]; then
-  MSG="update $SHORT_LOCAL→$SHORT_REMOTE NOT auto-applied — out-of-scope files: ${OUT_OF_SCOPE}. Run update.sh manually."
-  log "$MSG"
-  crumb "$MSG" "warn"
+# Apply only when WORKER-side (in-scope) code changed. Out-of-scope files (cloud
+# server, dashboard, schema) may ride along — harmless, the M1 never runs them —
+# so they no longer BLOCK a needed worker update (the old all-or-nothing gate
+# stranded the M1 whenever a server change landed first on shared main). A push
+# touching ONLY out-of-scope files still does nothing here (no needless restart).
+if [ -z "$IN_SCOPE" ]; then
+  log "no in-scope changes $SHORT_LOCAL→$SHORT_REMOTE (out-of-scope only: ${OUT_OF_SCOPE:-none}) — skipping crawler restart."
   exit 0
 fi
 
 if [ "$DRY_RUN" = "1" ]; then
-  log "DRY_RUN: would auto-apply $SHORT_LOCAL→$SHORT_REMOTE (in scope): $(echo "$CHANGED" | tr '\n' ' ')"
+  log "DRY_RUN: would apply $SHORT_LOCAL→$SHORT_REMOTE — in-scope: ${IN_SCOPE}${OUT_OF_SCOPE:+| also pulled (not run on M1): $OUT_OF_SCOPE}"
   exit 0
 fi
 
-log "auto-applying $SHORT_LOCAL→$SHORT_REMOTE (in scope): $(echo "$CHANGED" | tr '\n' ' ')"
+log "auto-applying $SHORT_LOCAL→$SHORT_REMOTE — in-scope: ${IN_SCOPE}${OUT_OF_SCOPE:+| also pulled (not run on M1): $OUT_OF_SCOPE}"
 
 # Reset to remote — only touches tracked files; gitignored configs/ and .env
 # are untouched. Worker/processing/status changes need no npm install (deps are
