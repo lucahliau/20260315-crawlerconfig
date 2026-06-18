@@ -136,8 +136,13 @@ export async function getProcessingBacklog(): Promise<ProcessingBacklog> {
   const pool = getPool();
   if (!pool) return { needsNobg: 0, needsEmbed: 0 };
   const { rows } = await pool.query(
+    // `hasNobg IS NOT TRUE` (not `NOT hasNobg`): in SQL three-valued logic
+    // `NOT NULL` = NULL, which a FILTER drops — so the old predicate counted ONLY
+    // the explicit-`false` rows and silently ignored every never-processed
+    // `hasNobg IS NULL` item. That made the self-feeding backlog loop blind to the
+    // bulk of the nobg backlog (it saw a few hundred, not ~10k) → nobg stalled.
     `SELECT
-       COUNT(*) FILTER (WHERE NOT ci."hasNobg") AS needs_nobg,
+       COUNT(*) FILTER (WHERE ci."hasNobg" IS NOT TRUE) AS needs_nobg,
        COUNT(*) FILTER (WHERE ci."hasNobg" AND e."itemId" IS NULL) AS needs_embed
      FROM "ClothingItem" ci
      LEFT JOIN (SELECT DISTINCT "itemId" FROM "ItemEmbedding") e ON e."itemId" = ci.id

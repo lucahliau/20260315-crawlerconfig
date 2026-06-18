@@ -81,11 +81,11 @@ update_bgremover() {
 }
 update_bgremover
 
-git fetch --quiet origin "$BRANCH" 2>>"$LOG" || { log "git fetch failed — skipping"; exit 0; }
+git fetch --quiet origin "$BRANCH" 2>>"$LOG" || { log "git fetch failed — skipping"; crumb "auto-update: git fetch failed (network/creds) — update NOT applied this cycle" "warn"; exit 0; }
 
 LOCAL="$(git rev-parse HEAD 2>/dev/null)"
 REMOTE="$(git rev-parse "origin/$BRANCH" 2>/dev/null)"
-if [ -z "$LOCAL" ] || [ -z "$REMOTE" ]; then log "could not resolve revisions — skipping"; exit 0; fi
+if [ -z "$LOCAL" ] || [ -z "$REMOTE" ]; then log "could not resolve revisions — skipping"; crumb "auto-update: could not resolve git revisions — update NOT applied" "warn"; exit 0; fi
 if [ "$LOCAL" = "$REMOTE" ]; then exit 0; fi   # up to date — quiet no-op
 
 CHANGED="$(git diff --name-only HEAD "origin/$BRANCH")"
