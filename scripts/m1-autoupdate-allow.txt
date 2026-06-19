@@ -33,6 +33,10 @@ scripts/m1-autoupdate-allow.txt
 scripts/record-worker-issue.ts
 scripts/install-m1-autoupdate.sh
 
+# Eager builder for the managed embed venv (self-heals the Python-3.14 venv that
+# crashed embed_worker). In-scope so it rides the same push as its bridge code.
+scripts/setup-embed-venv.ts
+
 # Read-only remote diagnostics (inert on the M1 — runs from any machine against
 # the shared Postgres; safe to auto-pull so the M1's copy stays current)
 scripts/diagnose-remote.ts

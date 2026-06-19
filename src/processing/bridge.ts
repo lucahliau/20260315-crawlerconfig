@@ -18,6 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { getPool } from "../pipelineStore.js";
+import { resolveEmbedPython } from "./embedPython.js";
 
 export const BGREMOVER_DIR =
   process.env.BGREMOVER_DIR ?? "/Users/lucaliautaud/Desktop/20260315 bgremoverimages";
@@ -103,6 +104,20 @@ function runBridged(
       resolve({ exitCode: code ?? -1, timedOut, tail });
     });
   });
+}
+
+/**
+ * Drop embed_worker's per-item download chatter from a captured tail so a real
+ * Python traceback isn't evicted by dozens of "download failed … 404" lines
+ * before it can ride a thrown error into Postgres. (That eviction is exactly why
+ * an embed crash long read as a bare ".../multiprocessing/res…" truncation
+ * instead of the real error.) Falls back to the raw tail if filtering would
+ * leave almost nothing.
+ */
+function meaningfulTail(tail: string[], n: number): string[] {
+  const noise = /download (failed|ok|future error)|download heartbeat/i;
+  const signal = tail.filter((l) => !noise.test(l));
+  return (signal.length >= 3 ? signal : tail).slice(-n);
 }
 
 /**
@@ -276,7 +291,14 @@ export async function runEmbedBatch(opts: {
   limit: number;
   log: (line: string) => void;
 }): Promise<EmbedBatchResult> {
-  const python = path.join(BGREMOVER_DIR, "venv", "bin", "python");
+  // Resolve a Python that can actually run embed_worker.py. The M1's bgremover
+  // venv was rebuilt on Homebrew python@3.14, where torch aborts in
+  // multiprocessing teardown (embed_worker exited -1 → ~0 embeddings while nobg
+  // kept draining). resolveEmbedPython rejects >=3.14, prefers a managed
+  // 3.11–3.13 venv, and self-heals by building one if needed — so the fix rides
+  // the auto-update with no SSH to the M1. The M4's healthy <BG>/venv (3.13) is
+  // accepted as-is, so nothing changes there.
+  const python = await resolveEmbedPython({ log: opts.log });
   const { exitCode, timedOut, tail } = await runBridged(
     python,
     [
@@ -306,9 +328,12 @@ export async function runEmbedBatch(opts: {
     throw new RetryableExitError(124, "embed_worker MPS watchdog (exit 124) — retry resumes");
   }
   if (timedOut || exitCode !== 0) {
-    const detail = tail.slice(-25).join(" | ").slice(0, 4000);
+    // Filter the per-item 404 chatter so the actual Python traceback survives
+    // the tail cut (see meaningfulTail). Tag the interpreter so a venv/version
+    // problem is obvious straight from scrape_errors.
+    const detail = meaningfulTail(tail, 25).join(" | ").slice(0, 4000);
     throw new Error(
-      `embed_worker exited ${exitCode}${timedOut ? " (timeout)" : ""}${detail ? ` — ${detail}` : ""}`,
+      `embed_worker exited ${exitCode}${timedOut ? " (timeout)" : ""} [py=${python}]${detail ? ` — ${detail}` : ""}`,
     );
   }
 
