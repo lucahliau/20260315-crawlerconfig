@@ -60,12 +60,15 @@ const MEMO_TTL_MS = 60 * 60_000;
 
 /**
  * Packages mirror bgremover's proven `embed:setup` (which works on the M4's 3.13
- * venv). numpy is explicit because embed_worker imports it directly. Overridable
+ * venv). numpy is explicit because embed_worker imports it directly. boto3 powers
+ * the authenticated-S3 download path (embed_worker auto-uses it when present, and
+ * falls back to the public URL otherwise — so it's NOT in the import probe and a
+ * boto3-less venv is still "usable"; it just lands on the next rebuild). Overridable
  * so a torch flavor can be tuned without a code change.
  */
 const PIP_PACKAGES = (
   process.env.PROCESS_EMBED_PIP_PACKAGES ??
-  "sentence-transformers psycopg2-binary pgvector pillow requests torch numpy"
+  "sentence-transformers psycopg2-binary pgvector pillow requests torch numpy boto3"
 )
   .split(/\s+/)
   .filter(Boolean);

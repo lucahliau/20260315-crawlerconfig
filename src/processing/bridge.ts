@@ -303,12 +303,14 @@ export async function runEmbedBatch(opts: {
     python,
     [
       "embed_worker.py",
-      // Download workers are network-bound (R2 fetch) — raising them fills the
-      // I/O wait that leaves the CPU ~60% idle, at negligible RAM cost. Batch
-      // size stays 32: that's the MPS/GPU memory knob and 8GB unified RAM is the
-      // ceiling, so we do NOT inflate it.
+      // Download workers are network-bound (R2 fetch). 16 against the public
+      // r2.dev URL draws per-IP 429s from one home IP, so the default is 8 while
+      // embed_worker fetches over the public URL; once the venv has boto3 it
+      // fetches via the authenticated S3 endpoint (no per-IP throttle) and this
+      // can be raised again via PROCESS_EMBED_DOWNLOAD_WORKERS. Batch size stays
+      // 32: that's the MPS/GPU memory knob bounded by 8GB unified RAM.
       "--download-workers",
-      process.env.PROCESS_EMBED_DOWNLOAD_WORKERS ?? "16",
+      process.env.PROCESS_EMBED_DOWNLOAD_WORKERS ?? "8",
       "--batch-size",
       process.env.PROCESS_EMBED_BATCH_SIZE ?? "32",
       "--limit",
