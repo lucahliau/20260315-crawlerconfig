@@ -189,6 +189,29 @@ async function findBasePython(log: Logger): Promise<string | null> {
     }
   }
 
+  // python.org framework installs (the installer also drops /usr/local symlinks,
+  // already covered above, but probe the framework path directly in case those
+  // were skipped).
+  for (const v of ["3.13", "3.12", "3.11"]) {
+    candidates.push(`/Library/Frameworks/Python.framework/Versions/${v}/bin/python${v}`);
+  }
+
+  // pyenv-managed versions (e.g. ~/.pyenv/versions/3.13.2/bin/python3).
+  try {
+    const versionsDir = path.join(
+      process.env.PYENV_ROOT ?? path.join(os.homedir(), ".pyenv"),
+      "versions",
+    );
+    for (const name of fs.readdirSync(versionsDir)) {
+      const m = name.match(/^3\.(\d+)/);
+      if (m && Number(m[1]) >= 9 && Number(m[1]) <= 13) {
+        candidates.push(path.join(versionsDir, name, "bin", "python3"));
+      }
+    }
+  } catch {
+    // no pyenv — fine
+  }
+
   // Anaconda (the M4 has 3.13 here) + bare PATH names as a last resort. The
   // version gate below rejects the M1's default python3 (3.14).
   candidates.push("/opt/anaconda3/bin/python3");
@@ -250,11 +273,14 @@ function recentBuildFailure(): number | null {
 async function buildManagedVenv(log: Logger): Promise<string> {
   const base = await findBasePython(log);
   if (!base) {
-    const msg =
+    // Deliberately do NOT write a cooldown marker here: "no base interpreter" is
+    // an instant, user-fixable failure (install python@3.13), so the next run —
+    // even without --rebuild — must retry immediately. The cooldown only exists
+    // to stop an expensive pip build from thrashing, which hasn't happened yet.
+    throw new EmbedPythonUnavailable(
       "Cannot build embed venv: no Python 3.11–3.13 base found. On the M1 run " +
-      "`brew install python@3.13`, or set EMBED_BASE_PYTHON=/abs/path/to/python3.13.";
-    writeMarker("failed", "no base 3.11–3.13 interpreter found");
-    throw new EmbedPythonUnavailable(msg);
+        "`brew install python@3.13`, or set EMBED_BASE_PYTHON=/abs/path/to/python3.13.",
+    );
   }
 
   const parent = path.dirname(MANAGED_VENV);
