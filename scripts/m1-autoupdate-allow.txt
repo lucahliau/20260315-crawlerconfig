@@ -37,6 +37,9 @@ scripts/install-m1-autoupdate.sh
 # crashed embed_worker). In-scope so it rides the same push as its bridge code.
 scripts/setup-embed-venv.ts
 
+# One-shot M1 recovery runbook (build venv + restart worker + revive updater).
+scripts/bootstrap-m1-embed-fix.sh
+
 # Read-only remote diagnostics (inert on the M1 — runs from any machine against
 # the shared Postgres; safe to auto-pull so the M1's copy stays current)
 scripts/diagnose-remote.ts
