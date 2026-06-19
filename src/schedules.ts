@@ -19,6 +19,7 @@ export async function registerSchedules(): Promise<void> {
   }
   const nobgLimit = Math.max(1, parseInt(process.env.PROCESS_NOBG_SWEEP_LIMIT ?? "200", 10));
   const embedLimit = Math.max(1, parseInt(process.env.PROCESS_EMBED_SWEEP_LIMIT ?? "5000", 10));
+  const personLimit = Math.max(1, parseInt(process.env.PROCESS_PERSON_SWEEP_LIMIT ?? "4000", 10));
 
   // boss.schedule upserts the cron per queue — idempotent across restarts.
   await boss.schedule(
@@ -33,8 +34,17 @@ export async function registerSchedules(): Promise<void> {
     { kind: "embed", limit: embedLimit, sweep: true },
     { tz: TZ },
   );
+  // People-photo scan twice daily (02:00 + 14:00) — catches model/lifestyle
+  // shots in newly-added brands without waiting a full day. The M1 worker also
+  // picks up unscanned items continuously via its idle-backlog loop.
+  await boss.schedule(
+    QUEUES.PROCESS_PERSON,
+    "0 2,14 * * *",
+    { kind: "person", limit: personLimit, sweep: true },
+    { tz: TZ },
+  );
   await boss.schedule(QUEUES.PIPELINE_SWEEP, "0 6 * * 1", { kind: "weekly-recrawl" }, { tz: TZ });
   console.log(
-    `[schedules] registered: nobg nightly 01:00 (limit ${nobgLimit}), embed nightly 04:00 (limit ${embedLimit}), weekly re-crawl Mon 06:00 (${TZ}).`,
+    `[schedules] registered: nobg nightly 01:00 (limit ${nobgLimit}), embed nightly 04:00 (limit ${embedLimit}), person-scan 02:00+14:00 (limit ${personLimit}), weekly re-crawl Mon 06:00 (${TZ}).`,
   );
 }

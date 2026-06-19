@@ -192,9 +192,12 @@ export interface ProcessingResponse {
   rates: {
     nobg: { last1h: number; last24h: number };
     embeddings: { last1h: number; last24h: number };
+    person?: { last1h: number; last24h: number };
   };
+  /** People-photo scan coverage: items scanned, products hidden, still to scan. */
+  person?: { scanned: number; hidden: number; needsScan: number };
   perRetailer: { retailer: string; total: number; nobg: number; embedded: number }[];
-  backlog?: { needsNobg: number; needsEmbed: number };
+  backlog?: { needsNobg: number; needsEmbed: number; needsPerson?: number };
   queues?: QueueStat[];
   workers?: WorkerHeartbeat[];
   homeServerOnline?: boolean;
@@ -477,12 +480,12 @@ export const api = {
       `/api/upload/${encodeURIComponent(retailer)}/enqueue`,
       { method: "POST", body: JSON.stringify(limit ? { limit } : {}) },
     ),
-  runProcessing: (kind: "nobg" | "embed" | "all", limit?: number) =>
+  runProcessing: (kind: "nobg" | "embed" | "person" | "all", limit?: number) =>
     request<{ jobIds: Record<string, string | null> }>("/api/processing/run", {
       method: "POST",
       body: JSON.stringify({ kind, ...(limit ? { limit } : {}) }),
     }),
-  cancelProcessing: (kind: "nobg" | "embed") =>
+  cancelProcessing: (kind: "nobg" | "embed" | "person") =>
     request<{ cancelled: number }>("/api/processing/cancel", {
       method: "POST",
       body: JSON.stringify({ kind }),

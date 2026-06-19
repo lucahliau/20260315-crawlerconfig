@@ -63,12 +63,15 @@ const MEMO_TTL_MS = 60 * 60_000;
  * venv). numpy is explicit because embed_worker imports it directly. boto3 powers
  * the authenticated-S3 download path (embed_worker auto-uses it when present, and
  * falls back to the public URL otherwise — so it's NOT in the import probe and a
- * boto3-less venv is still "usable"; it just lands on the next rebuild). Overridable
+ * boto3-less venv is still "usable"; it just lands on the next rebuild). ultralytics
+ * powers person_scan_worker.py's YOLO detector — also kept OUT of the import probe,
+ * so an ultralytics-less venv still embeds fine (only the person-scan job needs it;
+ * `npm run person-scan:setup` adds it without a full rebuild). Overridable
  * so a torch flavor can be tuned without a code change.
  */
 const PIP_PACKAGES = (
   process.env.PROCESS_EMBED_PIP_PACKAGES ??
-  "sentence-transformers psycopg2-binary pgvector pillow requests torch numpy boto3"
+  "sentence-transformers psycopg2-binary pgvector pillow requests torch numpy boto3 ultralytics"
 )
   .split(/\s+/)
   .filter(Boolean);

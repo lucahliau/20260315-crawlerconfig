@@ -144,12 +144,30 @@ export async function setHasNobgForKeys(keys: string[]): Promise<number> {
 export interface ProcessingBacklog {
   needsNobg: number;
   needsEmbed: number;
+  needsPerson: number;
 }
 
-/** Items still needing background removal / embeddings (active catalog only). */
+/** Items still needing a people-photo scan (active, never scanned). Separate +
+ *  guarded so a pre-migration DB (no personScannedAt column yet) returns 0
+ *  instead of breaking the nobg/embed counts the worker relies on. */
+async function getNeedsPerson(): Promise<number> {
+  const pool = getPool();
+  if (!pool) return 0;
+  try {
+    const { rows } = await pool.query(
+      `SELECT COUNT(*) AS n FROM "ClothingItem"
+       WHERE active = true AND "personScannedAt" IS NULL`,
+    );
+    return Number(rows[0]?.n ?? 0);
+  } catch {
+    return 0; // column not deployed yet
+  }
+}
+
+/** Items still needing background removal / embeddings / people-scan (active catalog only). */
 export async function getProcessingBacklog(): Promise<ProcessingBacklog> {
   const pool = getPool();
-  if (!pool) return { needsNobg: 0, needsEmbed: 0 };
+  if (!pool) return { needsNobg: 0, needsEmbed: 0, needsPerson: 0 };
   const { rows } = await pool.query(
     // `hasNobg IS NOT TRUE` (not `NOT hasNobg`): in SQL three-valued logic
     // `NOT NULL` = NULL, which a FILTER drops — so the old predicate counted ONLY
@@ -166,6 +184,7 @@ export async function getProcessingBacklog(): Promise<ProcessingBacklog> {
   return {
     needsNobg: Number(rows[0]?.needs_nobg ?? 0),
     needsEmbed: Number(rows[0]?.needs_embed ?? 0),
+    needsPerson: await getNeedsPerson(),
   };
 }
 
@@ -342,4 +361,68 @@ export async function runEmbedBatch(opts: {
   // The worker decides whether to chain another batch from the live backlog.
   const backlog = await getProcessingBacklog().catch(() => null);
   return { hitLimit: (backlog?.needsEmbed ?? 0) > 0 };
+}
+
+export interface PersonScanBatchResult {
+  /** True when backlog (unscanned active items) remains after this batch. */
+  hitLimit: boolean;
+  /** Parsed from the tool's DONE line, for the job log / dashboard. */
+  stripped: number;
+  hidden: number;
+}
+
+/**
+ * One bounded people-photo scan via person_scan_worker.py (DB-resumable; it
+ * selects active items with personScannedAt IS NULL itself, scans the ORIGINAL
+ * images with local YOLO, strips/repoints/hides in the DB, and renames rejected
+ * R2 objects). Reuses the embed venv (it has torch + boto3; ultralytics is added
+ * to PIP_PACKAGES so the next venv build includes it).
+ */
+export async function runPersonScanBatch(opts: {
+  limit: number;
+  log: (line: string) => void;
+}): Promise<PersonScanBatchResult> {
+  const python = await resolveEmbedPython({ log: opts.log });
+  const args = [
+    "person_scan_worker.py",
+    "--apply",
+    "--limit",
+    String(opts.limit),
+    "--download-workers",
+    process.env.PERSON_SCAN_DOWNLOAD_WORKERS ?? "8",
+    "--conf",
+    process.env.PERSON_SCAN_CONF ?? "0.40",
+    "--dominance-frac",
+    process.env.PERSON_SCAN_DOMINANCE_FRAC ?? "0.12",
+  ];
+  if (process.env.PERSON_SCAN_WEIGHTS) args.push("--weights", process.env.PERSON_SCAN_WEIGHTS);
+  if (process.env.PERSON_SCAN_FACE_MIN_NEIGHBORS)
+    args.push("--face-min-neighbors", process.env.PERSON_SCAN_FACE_MIN_NEIGHBORS);
+
+  let stripped = 0;
+  let hidden = 0;
+  const { exitCode, timedOut, tail } = await runBridged(python, args, {
+    cwd: BGREMOVER_DIR,
+    env: { ...process.env },
+    // Download-bound; ~8s/item worst case + warmup margin, under the 2h expiry.
+    timeoutMs: Math.min(opts.limit * 8_000 + 10 * 60_000, 110 * 60_000),
+    onLine: (line) => {
+      const m = line.match(/stripped=(\d+)\s+hidden=(\d+)/);
+      if (m) {
+        stripped = Number(m[1]);
+        hidden = Number(m[2]);
+      }
+      opts.log(line);
+    },
+  });
+
+  if (timedOut || exitCode !== 0) {
+    const detail = meaningfulTail(tail, 25).join(" | ").slice(0, 4000);
+    throw new Error(
+      `person_scan_worker exited ${exitCode}${timedOut ? " (timeout)" : ""} [py=${python}]${detail ? ` — ${detail}` : ""}`,
+    );
+  }
+
+  const backlog = await getProcessingBacklog().catch(() => null);
+  return { hitLimit: (backlog?.needsPerson ?? 0) > 0, stripped, hidden };
 }

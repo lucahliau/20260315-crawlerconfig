@@ -128,19 +128,36 @@ export function MobileProcess() {
           value={data ? `${data.rates.embeddings.last1h}/h` : "—"}
           sub={data ? `${data.rates.embeddings.last24h} in 24h` : ""}
         />
+        <StatCard
+          title="People scanned"
+          value={data?.person ? `${data.person.scanned}` : "—"}
+          sub={
+            data?.person
+              ? `${data.person.hidden} hidden · ${data.person.needsScan} to scan`
+              : "loading…"
+          }
+          pct={
+            data?.person && totals && totals.total > 0 ? data.person.scanned / totals.total : 0
+          }
+        />
       </div>
 
       {/* Queue depth */}
       <div className="space-y-1.5">
         <p className="text-xs font-medium text-gray-400">Processing queues</p>
-        {(["process-nobg", "process-embed"] as const).map((name) => {
+        {(["process-nobg", "process-embed", "process-person"] as const).map((name) => {
           const q = queueDepth(name);
+          const labels: Record<string, string> = {
+            "process-nobg": "Background removal",
+            "process-embed": "Embeddings",
+            "process-person": "People-photo scan",
+          };
           return (
             <div
               key={name}
               className="flex items-center justify-between rounded-xl border border-gray-800 bg-gray-900 px-3 py-2.5 text-[13px]"
             >
-              <span className="text-gray-200">{name === "process-nobg" ? "Background removal" : "Embeddings"}</span>
+              <span className="text-gray-200">{labels[name]}</span>
               <span className="tnum text-gray-400">
                 {q ? `${q.waiting} waiting · ${q.active} active · ${q.failed} failed` : "—"}
               </span>
@@ -189,8 +206,20 @@ export function MobileProcess() {
             {busy === "embed" ? "Queueing…" : "Embed items"}
           </button>
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          {(["nobg", "embed"] as const).map((kind) => (
+        <button
+          disabled={busy !== null}
+          onClick={() =>
+            void run("person", async () => {
+              await api.runProcessing("person");
+              return "People-photo scan queued — removes model shots, hides person-only products.";
+            })
+          }
+          className="flex h-11 w-full items-center justify-center rounded-xl border border-gray-700 bg-gray-900 text-sm font-medium text-gray-200 active:bg-gray-800 disabled:opacity-50"
+        >
+          {busy === "person" ? "Queueing…" : "Scan for people in photos"}
+        </button>
+        <div className="grid grid-cols-3 gap-2">
+          {(["nobg", "embed", "person"] as const).map((kind) => (
             <button
               key={kind}
               disabled={busy !== null}

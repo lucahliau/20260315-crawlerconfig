@@ -12,6 +12,8 @@ import { Card, ErrorBanner } from "./ui.tsx";
 export function ProcessView() {
   const [data, setData] = useState<ProcessingResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -21,6 +23,24 @@ export function ProcessView() {
       setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
+
+  const runPersonScan = useCallback(async () => {
+    setRunning(true);
+    setActionMsg(null);
+    try {
+      const { jobIds } = await api.runProcessing("person");
+      setActionMsg(
+        jobIds.person
+          ? `Queued people-photo scan (job ${jobIds.person}). The home server picks it up within seconds.`
+          : "Could not queue — is the queue (DATABASE_URL) configured?",
+      );
+      void load();
+    } catch (e: unknown) {
+      setActionMsg(`Failed to queue: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setRunning(false);
+    }
+  }, [load]);
 
   useEffect(() => {
     void load();
@@ -35,19 +55,33 @@ export function ProcessView() {
     nobg: { last1h: 0, last24h: 0 },
     embeddings: { last1h: 0, last24h: 0 },
   };
+  const person = data?.person ?? { scanned: 0, hidden: 0, needsScan: 0 };
+  const personRate = data?.rates?.person ?? { last1h: 0, last24h: 0 };
   const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0);
 
   return (
     <section className="space-y-6">
-      <header>
-        <h1 className="text-lg font-semibold tracking-tight">Post-processing</h1>
-        <p className="mt-1 max-w-2xl text-sm text-gray-500">
-          Background removal and CLIP embeddings run on the MacBook against the shared database —
-          progress here is read live from Postgres. Embeddings only run on items that already have a
-          clean image.
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Post-processing</h1>
+          <p className="mt-1 max-w-2xl text-sm text-gray-500">
+            Background removal, CLIP embeddings, and the people-photo scan run on the MacBook against
+            the shared database — progress here is read live from Postgres. Embeddings only run on
+            items that already have a clean image.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void runPersonScan()}
+          disabled={running}
+          className="shrink-0 rounded-md bg-gray-900 px-3 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+          title="Scan original product photos for people/models, strip them, and hide person-only products."
+        >
+          {running ? "Queuing…" : "Run people-photo scan"}
+        </button>
       </header>
 
+      {actionMsg && <p className="text-xs text-gray-500">{actionMsg}</p>}
       {error && <ErrorBanner>{error}</ErrorBanner>}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -67,6 +101,12 @@ export function ProcessView() {
           value={`${totals.embedded.toLocaleString()} · ${pct(totals.embedded, totals.nobg)}%`}
           sub={`of clean images · ${rates.embeddings.last1h.toLocaleString()} in the last hour · ${rates.embeddings.last24h.toLocaleString()} in 24h`}
           progress={pct(totals.embedded, totals.nobg)}
+        />
+        <StatCard
+          title="People-photo scan"
+          value={`${person.scanned.toLocaleString()} · ${pct(person.scanned, totals.total)}%`}
+          sub={`${person.hidden.toLocaleString()} hidden (person-only) · ${person.needsScan.toLocaleString()} to scan · ${personRate.last1h.toLocaleString()}/h`}
+          progress={pct(person.scanned, totals.total)}
         />
       </div>
 

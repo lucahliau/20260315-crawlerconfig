@@ -35,6 +35,8 @@ export const QUEUES = {
   PROCESS_NOBG: "process-nobg",
   /** CLIP embedding generation — bridged to embed_worker.py by the home worker. */
   PROCESS_EMBED: "process-embed",
+  /** People-photo detection/cleanup — bridged to person_scan_worker.py by the home worker. */
+  PROCESS_PERSON: "process-person",
   /** Control jobs claimed by the SERVER (weekly re-crawl sweep). */
   PIPELINE_SWEEP: "pipeline-sweep",
 } as const;
@@ -61,7 +63,7 @@ export interface CrawlRetailerJobData {
 }
 
 export interface ProcessingJobData {
-  kind: "nobg" | "embed";
+  kind: "nobg" | "embed" | "person";
   /**
    * Bounded batch size — keeps every job comfortably under the 2h expiry.
    * The worker re-enqueues a follow-up batch while backlog remains.
@@ -90,10 +92,16 @@ export async function enqueueProcessing(
 ): Promise<string | null> {
   const boss = await getBoss();
   if (!boss) return null;
-  const queue = data.kind === "nobg" ? QUEUES.PROCESS_NOBG : QUEUES.PROCESS_EMBED;
+  const queue =
+    data.kind === "nobg"
+      ? QUEUES.PROCESS_NOBG
+      : data.kind === "person"
+        ? QUEUES.PROCESS_PERSON
+        : QUEUES.PROCESS_EMBED;
   return boss.send(queue, data as unknown as Record<string, unknown>, {
     // Embed retries are cheap (DB-resumable; exit-124 MPS watchdog is expected
-    // occasionally), nobg batches re-list R2 so a retry only redoes failures.
+    // occasionally); nobg/person batches re-scan from the DB so a retry only
+    // redoes whatever is still unprocessed.
     retryLimit: data.kind === "embed" ? 5 : 2,
     retryDelay: 30,
     retryBackoff: true,
@@ -103,12 +111,17 @@ export async function enqueueProcessing(
 }
 
 /** Delete queued (not-yet-claimed) jobs for a processing queue. Active batches finish cleanly. */
-export async function cancelQueuedProcessing(kind: "nobg" | "embed"): Promise<number> {
+export async function cancelQueuedProcessing(kind: "nobg" | "embed" | "person"): Promise<number> {
   const boss = await getBoss();
   if (!boss) return 0;
   const db = getBossDb(boss);
   if (!db) return 0;
-  const queue = kind === "nobg" ? QUEUES.PROCESS_NOBG : QUEUES.PROCESS_EMBED;
+  const queue =
+    kind === "nobg"
+      ? QUEUES.PROCESS_NOBG
+      : kind === "person"
+        ? QUEUES.PROCESS_PERSON
+        : QUEUES.PROCESS_EMBED;
   const result = await db.executeSql(
     `DELETE FROM pgboss.job WHERE name = $1 AND state = 'created'`,
     [queue],

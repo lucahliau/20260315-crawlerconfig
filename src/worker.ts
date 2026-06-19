@@ -54,7 +54,12 @@ import {
   type UploadUrlJobData,
 } from "./queue.js";
 import { runForDomain, domainKey } from "./domainGate.js";
-import { getProcessingBacklog, runEmbedBatch, runNobgBatch } from "./processing/bridge.js";
+import {
+  getProcessingBacklog,
+  runEmbedBatch,
+  runNobgBatch,
+  runPersonScanBatch,
+} from "./processing/bridge.js";
 import { reconcileHasNobg } from "./processing/reconcile.js";
 import {
   getHeartbeatTelemetry,
@@ -79,7 +84,7 @@ const CONFIGS_DIR = process.env.CONFIGS_DIR ?? path.join(process.cwd(), "configs
  * Which queues this worker claims. Default = upload-url only, so an existing
  * Railway worker keeps its exact behavior and can never claim processing jobs
  * (it has no rembg/venv). The home M1 runs:
- *   WORKER_QUEUES=upload-url,process-nobg,process-embed
+ *   WORKER_QUEUES=upload-url,process-nobg,process-embed,process-person
  */
 const WORKER_QUEUES = (process.env.WORKER_QUEUES ?? QUEUES.UPLOAD_URL)
   .split(",")
@@ -401,6 +406,11 @@ async function handleProcessingJob(data: ProcessingJobData, jobId: string): Prom
       // images, chain once more and let the next batch discover the true floor —
       // a batch that processes 0 (only quarantined/none left) stops the chain.
       moreRemains = result.processed > 0 && result.remaining !== 0;
+    } else if (data.kind === "person") {
+      const result = await runPersonScanBatch({ limit: data.limit, log });
+      log(`person-scan batch done: stripped=${result.stripped} hidden=${result.hidden}`);
+      statusJobFinished(jobId, data.kind, `stripped ${result.stripped}, hidden ${result.hidden}`);
+      moreRemains = result.hitLimit;
     } else {
       const result = await runEmbedBatch({ limit: data.limit, log });
       statusJobFinished(jobId, data.kind, `batch complete (limit ${data.limit})`);
@@ -413,7 +423,12 @@ async function handleProcessingJob(data: ProcessingJobData, jobId: string): Prom
     // baked into `message`) so embed/nobg subprocess crashes are diagnosable off
     // the M1, not just in the local issue ring.
     await recordScrapeError({
-      code: data.kind === "embed" ? "EMBED_WORKER_CRASH" : "NOBG_BATCH_CRASH",
+      code:
+        data.kind === "embed"
+          ? "EMBED_WORKER_CRASH"
+          : data.kind === "person"
+            ? "PERSON_SCAN_CRASH"
+            : "NOBG_BATCH_CRASH",
       detail: message,
       stage: "process",
       jobId,
@@ -461,6 +476,16 @@ async function maybeTriggerProcessingAfterDrain(): Promise<void> {
       { singletonKey: `nobg:drain:${hourBucket}` },
     );
     if (id) console.log(`[worker=${WORKER_ID}] upload queue drained — enqueued nobg batch ${id}`);
+    // Also kick a people-photo scan so freshly-uploaded items from a new brand
+    // are vetted promptly (the "never added" guard), not only on the 2×/day cron.
+    if (WORKER_QUEUES.includes(QUEUES.PROCESS_PERSON)) {
+      const personLimit = Math.max(1, parseInt(process.env.PROCESS_PERSON_DEFAULT_LIMIT ?? "500", 10));
+      const pid = await enqueueProcessing(
+        { kind: "person", limit: personLimit, sweep: true },
+        { singletonKey: `person:drain:${hourBucket}` },
+      );
+      if (pid) console.log(`[worker=${WORKER_ID}] upload queue drained — enqueued person scan ${pid}`);
+    }
   } catch (err) {
     console.error(`[worker=${WORKER_ID}] drain-check failed:`, err);
   }
@@ -505,6 +530,12 @@ async function idleBacklogLoop(): Promise<void> {
             kind: "embed" as const,
             needs: backlog.needsEmbed,
             limit: Math.max(1, parseInt(process.env.PROCESS_EMBED_DEFAULT_LIMIT ?? "2000", 10)),
+          },
+          {
+            queue: QUEUES.PROCESS_PERSON,
+            kind: "person" as const,
+            needs: backlog.needsPerson,
+            limit: Math.max(1, parseInt(process.env.PROCESS_PERSON_DEFAULT_LIMIT ?? "500", 10)),
           },
         ];
         for (const t of targets) {
@@ -632,7 +663,11 @@ async function main(): Promise<void> {
 
   // Self-feeding backlog drain + hasNobg⇄R2 reconciliation (processing-capable
   // workers only — they have the R2 access these need).
-  if (WORKER_QUEUES.includes(QUEUES.PROCESS_NOBG) || WORKER_QUEUES.includes(QUEUES.PROCESS_EMBED)) {
+  if (
+    WORKER_QUEUES.includes(QUEUES.PROCESS_NOBG) ||
+    WORKER_QUEUES.includes(QUEUES.PROCESS_EMBED) ||
+    WORKER_QUEUES.includes(QUEUES.PROCESS_PERSON)
+  ) {
     void idleBacklogLoop();
     void reconcileLoop();
   }
@@ -680,7 +715,7 @@ async function main(): Promise<void> {
 
   // Processing queues: batchSize is ALWAYS 1 — a bridge job is internally
   // parallel (rembg chains / MPS batches); two at once would thrash the M1.
-  for (const queue of [QUEUES.PROCESS_NOBG, QUEUES.PROCESS_EMBED] as const) {
+  for (const queue of [QUEUES.PROCESS_NOBG, QUEUES.PROCESS_EMBED, QUEUES.PROCESS_PERSON] as const) {
     if (!WORKER_QUEUES.includes(queue)) continue;
     await boss.work<ProcessingJobData>(
       queue,

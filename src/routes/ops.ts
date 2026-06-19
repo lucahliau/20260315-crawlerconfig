@@ -65,12 +65,25 @@ export function createOpsRouter(): Router {
         FROM "ClothingItem"
         WHERE "hasNobg" = true
       `);
-      const [perRetailerR, embedRatesR, nobgRatesR, backlog, allQueues, workers] =
+      // People-photo scan coverage. Guarded (.catch) so a pre-migration DB
+      // (no hasPerson/personScannedAt columns yet) returns zeros instead of
+      // 500-ing the whole Process tab.
+      const personStatsQ = pg
+        .query(`
+          SELECT COUNT(*) FILTER (WHERE "personScannedAt" IS NOT NULL)::int            AS scanned,
+                 COUNT(*) FILTER (WHERE "hasPerson" = true)::int                        AS hidden,
+                 COUNT(*) FILTER (WHERE "personScannedAt" > NOW() - interval '1 hour')::int  AS last1h,
+                 COUNT(*) FILTER (WHERE "personScannedAt" > NOW() - interval '24 hours')::int AS last24h
+          FROM "ClothingItem"
+        `)
+        .catch(() => ({ rows: [{ scanned: 0, hidden: 0, last1h: 0, last24h: 0 }] }));
+      const [perRetailerR, embedRatesR, nobgRatesR, personStatsR, backlog, allQueues, workers] =
         await Promise.all([
           perRetailerQ,
           embedRatesQ,
           nobgRatesQ,
-          getProcessingBacklog().catch(() => ({ needsNobg: 0, needsEmbed: 0 })),
+          personStatsQ,
+          getProcessingBacklog().catch(() => ({ needsNobg: 0, needsEmbed: 0, needsPerson: 0 })),
           getQueueStats().catch(() => []),
           listWorkerHeartbeats().catch(() => []),
         ]);
@@ -84,8 +97,17 @@ export function createOpsRouter(): Router {
         { total: 0, nobg: 0, embedded: 0 },
       );
       const processingQueues = allQueues.filter(
-        (q) => q.name === QUEUES.PROCESS_NOBG || q.name === QUEUES.PROCESS_EMBED,
+        (q) =>
+          q.name === QUEUES.PROCESS_NOBG ||
+          q.name === QUEUES.PROCESS_EMBED ||
+          q.name === QUEUES.PROCESS_PERSON,
       );
+      const personRow = (personStatsR.rows[0] ?? { scanned: 0, hidden: 0, last1h: 0, last24h: 0 }) as {
+        scanned: number;
+        hidden: number;
+        last1h: number;
+        last24h: number;
+      };
       // "Home server online" = a fresh heartbeat from a worker that claims a
       // processing queue (heartbeats every 15s; stale after 120s).
       const homeServerOnline = workers.some(
@@ -99,6 +121,12 @@ export function createOpsRouter(): Router {
         rates: {
           nobg: nobgRatesR.rows[0] ?? { last1h: 0, last24h: 0 },
           embeddings: embedRatesR.rows[0] ?? { last1h: 0, last24h: 0 },
+          person: { last1h: personRow.last1h, last24h: personRow.last24h },
+        },
+        person: {
+          scanned: personRow.scanned,
+          hidden: personRow.hidden,
+          needsScan: backlog.needsPerson ?? 0,
         },
         perRetailer,
         backlog,
@@ -116,11 +144,12 @@ export function createOpsRouter(): Router {
   // sweep:false so they bypass the conveyor pause flag.
   router.post("/api/processing/run", async (req: Request, res: Response) => {
     const kind = req.body?.kind as string | undefined;
-    if (!kind || !["nobg", "embed", "all"].includes(kind)) {
-      return res.status(400).json({ error: 'kind must be "nobg", "embed" or "all"' });
+    if (!kind || !["nobg", "embed", "person", "all"].includes(kind)) {
+      return res.status(400).json({ error: 'kind must be "nobg", "embed", "person" or "all"' });
     }
     const nobgDefault = Math.max(1, parseInt(process.env.PROCESS_NOBG_DEFAULT_LIMIT ?? "100", 10));
     const embedDefault = Math.max(1, parseInt(process.env.PROCESS_EMBED_DEFAULT_LIMIT ?? "2000", 10));
+    const personDefault = Math.max(1, parseInt(process.env.PROCESS_PERSON_DEFAULT_LIMIT ?? "500", 10));
     const rawLimit = Number(req.body?.limit);
     try {
       const jobIds: Record<string, string | null> = {};
@@ -132,6 +161,11 @@ export function createOpsRouter(): Router {
         const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : embedDefault;
         jobIds.embed = await enqueueProcessing({ kind: "embed", limit });
       }
+      if (kind === "person" || kind === "all") {
+        const limit =
+          Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : personDefault;
+        jobIds.person = await enqueueProcessing({ kind: "person", limit });
+      }
       res.json({ jobIds });
     } catch (err) {
       console.error("[api/processing/run] Error:", err);
@@ -142,11 +176,11 @@ export function createOpsRouter(): Router {
   // Drop queued (unclaimed) processing jobs; an active batch finishes cleanly.
   router.post("/api/processing/cancel", async (req: Request, res: Response) => {
     const kind = req.body?.kind as string | undefined;
-    if (!kind || !["nobg", "embed"].includes(kind)) {
-      return res.status(400).json({ error: 'kind must be "nobg" or "embed"' });
+    if (!kind || !["nobg", "embed", "person"].includes(kind)) {
+      return res.status(400).json({ error: 'kind must be "nobg", "embed" or "person"' });
     }
     try {
-      const cancelled = await cancelQueuedProcessing(kind as "nobg" | "embed");
+      const cancelled = await cancelQueuedProcessing(kind as "nobg" | "embed" | "person");
       res.json({ cancelled });
     } catch (err) {
       console.error("[api/processing/cancel] Error:", err);
