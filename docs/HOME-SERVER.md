@@ -113,15 +113,13 @@ Two places:
   check for corrupted deps after sync: `find node_modules -maxdepth 4 -name "* 2" | wc -l`
   (>0 → `rm -rf node_modules && npm install`).
 
-## 5b. Scoped auto-update (deploy M1 fixes from any machine)
+## 5b. Auto-update (push from any machine → deploys to the M1)
 
-The M1 can pull + restart itself when a pushed change is **confined to the
-worker / processing / local-status code** — so you can fix and push the home
-worker from your other computer without touching this Mac. Anything broader
-(cloud server, React dashboard, DB schema, dependencies) is left for a manual
-`update.sh`, so unrelated pushes never silently redeploy the M1.
+The M1 hosts nothing but this worker, so it **fully self-deploys**: every push to
+`origin/main` lands here automatically. Fix + push from your other computer; no
+SSH, no one-off `update.sh`, ever.
 
-Install once (after a manual `update.sh` that brings in this commit):
+Install once:
 
 ```bash
 bash "$HOME/Desktop/20260315 crawlerconfig/scripts/install-m1-autoupdate.sh"
@@ -129,24 +127,36 @@ bash "$HOME/Desktop/20260315 crawlerconfig/scripts/install-m1-autoupdate.sh"
 
 This adds a `com.clothedd.crawler-autoupdate` LaunchAgent that runs
 `scripts/auto-update.sh` every 10 min (`AUTOUPDATE_INTERVAL_SECONDS` to change).
-Each run: `git fetch`; if local≠origin/main AND **every** changed file matches
-`scripts/m1-autoupdate-allow.txt`, it `git reset --hard`, restarts the worker,
-and logs a breadcrumb; otherwise it logs "update available, manual update
-needed" and does nothing.
+Each run:
 
-- **Scope** lives in `scripts/m1-autoupdate-allow.txt` (edit to tune; changes to
-  it are themselves in-scope). Default: `src/worker.ts`, `src/workerStatus.ts`,
-  `src/domainGate.ts`, `src/queue.ts`, `src/processing/**`, the updater scripts.
+1. **Syncs the sibling `bgremoverimages` repo** — checks out its `*.py/*.ts/*.sh`
+   from origin (code only; runtime artifacts like `embed-progress.json` are
+   preserved). New processing tools (e.g. `person_scan_worker.py`) arrive here
+   with no restart; they apply on the next batch.
+2. **`git fetch`**; if `local≠origin/main`, **always `git reset --hard origin/main`**
+   (the M1 has no server to protect — server/dashboard/schema files ride along
+   harmlessly, the worker never runs them) and `npm install` if a lockfile changed.
+3. **Restarts the worker only if it's warranted** — i.e. a worker / processing /
+   queue file changed (matches `scripts/m1-autoupdate-allow.txt`) or a dependency
+   changed. A pure cloud-server / dashboard / docs push just syncs the files and
+   leaves a resumable in-flight job running.
+
+- **New Python deps install themselves** on first use: e.g. the people-photo scan
+  pip-installs `ultralytics` into the embed venv via the bridge's
+  `ensurePipPackages` the first time a `process-person` job runs. So adding a
+  Python dep is just a code push — no manual `pip` on the M1.
+- **New queues need no `.env` edit**: a processing-capable worker (one whose
+  `WORKER_QUEUES` includes `process-nobg`/`process-embed`) auto-claims
+  `process-person` too (see `worker.ts`).
+- **Allowlist** (`scripts/m1-autoupdate-allow.txt`) now only decides the *restart*,
+  not whether to apply. Default worker-side set: `src/worker.ts`,
+  `src/workerStatus.ts`, `src/domainGate.ts`, `src/queue.ts`, `src/processing/**`,
+  the updater scripts.
 - **Visibility**: outcomes land in the cloud dashboard → **Errors → Worker
   issues** (and `~/Library/Logs/crawler-autoupdate.log`).
-- **Backlog rule**: if an out-of-scope change is pending on origin/main, *all*
-  later in-scope changes are also held until you run `update.sh` once to clear
-  HEAD up to origin/main. (Conservative on purpose — never a partial apply.)
 - **Dry run / test**: `DRY_RUN=1 bash scripts/auto-update.sh` (reports, never
   changes code). Uninstall: `launchctl unload` + `rm` the plist (see the script
   header).
-- **bgremover repo** is not auto-updated — changes there need a manual
-  `update.sh`.
 
 ## 6. Schedules (registered by the Railway server, claimed by this worker)
 

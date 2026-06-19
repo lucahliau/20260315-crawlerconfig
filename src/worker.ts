@@ -91,6 +91,16 @@ const WORKER_QUEUES = (process.env.WORKER_QUEUES ?? QUEUES.UPLOAD_URL)
   .map((s) => s.trim())
   .filter(Boolean);
 
+// A processing-capable worker (background removal / embeddings) ALSO runs the
+// people-photo scan. Auto-including it means enabling the scan needs no
+// WORKER_QUEUES .env edit on the M1 — a code push + auto-update is enough.
+if (
+  (WORKER_QUEUES.includes(QUEUES.PROCESS_NOBG) || WORKER_QUEUES.includes(QUEUES.PROCESS_EMBED)) &&
+  !WORKER_QUEUES.includes(QUEUES.PROCESS_PERSON)
+) {
+  WORKER_QUEUES.push(QUEUES.PROCESS_PERSON);
+}
+
 const PROCESS_CHAIN_DEPTH_MAX = 50;
 
 // ---------------------------------------------------------------------------

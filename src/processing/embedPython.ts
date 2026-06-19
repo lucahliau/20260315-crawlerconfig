@@ -140,6 +140,30 @@ function lastLine(s: string): string {
   return lines[lines.length - 1] ?? "";
 }
 
+/**
+ * Ensure extra pip packages are present in an already-resolved venv WITHOUT a
+ * full rebuild. Cheap: an import probe first (no-op when satisfied), then a
+ * targeted `pip install` only on a miss. Lets a job-specific dep (e.g.
+ * ultralytics for the people-photo scan) self-install on first use, so adding a
+ * Python dep needs no manual M1 step — just a code push.
+ */
+export async function ensurePipPackages(
+  python: string,
+  packages: string[],
+  importProbe: string,
+  log: Logger,
+): Promise<void> {
+  if (packages.length === 0) return;
+  const probe = await run(python, ["-c", importProbe], PROBE_TIMEOUT_MS);
+  if (probe.code === 0) return;
+  log(`[venv] ensuring deps (${packages.join(", ")}) — probe failed: ${lastLine(probe.stderr) || "import error"}`);
+  const res = await run(python, ["-m", "pip", "install", "--no-input", ...packages], BUILD_TIMEOUT_MS);
+  if (res.code !== 0) {
+    throw new EmbedPythonUnavailable(`pip install ${packages.join(" ")} failed: ${lastLine(res.stderr)}`);
+  }
+  log(`[venv] installed ${packages.join(", ")}`);
+}
+
 /** Can this interpreter actually run embed_worker.py? Version gate first (the
  *  real fix), then an import probe to catch a half-installed venv. */
 async function isUsable(py: string, log: Logger): Promise<boolean> {

@@ -1,14 +1,17 @@
 #!/bin/bash
 # ============================================================================
-# Scoped auto-updater for the Clothedd home (M1) worker.
+# Full auto-updater for the Clothedd home (M1) worker.
 #
 # Run periodically by the com.clothedd.crawler-autoupdate LaunchAgent (every
-# ~10 min). It pulls + restarts the worker ONLY when every change pending on
-# origin/main is confined to the M1 auto-update allowlist
-# (scripts/m1-autoupdate-allow.txt) — i.e. the worker / processing / local
-# status code. Anything touching the cloud server, the React dashboard, the DB
-# schema, or dependencies is left for a manual `update.sh`, so a remote push of
-# unrelated work can never silently redeploy this Mac.
+# ~10 min). The M1 hosts nothing but this worker, so it ALWAYS hard-syncs the
+# checkout to origin/main when behind — code lands on the M1 with no manual step,
+# pushed straight from the M4. The allowlist (scripts/m1-autoupdate-allow.txt)
+# now only decides whether to RESTART the worker: worker / processing / queue
+# code (or a dependency change) restarts it; a pure cloud-server / dashboard /
+# docs push just syncs the files and leaves a resumable in-flight job running.
+# New Python deps self-install on first use (bridge ensurePipPackages), and the
+# sibling bgremoverimages repo's *.py/*.ts/*.sh are synced too — so adding a new
+# processing tool or dep needs only a git push, never an SSH/one-off on the M1.
 #
 # Idempotent + safe to run on a timer: a no-op when already up to date, and a
 # restart mid-job is fine (pg-boss jobs are resumable).
@@ -100,31 +103,37 @@ done <<< "$CHANGED"
 
 SHORT_LOCAL="${LOCAL:0:7}"; SHORT_REMOTE="${REMOTE:0:7}"
 
-# Apply only when WORKER-side (in-scope) code changed. Out-of-scope files (cloud
-# server, dashboard, schema) may ride along — harmless, the M1 never runs them —
-# so they no longer BLOCK a needed worker update (the old all-or-nothing gate
-# stranded the M1 whenever a server change landed first on shared main). A push
-# touching ONLY out-of-scope files still does nothing here (no needless restart).
-if [ -z "$IN_SCOPE" ]; then
-  log "no in-scope changes $SHORT_LOCAL→$SHORT_REMOTE (out-of-scope only: ${OUT_OF_SCOPE:-none}) — skipping crawler restart."
-  exit 0
-fi
+# ALWAYS sync the checkout to origin/main when behind. The M1 hosts nothing but
+# this worker, so there's no server to protect: keeping it fully current (server
+# /dashboard/schema files ride along harmlessly, the worker never runs them)
+# avoids the stale-diff confusion the old scoped gate caused. The allowlist now
+# only decides whether to RESTART the worker — a pure dashboard/docs push syncs
+# the code without interrupting a resumable in-flight job. New Python deps
+# self-install on first use (bridge ensurePipPackages), so no venv step here.
+RESTART=0
+[ -n "$IN_SCOPE" ] && RESTART=1
+echo "$CHANGED" | grep -q "package-lock.json\|package.json" && RESTART=1
 
 if [ "$DRY_RUN" = "1" ]; then
-  log "DRY_RUN: would apply $SHORT_LOCAL→$SHORT_REMOTE — in-scope: ${IN_SCOPE}${OUT_OF_SCOPE:+| also pulled (not run on M1): $OUT_OF_SCOPE}"
+  log "DRY_RUN: would sync $SHORT_LOCAL→$SHORT_REMOTE (restart=$RESTART) — worker-side: ${IN_SCOPE:-none}${OUT_OF_SCOPE:+ | also: $OUT_OF_SCOPE}"
   exit 0
 fi
 
-log "auto-applying $SHORT_LOCAL→$SHORT_REMOTE — in-scope: ${IN_SCOPE}${OUT_OF_SCOPE:+| also pulled (not run on M1): $OUT_OF_SCOPE}"
+log "syncing $SHORT_LOCAL→$SHORT_REMOTE (restart=$RESTART) — worker-side: ${IN_SCOPE:-none}${OUT_OF_SCOPE:+ | also pulled: $OUT_OF_SCOPE}"
 
 # Reset to remote — only touches tracked files; gitignored configs/ and .env
-# are untouched. Worker/processing/status changes need no npm install (deps are
-# out of scope by allowlist), but install defensively if a lockfile slipped in.
+# are untouched.
 if ! git reset --hard "origin/$BRANCH" >>"$LOG" 2>&1; then
   log "git reset failed — leaving worker as-is"; crumb "auto-update git reset FAILED at $SHORT_REMOTE" "error"; exit 0
 fi
 if echo "$CHANGED" | grep -q "package-lock.json\|package.json"; then
   log "lockfile changed — npm install"; npm install --no-fund --no-audit >>"$LOG" 2>&1 || log "npm install warned"
+fi
+
+if [ "$RESTART" = "0" ]; then
+  log "synced to $SHORT_REMOTE — no worker-side change, worker left running."
+  crumb "auto-synced $SHORT_LOCAL→$SHORT_REMOTE (no restart needed)." "info"
+  exit 0
 fi
 
 # Restart the worker (mirrors the kit's update.sh).

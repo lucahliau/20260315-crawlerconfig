@@ -18,7 +18,10 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { getPool } from "../pipelineStore.js";
-import { resolveEmbedPython } from "./embedPython.js";
+import { ensurePipPackages, resolveEmbedPython } from "./embedPython.js";
+
+/** Once-per-process guard so we only probe/install the person-scan deps once. */
+let personDepsEnsured = false;
 
 export const BGREMOVER_DIR =
   process.env.BGREMOVER_DIR ?? "/Users/lucaliautaud/Desktop/20260315 bgremoverimages";
@@ -383,6 +386,12 @@ export async function runPersonScanBatch(opts: {
   log: (line: string) => void;
 }): Promise<PersonScanBatchResult> {
   const python = await resolveEmbedPython({ log: opts.log });
+  // Self-install the scan's extra deps into the venv on first use (cv2 ships
+  // with ultralytics) — so enabling people-scan on the M1 needs no manual pip.
+  if (!personDepsEnsured) {
+    await ensurePipPackages(python, ["ultralytics"], "import ultralytics, cv2", opts.log);
+    personDepsEnsured = true;
+  }
   const args = [
     "person_scan_worker.py",
     "--apply",
