@@ -35,6 +35,7 @@ export interface ShopifyProduct {
   product_type?: string | null;
   tags?: string[] | string | null;
   images?: ShopifyImage[] | null;
+  image?: ShopifyImage | null;
   variants?: ShopifyVariant[] | null;
   options?: ShopifyOption[] | null;
 }
@@ -80,10 +81,15 @@ function stripHtml(html: string | null | undefined): string {
 export function mapShopifyProductFields(product: ShopifyProduct, origin: string): ShopifyMappedFields {
   const handle = (product.handle ?? "").trim();
 
-  const images = (product.images ?? [])
+  let images = (product.images ?? [])
     .map((i) => (typeof i?.src === "string" ? i.src : ""))
     .filter(Boolean)
     .slice(0, MAX_GALLERY_IMAGES);
+  // Some Shopify products expose only the singular featured `image` (the gallery
+  // array is empty) — fall back to it so the item isn't dropped for "missing image".
+  if (images.length === 0 && typeof product.image?.src === "string") {
+    images = [product.image.src];
+  }
 
   // Representative variant = the lowest-priced one (matches the price Shopify
   // surfaces on the listing). Sale = that variant's compare_at_price > price.

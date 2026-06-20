@@ -1360,8 +1360,14 @@ export async function uploadRetailer(
           itemName = item.name ?? undefined;
           imageCount = allImages.length;
 
-          for (let imgIdx = 0; imgIdx < allImages.length; imgIdx++) {
-            const r2Url = await uploadImageToR2(allImages[imgIdx], config.retailer, externalId, imgIdx);
+          // Upload a product's images to R2 concurrently — they're distinct CDN
+          // assets (not storefront hits), so parallelizing is polite and ~Nx
+          // faster than the old sequential loop. Order preserved via the index.
+          const eid = externalId;
+          const r2Results = await Promise.all(
+            allImages.map((img, imgIdx) => uploadImageToR2(img, config.retailer, eid, imgIdx)),
+          );
+          for (const r2Url of r2Results) {
             if (r2Url) r2Images.push(r2Url);
           }
           uploadedToR2 = r2Images.length > 0;
