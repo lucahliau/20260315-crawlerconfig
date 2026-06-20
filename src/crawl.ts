@@ -359,6 +359,7 @@ async function crawlCategoryPagination(
       const page = stagehand.context.pages()[0];
 
       for (const startUrl of startUrls) {
+        let emptyStreak = 0;
         for (let p = 0; p < maxPages; p++) {
           const pageNum = pageStartsAt + p * pageIncrement;
           const separator = startUrl.includes("?") ? "&" : "?";
@@ -383,8 +384,12 @@ async function crawlCategoryPagination(
           log(`    Found ${links.length} links, ${urls.size - before} new product URLs`);
           onProgress(urls.size);
 
-          if (links.length === 0) {
-            log(`    No links found — stopping pagination for this category`);
+          // Tolerate a transient empty page (lazy hydration / slow-rendering grid):
+          // only stop after 2 consecutive pages add no NEW product URLs, mirroring
+          // the non-browser path. A single empty page no longer ends the category.
+          emptyStreak = urls.size === before ? emptyStreak + 1 : 0;
+          if (emptyStreak >= 2) {
+            log(`    No new URLs on 2 consecutive pages — stopping this category`);
             break;
           }
 

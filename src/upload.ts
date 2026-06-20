@@ -17,6 +17,7 @@ import {
   normalizeOffers,
 } from "./htmlExtract.js";
 import { classifyItem, normalizeGender, type Gender } from "./classify.js";
+import { mapShopifyProductFields, type ShopifyProduct } from "./shopifyIngest.js";
 
 // ---------------------------------------------------------------------------
 // Logging — same swappable pattern as explore.ts / crawl.ts
@@ -102,6 +103,8 @@ interface ClothingItemInput {
   subcategory: string | null;
   price: number | null;
   currency: string;
+  salePrice: number | null;
+  compareAtPrice: number | null;
   imageUrl: string | null;
   images: string[];
   colors: string[];
@@ -376,6 +379,18 @@ function extractFromOg(html: string): Partial<ClothingItemInput> {
     if (!isNaN(p)) result.price = p;
   }
 
+  // Best-effort sale signal: Facebook product tags expose the pre-sale price as
+  // `product:original_price:amount`. Only treat it as a sale when it exceeds the
+  // current price (the invariant is re-checked post-FX in normalizeItemPriceToUsd).
+  const ogOriginal = extractMetaContent(html, "product:original_price:amount");
+  if (ogOriginal && result.price != null) {
+    const op = parseFloat(ogOriginal);
+    if (!isNaN(op) && op > result.price) {
+      result.compareAtPrice = op;
+      result.salePrice = result.price;
+    }
+  }
+
   const ogCurrency = extractMetaContent(html, "og:price:currency") ?? extractMetaContent(html, "product:price:currency");
   if (ogCurrency) result.currency = ogCurrency;
 
@@ -646,6 +661,8 @@ function extractProductData(html: string, url: string, config: Config): Clothing
     subcategory: null,
     price: null,
     currency: "",
+    salePrice: null,
+    compareAtPrice: null,
     imageUrl: null,
     images: [],
     colors: [],
@@ -767,6 +784,97 @@ async function fetchShopifyGalleryImages(url: string): Promise<string[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Shopify-native ingestion (structured /products.json instead of HTML scraping)
+// ---------------------------------------------------------------------------
+
+/** True when this config should ingest products straight from the Shopify
+ *  product JSON (full gallery + variant price + compare_at_price) rather than
+ *  scraping each HTML product page. */
+function isShopifyNativeConfig(config: Config): boolean {
+  const d = config.discovery;
+  if (d.method !== "api") return false;
+  return d.api.shopifyNative === true || d.api.endpoint.endsWith("/products.json");
+}
+
+/** Fetch the full Shopify product object for a `/products/<handle>` URL.
+ *  Returns null on any failure (caller treats it like a failed page fetch). */
+async function fetchShopifyProductJson(url: string): Promise<ShopifyProduct | null> {
+  let jsonUrl: string;
+  try {
+    const u = new URL(url);
+    const handle = u.pathname.match(/\/products\/([^/?#]+)/);
+    if (!handle) return null;
+    jsonUrl = `${u.origin}/products/${handle[1]}.json`;
+  } catch {
+    return null;
+  }
+  try {
+    const res = await fetchWithRetry(jsonUrl);
+    if (!res.ok) return null;
+    const data = (await res.json()) as { product?: ShopifyProduct };
+    return data.product ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Build a ClothingItemInput from a Shopify product object, then run the shared
+ *  classifier + currency hint (reusing the per-page pipeline's downstream). */
+function buildShopifyNativeItem(product: ShopifyProduct, url: string, config: Config): ClothingItemInput {
+  let origin: string;
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    origin = config.baseUrl;
+  }
+  const f = mapShopifyProductFields(product, origin);
+
+  // Keep the structured variants/options/tags in metadata but drop the bulky
+  // blobs (description + image list already live in their own columns).
+  const { body_html: _bodyHtml, images: _images, ...metaRest } = product;
+
+  const item: ClothingItemInput = {
+    name: f.name,
+    description: f.description,
+    brand: f.brand,
+    category: f.category,
+    subcategory: null,
+    price: f.price,
+    currency: "",
+    salePrice: f.salePrice,
+    compareAtPrice: f.compareAtPrice,
+    imageUrl: f.images[0] ?? null,
+    images: f.images,
+    colors: f.colors,
+    sizes: f.sizes,
+    tags: f.tags,
+    gender: null,
+    productType: null,
+    isClothing: true,
+    classificationConfidence: null,
+    sourceUrl: f.sourceUrl,
+    metadata: metaRest as Record<string, unknown>,
+    retailer: config.retailer,
+    // externalId = variant SKU || null; the upload loop falls back to the URL
+    // slug (handle) when null, matching the per-page path so re-crawls update
+    // existing rows in place instead of inserting duplicates.
+    // Leave externalId null: the upload loop resolves the key (preserve an
+    // existing row's key via sourceUrl, else the URL handle) so re-crawls update
+    // in place. Keep the SKU as the manufacturer code.
+    externalId: null,
+    manufacturerCode: f.externalId,
+  };
+
+  // Reuse the shared classifier (gender/productType/isClothing) + category/colors
+  // fill. No HTML to scan, so pass "" — sizes/colors are already set from the
+  // Shopify options, so inferFromConfig won't overwrite them.
+  inferFromConfig(item, url, config, "");
+  finalizeCurrencyHint(item, url);
+  if (!item.imageUrl && item.images.length > 0) item.imageUrl = item.images[0];
+  return item;
+}
+
+// ---------------------------------------------------------------------------
 // Image upload to R2
 // ---------------------------------------------------------------------------
 
@@ -862,6 +970,18 @@ function normalizeItemPriceToUsd(item: ClothingItemInput, sourceUrl: string): vo
   item.price = rounded;
   item.currency = "USD";
 
+  // Convert the sale fields with the SAME resolved currency/rate, then re-assert
+  // the sale invariant: compareAtPrice must exceed the effective price to count
+  // as a real sale, else null both (handles FX rounding + spurious signals).
+  const toUsd = (v: number | null): number | null =>
+    v == null ? null : roundUsdPrice(convertToUsd(v, iso).usd);
+  item.salePrice = toUsd(item.salePrice);
+  item.compareAtPrice = toUsd(item.compareAtPrice);
+  if (item.compareAtPrice == null || item.compareAtPrice <= item.price) {
+    item.salePrice = null;
+    item.compareAtPrice = null;
+  }
+
   const shouldAddMeta = iso !== "USD" || notes.length > 0 || unknownCurrency;
   if (shouldAddMeta) {
     const prev =
@@ -884,7 +1004,32 @@ function normalizeItemPriceToUsd(item: ClothingItemInput, sourceUrl: string): vo
 // Database upsert
 // ---------------------------------------------------------------------------
 
+/** Compare two string arrays element-wise (order-sensitive). */
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 async function upsertClothingItem(item: ClothingItemInput, pool: Pool): Promise<void> {
+  // Detect whether a re-crawl actually changed this item's images. Only then do
+  // we reset the downstream processing (nobg/embed/person) — a blanket reset on
+  // every weekly sweep would re-process the whole catalog. retailer+externalId is
+  // the unique key (externalId is set by the caller before upsert).
+  let existingId: string | null = null;
+  let imagesChanged = false;
+  if (item.externalId != null) {
+    const ex = await pool.query<{ id: string; imageUrl: string | null; images: string[] | null }>(
+      'SELECT id, "imageUrl", images FROM "ClothingItem" WHERE retailer = $1 AND "externalId" = $2',
+      [item.retailer, item.externalId],
+    );
+    const prev = ex.rows[0];
+    if (prev) {
+      existingId = prev.id;
+      imagesChanged = prev.imageUrl !== item.imageUrl || !arraysEqual(prev.images ?? [], item.images);
+    }
+  }
+
   const query = `
     INSERT INTO "ClothingItem" (
       "id", "name", "description", "brand", "category", "subcategory",
@@ -892,14 +1037,16 @@ async function upsertClothingItem(item: ClothingItemInput, pool: Pool): Promise<
       "tags", "gender", "sourceUrl", "metadata", "retailer",
       "externalId", "manufacturerCode", "productType", "isClothing",
       "classificationConfidence", "classifiedAt", "lastVerifiedAt", "active",
-      "createdAt", "updatedAt"
+      "createdAt", "updatedAt",
+      "salePrice", "compareAtPrice"
     ) VALUES (
       gen_random_uuid(), $1, $2, $3, $4, $5,
       $6, $7, $8, $9, $10, $11,
       $12, $13, $14, $15, $16,
       $17, $18, $19, $20,
       $21, NOW(), NOW(), true,
-      NOW(), NOW()
+      NOW(), NOW(),
+      $22, $23
     )
     ON CONFLICT ("retailer", "externalId") DO UPDATE SET
       "name" = EXCLUDED."name",
@@ -908,6 +1055,8 @@ async function upsertClothingItem(item: ClothingItemInput, pool: Pool): Promise<
       "category" = EXCLUDED."category",
       "subcategory" = EXCLUDED."subcategory",
       "price" = EXCLUDED."price",
+      "salePrice" = EXCLUDED."salePrice",
+      "compareAtPrice" = EXCLUDED."compareAtPrice",
       "currency" = EXCLUDED."currency",
       "imageUrl" = EXCLUDED."imageUrl",
       "images" = EXCLUDED."images",
@@ -923,7 +1072,13 @@ async function upsertClothingItem(item: ClothingItemInput, pool: Pool): Promise<
       "classificationConfidence" = EXCLUDED."classificationConfidence",
       "classifiedAt" = NOW(),
       "lastVerifiedAt" = NOW(),
-      "updatedAt" = NOW()
+      "updatedAt" = NOW(),
+      -- When a re-crawl changed the images ($24 = imagesChanged), null the
+      -- processing flags so the new gallery is re-nobg/re-embedded/re-person-
+      -- scanned; unchanged photos keep their flags → zero reprocessing.
+      "hasNobg" = CASE WHEN $24::boolean THEN NULL ELSE "ClothingItem"."hasNobg" END,
+      "personScannedAt" = CASE WHEN $24::boolean THEN NULL ELSE "ClothingItem"."personScannedAt" END,
+      "personScanConfidence" = CASE WHEN $24::boolean THEN NULL ELSE "ClothingItem"."personScanConfidence" END
   `;
 
   const values = [
@@ -948,9 +1103,19 @@ async function upsertClothingItem(item: ClothingItemInput, pool: Pool): Promise<
     item.productType,
     item.isClothing,
     item.classificationConfidence,
+    item.salePrice,
+    item.compareAtPrice,
+    imagesChanged,
   ];
 
   await pool.query(query, values);
+
+  // Drop the stale embedding when the images changed so it re-embeds against the
+  // new primary (the SET clause already nulled hasNobg to re-trigger nobg→embed).
+  // Separate statement: ItemEmbedding is its own table, keyed by itemId.
+  if (existingId && imagesChanged) {
+    await pool.query('DELETE FROM "ItemEmbedding" WHERE "itemId" = $1', [existingId]);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1042,6 +1207,8 @@ export async function uploadRetailer(
     let consecutiveFailures = 0;
     let successesSinceBrowserRefresh = 0;
     const resumeUploaded = new Set(options?.resumeUploadedUrls ?? []);
+    const shopifyNative = isShopifyNativeConfig(config);
+    if (shopifyNative) log("  Mode: Shopify-native ingestion (/products/<handle>.json)");
 
     for (let i = 0; i < urls.length; i++) {
       const url = urls[i];
@@ -1072,19 +1239,13 @@ export async function uploadRetailer(
         let uploadedToR2 = false;
         let upsertedToDb = false;
         try {
-          // Fetch page HTML
-          let html: string;
-          if (stagehand) {
-            const page = stagehand.context.pages()[0];
-            await page.goto(url, {
-              waitUntil: "domcontentloaded",
-              timeoutMs: UPLOAD_NAV_TIMEOUT_MS,
-            });
-            html = await page.evaluate(() => document.documentElement.outerHTML);
-          } else {
-            const res = await fetchWithRetry(url);
-            if (!res.ok) {
-              log(`    HTTP ${res.status} — skipping`);
+          // Build the product item: Shopify-native (structured /products.json)
+          // when the config supports it, else fetch the HTML page + 4-layer extract.
+          let item: ClothingItemInput;
+          if (shopifyNative) {
+            const product = await fetchShopifyProductJson(url);
+            if (!product) {
+              log(`    Shopify product JSON unavailable — skipping`);
               progress.failed++;
               consecutiveFailures++;
               onProgress?.(progress);
@@ -1092,31 +1253,62 @@ export async function uploadRetailer(
                 await options.onItemResult({
                   url,
                   status: "failed",
-                  error: `HTTP ${res.status}`,
+                  error: "shopify_product_json_unavailable",
                   uploadedToR2,
                   upsertedToDb,
-                  metadata: { httpStatus: res.status },
+                  metadata: {},
                 });
               }
               break;
             }
-            html = await res.text();
-          }
+            item = buildShopifyNativeItem(product, url, config);
+          } else {
+            // Fetch page HTML
+            let html: string;
+            if (stagehand) {
+              const page = stagehand.context.pages()[0];
+              await page.goto(url, {
+                waitUntil: "domcontentloaded",
+                timeoutMs: UPLOAD_NAV_TIMEOUT_MS,
+              });
+              html = await page.evaluate(() => document.documentElement.outerHTML);
+            } else {
+              const res = await fetchWithRetry(url);
+              if (!res.ok) {
+                log(`    HTTP ${res.status} — skipping`);
+                progress.failed++;
+                consecutiveFailures++;
+                onProgress?.(progress);
+                if (options?.onItemResult) {
+                  await options.onItemResult({
+                    url,
+                    status: "failed",
+                    error: `HTTP ${res.status}`,
+                    uploadedToR2,
+                    upsertedToDb,
+                    metadata: { httpStatus: res.status },
+                  });
+                }
+                break;
+              }
+              html = await res.text();
+            }
 
-          // Extract product data (all 4 layers)
-          const item = extractProductData(html, url, config);
+            // Extract product data (all 4 layers)
+            item = extractProductData(html, url, config);
 
-          // Gallery rescue: Shopify product pages only expose the featured image
-          // via JSON-LD/OG, so we under-capture to a single (often on-model) photo.
-          // Pull the full gallery from the product JSON so each product keeps its
-          // laydown/product-only shots — letting the people-photo scan STRIP model
-          // images instead of hiding the whole product.
-          if (item.images.length < 2 && looksShopify(html)) {
-            const gallery = await fetchShopifyGalleryImages(url);
-            if (gallery.length > item.images.length) {
-              log(`    [gallery] Shopify .json recovered ${gallery.length} images (was ${item.images.length})`);
-              item.images = gallery;
-              item.imageUrl = gallery[0];
+            // Gallery rescue: Shopify product pages only expose the featured image
+            // via JSON-LD/OG, so we under-capture to a single (often on-model) photo.
+            // Pull the full gallery from the product JSON so each product keeps its
+            // laydown/product-only shots — letting the people-photo scan STRIP model
+            // images instead of hiding the whole product.
+            if (item.images.length < 2 && looksShopify(html)) {
+              const gallery = await fetchShopifyGalleryImages(url);
+              if (gallery.length > item.images.length) {
+                log(`    [gallery] Shopify .json recovered ${gallery.length} images (was ${item.images.length})`);
+                item.images = gallery;
+                item.imageUrl = gallery[0];
+              }
             }
           }
 
@@ -1141,8 +1333,28 @@ export async function uploadRetailer(
             break;
           }
 
+          // Resolve the upsert/R2 key. For Shopify-native, preserve any existing
+          // row's externalId (an earlier per-page crawl may have keyed it on a
+          // SKU) by matching on sourceUrl (== url), so the re-crawl updates in
+          // place and reuses the existing R2 keys instead of inserting a duplicate.
+          // New items fall back to the URL slug (handle).
+          if (shopifyNative) {
+            // Match the existing row by its product handle (robust to locale
+            // prefixes / query strings in either URL) so we reuse its key.
+            const ex = await pool.query<{ externalId: string }>(
+              `SELECT "externalId" FROM "ClothingItem"
+               WHERE retailer = $1
+                 AND substring("sourceUrl" from '/products/([^/?#]+)') = $2
+                 AND "externalId" IS NOT NULL
+               LIMIT 1`,
+              [config.retailer, extractSlugFromUrl(url)],
+            );
+            externalId = ex.rows[0]?.externalId ?? item.externalId ?? extractSlugFromUrl(url);
+          } else {
+            externalId = item.externalId ?? extractSlugFromUrl(url);
+          }
+
           // Upload images to R2
-          externalId = item.externalId ?? extractSlugFromUrl(url);
           const r2Images: string[] = [];
           const allImages = item.images.length > 0 ? item.images : (item.imageUrl ? [item.imageUrl] : []);
           itemName = item.name ?? undefined;

@@ -181,6 +181,7 @@ export async function tryShopifyExplore(
         paginationParam: "page",
         pageSize: 250,
         productUrlTemplate: `${origin}/products/{handle}`,
+        shopifyNative: true,
       },
     },
     productPage: {

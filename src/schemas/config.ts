@@ -45,6 +45,10 @@ const ApiDiscoverySchema = z.object({
     itemsPath: z.string().optional(),
     productUrlTemplate: z.string(),
     totalItemsPath: z.string().optional(),
+    /** When true the upload step ingests each product directly from
+     * `/products/<handle>.json` (full gallery + variant price + compare_at_price)
+     * instead of scraping the HTML product page. Set by the Shopify fast-path explore. */
+    shopifyNative: z.boolean().optional(),
   }),
 });
 
