@@ -721,6 +721,52 @@ function mergeInto(target: ClothingItemInput, source: Partial<ClothingItemInput>
 }
 
 // ---------------------------------------------------------------------------
+// Gallery rescue (Shopify)
+// ---------------------------------------------------------------------------
+
+// The per-page extractor only recovers the single featured image from Shopify
+// product pages (their JSON-LD / og:image `image` is scalar), so model-shot
+// brands land ONE on-model photo and no product-only fallback — which makes the
+// people-photo scan hide the whole product. The canonical `/products/<handle>.json`
+// lists the full ordered gallery (model + laydown + detail), recovered below.
+const MAX_GALLERY_IMAGES = 12;
+
+function looksShopify(html: string): boolean {
+  return (
+    html.includes("cdn.shopify.com") ||
+    html.includes("/cdn/shop/") ||
+    html.includes("Shopify.theme") ||
+    html.includes("window.Shopify")
+  );
+}
+
+// Full ordered image gallery from a Shopify product JSON endpoint. Returns []
+// for non-Shopify/odd URLs or on any failure — the caller keeps whatever it
+// already extracted, so this is purely additive.
+async function fetchShopifyGalleryImages(url: string): Promise<string[]> {
+  let jsonUrl: string;
+  try {
+    const u = new URL(url);
+    const handle = u.pathname.match(/\/products\/([^/?#]+)/);
+    if (!handle) return [];
+    jsonUrl = `${u.origin}/products/${handle[1]}.json`;
+  } catch {
+    return [];
+  }
+  try {
+    const res = await fetchWithRetry(jsonUrl);
+    if (!res.ok) return [];
+    const data = (await res.json()) as { product?: { images?: Array<{ src?: unknown }> } };
+    const srcs = (data.product?.images ?? [])
+      .map((img) => (typeof img?.src === "string" ? img.src : ""))
+      .filter(Boolean);
+    return srcs.slice(0, MAX_GALLERY_IMAGES);
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Image upload to R2
 // ---------------------------------------------------------------------------
 
@@ -1059,6 +1105,20 @@ export async function uploadRetailer(
 
           // Extract product data (all 4 layers)
           const item = extractProductData(html, url, config);
+
+          // Gallery rescue: Shopify product pages only expose the featured image
+          // via JSON-LD/OG, so we under-capture to a single (often on-model) photo.
+          // Pull the full gallery from the product JSON so each product keeps its
+          // laydown/product-only shots — letting the people-photo scan STRIP model
+          // images instead of hiding the whole product.
+          if (item.images.length < 2 && looksShopify(html)) {
+            const gallery = await fetchShopifyGalleryImages(url);
+            if (gallery.length > item.images.length) {
+              log(`    [gallery] Shopify .json recovered ${gallery.length} images (was ${item.images.length})`);
+              item.images = gallery;
+              item.imageUrl = gallery[0];
+            }
+          }
 
           // Validate required fields
           const missingFields = validateItem(item);
