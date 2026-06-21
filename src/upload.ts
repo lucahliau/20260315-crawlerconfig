@@ -9,6 +9,7 @@ import {
   inferCurrencyFromHostname,
   resolveCurrencyForUsd,
   roundUsdPrice,
+  vatRateForSource,
 } from "./currencyToUsd.js";
 import {
   extractJsonLdBlocks,
@@ -956,12 +957,21 @@ function normalizeItemPriceToUsd(item: ClothingItemInput, sourceUrl: string): vo
   const originalPrice = item.price;
   const rawCurrency = item.currency;
   const { iso, notes } = resolveCurrencyForUsd(sourceUrl, originalPrice, rawCurrency);
-  const { usd, unknownCurrency } = convertToUsd(originalPrice, iso);
+
+  // Strip the home-market VAT/GST baked into EU/UK/etc. consumer prices: a US
+  // shopper buying as an export isn't charged it, so the catalog price shouldn't
+  // carry it (it was inflating prices ~15-25% vs the brand's US storefront). USD
+  // and unknown sources strip nothing. See currencyToUsd.vatRateForSource.
+  const vat = vatRateForSource(sourceUrl, iso);
+  const exVat = (v: number): number => (vat > 0 ? v / (1 + vat) : v);
+
+  const { usd, unknownCurrency } = convertToUsd(exVat(originalPrice), iso);
   const rounded = roundUsdPrice(usd);
 
-  if (iso !== "USD" || notes.length > 0) {
+  if (iso !== "USD" || notes.length > 0 || vat > 0) {
+    const vatNote = vat > 0 ? ` less ${Math.round(vat * 100)}% VAT` : "";
     log(
-      `    FX: ${originalPrice} ${iso} → ~$${rounded} USD${notes.length ? ` (${notes.join("; ")})` : ""}`,
+      `    FX: ${originalPrice} ${iso}${vatNote} → ~$${rounded} USD${notes.length ? ` (${notes.join("; ")})` : ""}`,
     );
   } else if (unknownCurrency) {
     log(`    FX: no rate for "${iso}" — leaving nominal amount as USD`);
@@ -970,11 +980,11 @@ function normalizeItemPriceToUsd(item: ClothingItemInput, sourceUrl: string): vo
   item.price = rounded;
   item.currency = "USD";
 
-  // Convert the sale fields with the SAME resolved currency/rate, then re-assert
-  // the sale invariant: compareAtPrice must exceed the effective price to count
-  // as a real sale, else null both (handles FX rounding + spurious signals).
+  // Convert the sale fields with the SAME resolved currency/rate + VAT strip, then
+  // re-assert the sale invariant: compareAtPrice must exceed the effective price to
+  // count as a real sale, else null both (handles FX rounding + spurious signals).
   const toUsd = (v: number | null): number | null =>
-    v == null ? null : roundUsdPrice(convertToUsd(v, iso).usd);
+    v == null ? null : roundUsdPrice(convertToUsd(exVat(v), iso).usd);
   item.salePrice = toUsd(item.salePrice);
   item.compareAtPrice = toUsd(item.compareAtPrice);
   if (item.compareAtPrice == null || item.compareAtPrice <= item.price) {
@@ -982,19 +992,21 @@ function normalizeItemPriceToUsd(item: ClothingItemInput, sourceUrl: string): vo
     item.compareAtPrice = null;
   }
 
-  const shouldAddMeta = iso !== "USD" || notes.length > 0 || unknownCurrency;
+  const shouldAddMeta = iso !== "USD" || notes.length > 0 || unknownCurrency || vat > 0;
   if (shouldAddMeta) {
     const prev =
       item.metadata && typeof item.metadata === "object" && !Array.isArray(item.metadata)
         ? { ...(item.metadata as Record<string, unknown>) }
         : {};
     const fxParts = [...notes];
+    if (vat > 0) fxParts.push(`stripped ${Math.round(vat * 100)}% home VAT before FX`);
     if (unknownCurrency) fxParts.push(`no USD rate for ${iso}; amount stored as nominal USD`);
     const fxNote = fxParts.filter(Boolean).join("; ");
     item.metadata = {
       ...prev,
       originalPrice,
       originalCurrency: iso,
+      ...(vat > 0 ? { vatRateStripped: vat } : {}),
       ...(fxNote ? { fxNote } : {}),
     };
   }
@@ -1310,6 +1322,17 @@ export async function uploadRetailer(
                 item.imageUrl = gallery[0];
               }
             }
+          }
+
+          // Brand identity: each config is a SINGLE discovered brand's storefront,
+          // so the crawl target's brand (config.retailerDisplayName) is authoritative.
+          // The scraped JSON-LD `brand` / Shopify `vendor` frequently holds the
+          // distributor/operating company, a gender/category word, or a region/
+          // collection variant (Danton → "Bshop Co.,Ltd", Mads Nørgaard → "Women",
+          // Drake's → "Drakes - Archive"), which mislabels and fragments brands.
+          // The raw scraped value is retained in metadata for traceability.
+          if (config.retailerDisplayName?.trim()) {
+            item.brand = config.retailerDisplayName.trim();
           }
 
           // Validate required fields

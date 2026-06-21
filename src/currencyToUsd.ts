@@ -189,3 +189,71 @@ export function convertToUsd(amount: number, currencyIso: string): ConvertToUsdR
 export function roundUsdPrice(n: number): number {
   return Math.round(n * 100) / 100;
 }
+
+/**
+ * Statutory consumer consumption tax (VAT / GST) baked into a home-market retail
+ * price. EU/UK/JP/AU/etc. consumer prices are shown tax-INCLUSIVE by law, but a US
+ * shopper buying as an export is NOT charged it — so we strip it before the USD
+ * conversion to approximate the price a US customer actually pays on the brand's US
+ * storefront. US prices are quoted tax-EXCLUSIVE, so USD strips nothing.
+ */
+const VAT_BY_COUNTRY: Record<string, number> = {
+  GB: 0.2, IE: 0.23, FR: 0.2, DE: 0.19, IT: 0.22, ES: 0.21, NL: 0.21, BE: 0.21,
+  AT: 0.2, PT: 0.23, FI: 0.255, SE: 0.25, DK: 0.25, NO: 0.25, PL: 0.23, CH: 0.081,
+  JP: 0.1, AU: 0.1, NZ: 0.15, SG: 0.09, US: 0,
+};
+
+/** Fallback when the source country can't be read from the URL: the consumption-tax
+ *  rate most associated with the price's currency (EUR spans 19–25%, so use ~21%). */
+const VAT_BY_CURRENCY: Record<string, number> = {
+  GBP: 0.2, EUR: 0.21, DKK: 0.25, SEK: 0.25, NOK: 0.25, CHF: 0.081,
+  JPY: 0.1, AUD: 0.1, NZD: 0.15, SGD: 0.09, PLN: 0.23,
+};
+
+const TLD_COUNTRY: Record<string, string> = {
+  ".de": "DE", ".fr": "FR", ".it": "IT", ".es": "ES", ".nl": "NL", ".be": "BE",
+  ".at": "AT", ".pt": "PT", ".fi": "FI", ".se": "SE", ".dk": "DK", ".no": "NO",
+  ".pl": "PL", ".ch": "CH", ".ie": "IE", ".nz": "NZ", ".sg": "SG",
+};
+
+/** Best-effort ISO country from a storefront URL: explicit locale path segment
+ *  (`/dk/`, `/en-us/`) first, then the hostname TLD. Returns null when ambiguous. */
+function countryFromUrl(url: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  const seg = u.pathname.split("/").filter(Boolean)[0]?.toLowerCase() ?? "";
+  const m = seg.match(/^([a-z]{2})(?:-([a-z]{2}))?$/);
+  if (m) {
+    const cand = (m[2] ?? m[1]).toUpperCase();
+    if (VAT_BY_COUNTRY[cand] != null) return cand;
+  }
+  const host = u.hostname.toLowerCase();
+  // Country-code subdomain (it.brand.com, us.brand.com); ignores www / language labels.
+  const firstLabel = host.split(".")[0] ?? "";
+  if (firstLabel.length === 2 && VAT_BY_COUNTRY[firstLabel.toUpperCase()] != null) {
+    return firstLabel.toUpperCase();
+  }
+  if (host.endsWith(".co.uk") || host.endsWith(".uk")) return "GB";
+  if (host.endsWith(".co.jp") || host.endsWith(".jp")) return "JP";
+  if (host.endsWith(".com.au") || host.endsWith(".au")) return "AU";
+  for (const [tld, cc] of Object.entries(TLD_COUNTRY)) {
+    if (host.endsWith(tld)) return cc;
+  }
+  return null;
+}
+
+/**
+ * Consumption-tax rate embedded in the scraped home-market price, to strip before
+ * USD conversion. 0 for USD (US prices are tax-exclusive) and for unknown sources.
+ */
+export function vatRateForSource(url: string, currencyIso: string): number {
+  const iso = (currencyIso || "").toUpperCase();
+  if (iso === "USD") return 0;
+  const country = countryFromUrl(url);
+  if (country) return VAT_BY_COUNTRY[country] ?? 0;
+  return VAT_BY_CURRENCY[iso] ?? 0;
+}

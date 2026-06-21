@@ -9,6 +9,7 @@ import {
   normalizeCurrencyCode,
   resolveCurrencyForUsd,
   roundUsdPrice,
+  vatRateForSource,
 } from "../src/currencyToUsd.js";
 
 assert.equal(normalizeCurrencyCode(" eur "), "EUR");
@@ -33,5 +34,21 @@ assert.equal(roundUsdPrice(eur.usd), Math.round(eur.usd * 100) / 100);
 
 const jpy = convertToUsd(15000, "JPY");
 assert.ok(jpy.usd > 90 && jpy.usd < 130);
+
+// VAT stripping: US prices strip nothing; EU/UK home stores strip the home VAT.
+assert.equal(vatRateForSource("https://taylorstitch.com/p", "USD"), 0);
+assert.equal(vatRateForSource("https://www.sunspel.com/p", "GBP"), 0.2); // GBP → UK 20%
+assert.equal(vatRateForSource("https://www.mc2saintbarth.com/p", "EUR"), 0.21); // EUR no-TLD → 21% default
+assert.equal(vatRateForSource("https://it.mc2saintbarth.com/p", "EUR"), 0.22); // .it → Italy 22%
+assert.equal(vatRateForSource("https://www.adaysmarch.com/dk/p", "DKK"), 0.25); // /dk/ → Denmark 25%
+assert.equal(vatRateForSource("https://www.armedangels.com/de/p", "EUR"), 0.19); // /de/ → Germany 19%
+assert.equal(vatRateForSource("https://x.com/en-us/p", "EUR"), 0); // /en-us/ presentment → no strip
+// £155 inc-20%-VAT × 1.27 = $164 ex-VAT (vs $196.85 with VAT) — fixes the over-charge.
+{
+  const vat = vatRateForSource("https://www.sunspel.com/p", "GBP");
+  const exVat = 155 / (1 + vat);
+  const usd = roundUsdPrice(convertToUsd(exVat, "GBP").usd);
+  assert.ok(usd > 160 && usd < 170, `expected ~164, got ${usd}`);
+}
 
 console.log("verify-fx: all assertions passed");
