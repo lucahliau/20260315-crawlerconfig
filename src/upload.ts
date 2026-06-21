@@ -11,6 +11,7 @@ import {
   roundUsdPrice,
   vatRateForSource,
 } from "./currencyToUsd.js";
+import { sanitizeBrand } from "./brandName.js";
 import {
   extractJsonLdBlocks,
   findProductInJsonLd,
@@ -1324,16 +1325,13 @@ export async function uploadRetailer(
             }
           }
 
-          // Brand identity: each config is a SINGLE discovered brand's storefront,
-          // so the crawl target's brand (config.retailerDisplayName) is authoritative.
-          // The scraped JSON-LD `brand` / Shopify `vendor` frequently holds the
-          // distributor/operating company, a gender/category word, or a region/
-          // collection variant (Danton → "Bshop Co.,Ltd", Mads Nørgaard → "Women",
-          // Drake's → "Drakes - Archive"), which mislabels and fragments brands.
-          // The raw scraped value is retained in metadata for traceability.
-          if (config.retailerDisplayName?.trim()) {
-            item.brand = config.retailerDisplayName.trim();
-          }
+          // Brand identity: keep the scraped brand when it's a real brand name (it is
+          // for single brands AND for multi-brand stockists), but replace it with the
+          // crawl target's discovered name when it's a distributor/operating company,
+          // a gender/category word, or a region/collection variant (Danton →
+          // "Bshop Co.,Ltd", Mads Nørgaard → "Women", Drake's → "Drakes - Archive").
+          // The raw scraped value remains in metadata for traceability. See brandName.ts.
+          item.brand = sanitizeBrand(item.brand, config.retailerDisplayName) ?? item.brand;
 
           // Validate required fields
           const missingFields = validateItem(item);

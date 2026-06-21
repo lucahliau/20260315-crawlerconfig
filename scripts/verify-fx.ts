@@ -11,6 +11,7 @@ import {
   roundUsdPrice,
   vatRateForSource,
 } from "../src/currencyToUsd.js";
+import { sanitizeBrand } from "../src/brandName.js";
 
 assert.equal(normalizeCurrencyCode(" eur "), "EUR");
 assert.equal(normalizeCurrencyCode("EURO"), "EUR");
@@ -50,5 +51,20 @@ assert.equal(vatRateForSource("https://x.com/en-us/p", "EUR"), 0); // /en-us/ pr
   const usd = roundUsdPrice(convertToUsd(exVat, "GBP").usd);
   assert.ok(usd > 160 && usd < 170, `expected ~164, got ${usd}`);
 }
+
+// Brand resolution: replace distributor/gender/category/region values with the
+// discovered name; KEEP genuine brand names (incl. multi-brand stockists).
+assert.equal(sanitizeBrand("Bshop Co.,Ltd", "Danton"), "Danton"); // distributor
+assert.equal(sanitizeBrand("Women", "Mads Nørgaard"), "Mads Nørgaard"); // gender word
+assert.equal(sanitizeBrand("Accessories", "Community Clothing"), "Community Clothing"); // category
+assert.equal(sanitizeBrand("Drakes - Archive", "Drakes"), "Drakes"); // region/collection
+assert.equal(sanitizeBrand("Genexy Company Limited", "Linksoul"), "Linksoul"); // distributor
+assert.equal(sanitizeBrand("Won Hundred Men", "Won Hundred"), "Won Hundred"); // trailing gender
+assert.equal(sanitizeBrand("Aimé Leon Dore", "Aimeleondore"), "Aimé Leon Dore"); // KEEP (slug fallback)
+assert.equal(sanitizeBrand("Dark Seas", "Darkseas"), "Dark Seas"); // KEEP
+assert.equal(sanitizeBrand("Billabong", "Southcoast"), "Billabong"); // KEEP (stockist's real label)
+assert.equal(sanitizeBrand("California Arts", "bodywaves"), "California Arts"); // KEEP (corrupt fallback)
+assert.equal(sanitizeBrand("Captain Fin Co.", "Captainfin"), "Captain Fin Co."); // KEEP (bare "Co." is fine)
+assert.equal(sanitizeBrand("", "Folk"), "Folk"); // empty scraped → fallback
 
 console.log("verify-fx: all assertions passed");
