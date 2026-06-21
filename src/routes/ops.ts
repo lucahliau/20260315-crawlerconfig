@@ -281,12 +281,17 @@ async function checkDatabase(): Promise<Record<string, unknown>> {
               (SELECT COUNT(*)::int FROM "ClothingItem") AS items`,
     );
     const bytes = Number(sizeR.rows[0]?.bytes ?? 0);
-    const limitMb = parseInt(process.env.SUPABASE_DB_LIMIT_MB ?? "500", 10);
+    // Supabase Pro plan: 8 GB disk included (auto-scales beyond that). The DB outgrew
+    // the old 500 MB free-tier cap (measured 693 MB on 2026-06-20), so the base now
+    // reflects the Pro allotment. Override with SUPABASE_DB_LIMIT_MB if the disk
+    // auto-scales past 8 GB.
+    const SUPABASE_PLAN_DISK_MB = 8192;
+    const limitMb = parseInt(process.env.SUPABASE_DB_LIMIT_MB ?? String(SUPABASE_PLAN_DISK_MB), 10);
     return {
       ok: true,
       latencyMs: Date.now() - t0,
       sizeMb: Math.round(bytes / 1024 / 1024),
-      limitMb: Number.isFinite(limitMb) ? limitMb : 500,
+      limitMb: Number.isFinite(limitMb) ? limitMb : SUPABASE_PLAN_DISK_MB,
       items: sizeR.rows[0]?.items ?? 0,
     };
   } catch (err) {
