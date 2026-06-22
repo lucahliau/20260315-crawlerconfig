@@ -11,7 +11,7 @@ import {
   roundUsdPrice,
   vatRateForSource,
 } from "./currencyToUsd.js";
-import { sanitizeBrand } from "./brandName.js";
+import { resolveBrand } from "./brandName.js";
 import {
   extractJsonLdBlocks,
   findProductInJsonLd,
@@ -1330,8 +1330,9 @@ export async function uploadRetailer(
           // crawl target's discovered name when it's a distributor/operating company,
           // a gender/category word, or a region/collection variant (Danton →
           // "Bshop Co.,Ltd", Mads Nørgaard → "Women", Drake's → "Drakes - Archive").
-          // The raw scraped value remains in metadata for traceability. See brandName.ts.
-          item.brand = sanitizeBrand(item.brand, config.retailerDisplayName) ?? item.brand;
+          // The raw scraped value remains in metadata for traceability. Per-retailer
+          // unify/clean-name overrides (e.g. J.Press) live in brandName.ts.
+          item.brand = resolveBrand(item.brand, config.retailer, config.retailerDisplayName) ?? item.brand;
 
           // Validate required fields
           const missingFields = validateItem(item);

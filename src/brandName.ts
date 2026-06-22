@@ -7,10 +7,15 @@
  * holds the distributor/operating company (Danton → "Bshop Co.,Ltd"), a gender or
  * category word (Mads Nørgaard → "Women", Community Clothing → "Accessories"), or a
  * region/collection variant (Drake's → "Drakes - Archive"). In those cases we fall
- * back to the crawl target's discovered name (config.retailerDisplayName).
+ * back to the crawl target's discovered name.
  *
- * A trailing audience word is trimmed in place so brand fragmentation collapses
- * ("Won Hundred Men" / "Won Hundred Women" → "Won Hundred").
+ * Two curated, per-retailer overrides sit on top of that heuristic:
+ *  - UNIFY_BRAND: stores the user explicitly wants shown as a SINGLE brand for every
+ *    item, even when the store lists several labels (e.g. J.Press's store also lists
+ *    "Pennant"/"Jack Victor"). Add a retailer here only when the user names it.
+ *  - CLEAN_NAME: a proper brand name for retailers whose discovered name is a mashed
+ *    domain slug ("Madsnorgaard" → "Mads Nørgaard"). Used as the fallback name (so it
+ *    only renames junk values, and at a genuine stockist leaves real labels alone).
  */
 
 const GENDER_WORD =
@@ -19,11 +24,30 @@ const TRAILING_GENDER =
   /\s+(men|women|kids?|unisex|mens|womens|men['’]s|women['’]s|herren|damen|homme|femme)$/i;
 const CATEGORY_WORD =
   /^(accessories|shirt|shirts|t-?shirts?|tops?|bottoms?|trousers|pants|knitwear|outerwear|footwear|shoes|bags?|hats?|caps?|socks?|sale|new in|new arrivals|home|gifts?|all|jewell?ery)$/i;
-// Distributor / operating-company signatures. Deliberately NOT matching a bare
-// "Co." (legit in real brand names like "Captain Fin Co.") — only entity suffixes.
 const CORP_SUFFIX =
   /(\bco\.?\s*,?\s*ltd\b|\bcompany\s+limited\b|\bgmbh\b|\binc\.?\b|\bllc\b|\bltd\.?\b|\blimited\b|\bb\.?v\.?\b|\bs\.?r\.?l\.?\b|\bs\.?p\.?a\.?\b|\bk\.?k\.?\b|\bkabushiki\b|\bpty\b|\bsarl\b)/i;
 const REGION_SPLIT = /\s[-–—]\s*(uk|usa?|eu|row|archive|sale|outlet|men|women|kids|mainline|store|online)\b/i;
+
+/** Stores to show as ONE brand for every item (user-named; see "unify only stores I name"). */
+export const UNIFY_BRAND: Record<string, string> = {
+  jpressonline: "J. Press",
+};
+
+/** Proper brand names for retailers whose discovered name is a mashed domain slug. */
+export const CLEAN_NAME: Record<string, string> = {
+  madsnorgaard: "Mads Nørgaard",
+  communityclothing: "Community Clothing",
+  ministryofsupply: "Ministry of Supply",
+  secondlayer: "SECOND/LAYER",
+  ballandbuck: "Ball and Buck",
+  nantucketreds: "Nantucket Reds",
+  antonymorato: "Antony Morato",
+  therealmccoys: "The Real McCoy's",
+  doomsdaysociety: "Doomsday Society",
+  bonnegueule: "BonneGueule",
+  champdemanoeuvres: "Champ de Manœuvres",
+  sattalivity: "Satta",
+};
 
 /** True when a scraped brand is clearly NOT a consumer brand name. */
 function isUntrustworthyBrand(s: string): boolean {
@@ -45,4 +69,19 @@ export function sanitizeBrand(
 
   if (isUntrustworthyBrand(s)) return fb || s;
   return s;
+}
+
+/**
+ * Final brand for an item: per-retailer unify override → else sanitize the scraped
+ * brand, falling back to the retailer's clean name (curated or discovered).
+ */
+export function resolveBrand(
+  scraped: string | null | undefined,
+  retailer: string | null | undefined,
+  retailerDisplayName: string | null | undefined,
+): string | null {
+  const r = (retailer ?? "").trim().toLowerCase();
+  if (UNIFY_BRAND[r]) return UNIFY_BRAND[r];
+  const fallback = CLEAN_NAME[r] ?? retailerDisplayName;
+  return sanitizeBrand(scraped, fallback);
 }

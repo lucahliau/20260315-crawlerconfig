@@ -11,7 +11,7 @@ import {
   roundUsdPrice,
   vatRateForSource,
 } from "../src/currencyToUsd.js";
-import { sanitizeBrand } from "../src/brandName.js";
+import { sanitizeBrand, resolveBrand } from "../src/brandName.js";
 
 assert.equal(normalizeCurrencyCode(" eur "), "EUR");
 assert.equal(normalizeCurrencyCode("EURO"), "EUR");
@@ -66,5 +66,13 @@ assert.equal(sanitizeBrand("Billabong", "Southcoast"), "Billabong"); // KEEP (st
 assert.equal(sanitizeBrand("California Arts", "bodywaves"), "California Arts"); // KEEP (corrupt fallback)
 assert.equal(sanitizeBrand("Captain Fin Co.", "Captainfin"), "Captain Fin Co."); // KEEP (bare "Co." is fine)
 assert.equal(sanitizeBrand("", "Folk"), "Folk"); // empty scraped → fallback
+
+// resolveBrand: per-retailer unify + clean-name overrides on top of sanitizeBrand.
+assert.equal(resolveBrand("Pennant", "jpressonline", "Jpressonline"), "J. Press"); // UNIFY: store wins
+assert.equal(resolveBrand("Jack Victor", "jpressonline", "Jpressonline"), "J. Press"); // UNIFY: even a real co-label
+assert.equal(resolveBrand("Women", "madsnorgaard", "Madsnorgaard"), "Mads Nørgaard"); // bad scraped → CLEAN_NAME
+assert.equal(resolveBrand("Save Khaki United", "nantucketreds", "Nantucketreds"), "Save Khaki United"); // stockist keeps real brand
+assert.equal(resolveBrand("Billabong", "southcoast", "Southcoast"), "Billabong"); // un-named stockist keeps real brand
+assert.equal(resolveBrand("Aimé Leon Dore", "aimeleondore", "Aimeleondore"), "Aimé Leon Dore"); // KEEP clean scraped
 
 console.log("verify-fx: all assertions passed");
