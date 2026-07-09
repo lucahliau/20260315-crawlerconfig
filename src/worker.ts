@@ -28,6 +28,7 @@ import "dotenv/config";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { execFile, spawn } from "node:child_process";
 import crypto from "node:crypto";
 
 import { uploadRetailer } from "./upload.js";
@@ -687,6 +688,68 @@ async function heartbeatLoop(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Self-update watchdog
+// ---------------------------------------------------------------------------
+
+const SELF_UPDATE_ENABLED = process.env.WORKER_SELF_UPDATE !== "false";
+const SELF_UPDATE_INTERVAL_MS = Math.max(
+  60_000,
+  parseInt(process.env.WORKER_SELF_UPDATE_INTERVAL_MS ?? "600000", 10), // 10 min
+);
+// Don't re-fire while an update attempt is (possibly) still in flight.
+const SELF_UPDATE_COOLDOWN_MS = 30 * 60_000;
+let lastSelfUpdateSpawnAt = 0;
+
+function gitOut(args: string[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile("git", args, { cwd: process.cwd(), timeout: 60_000 }, (err, stdout) => {
+      resolve(err ? null : stdout.trim());
+    });
+  });
+}
+
+/**
+ * The worker keeps ITSELF current: when origin/main moves past the local
+ * checkout, spawn scripts/auto-update.sh (hard-sync + deps + plist restart).
+ * Detached + unref'd so the child survives `launchctl unload` killing us.
+ * This removes the standalone autoupdate LaunchAgent as a single point of
+ * failure — it died silently on the M1 (2026-06-22) and the worker ran
+ * 2.5-week-old code for weeks with nobody noticing.
+ */
+async function selfUpdateLoop(): Promise<void> {
+  if (!SELF_UPDATE_ENABLED) return;
+  const script = path.join(process.cwd(), "scripts", "auto-update.sh");
+  if (!fs.existsSync(script)) {
+    console.log(`[worker=${WORKER_ID}] self-update: ${script} not found — watchdog disabled.`);
+    return;
+  }
+  while (!stopping) {
+    await new Promise((r) => setTimeout(r, SELF_UPDATE_INTERVAL_MS));
+    try {
+      if (Date.now() - lastSelfUpdateSpawnAt < SELF_UPDATE_COOLDOWN_MS) continue;
+      // Offline/auth hiccup → fetch no-ops and rev-parse compares against the
+      // last-known remote ref: worst case a harmless skip until the next tick.
+      await gitOut(["fetch", "--quiet", "origin", "main"]);
+      const local = await gitOut(["rev-parse", "HEAD"]);
+      const remote = await gitOut(["rev-parse", "origin/main"]);
+      if (!local || !remote || local === remote) continue;
+      lastSelfUpdateSpawnAt = Date.now();
+      const msg = `code behind origin/main (${local.slice(0, 7)} → ${remote.slice(0, 7)}) — launching auto-update.sh`;
+      console.log(`[worker=${WORKER_ID}] self-update: ${msg}`);
+      recordIssue("autoupdate", msg);
+      const child = spawn("bash", [script], {
+        cwd: process.cwd(),
+        detached: true,
+        stdio: "ignore",
+      });
+      child.unref();
+    } catch (err) {
+      console.error(`[worker=${WORKER_ID}] self-update check failed:`, err);
+    }
+  }
+}
+
 async function main(): Promise<void> {
   console.log(`[worker=${WORKER_ID}] starting (concurrency=${WORKER_CONCURRENCY})`);
 
@@ -706,6 +769,14 @@ async function main(): Promise<void> {
 
   // Heartbeat in the background.
   void heartbeatLoop();
+
+  // Self-update watchdog: the standalone autoupdate LaunchAgent silently died
+  // on the M1 (2026-06-22) and the worker ran 2.5-week-old code unnoticed. The
+  // always-running worker is its own best watchdog — when origin/main moves
+  // past the local checkout, launch scripts/auto-update.sh (detached, so it
+  // survives the launchctl unload that kills this process) and let it
+  // hard-sync + restart us. WORKER_SELF_UPDATE=false opts out.
+  void selfUpdateLoop();
 
   // Self-feeding backlog drain + hasNobg⇄R2 reconciliation (processing-capable
   // workers only — they have the R2 access these need).
