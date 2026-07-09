@@ -50,9 +50,11 @@ import {
 } from "./pipelineStore.js";
 import { ErrorCodes, classifyError, type ErrorCode } from "./errorCodes.js";
 import {
+  isPriceRefreshEnabled,
   loadRefreshableConfigs,
   refreshRetailerPrices,
   runPriceRefreshSweep,
+  setPriceRefreshEnabled,
 } from "./priceRefresh.js";
 import {
   enqueuePriceRefresh,
@@ -2064,10 +2066,28 @@ app.post("/api/price-refresh/:retailer", async (req, res) => {
 
 app.get("/api/price-refresh/status", async (_req, res) => {
   try {
-    const last = await getSetting<Record<string, unknown> | null>("price_refresh:last", null);
-    res.json({ last });
+    const [last, enabled] = await Promise.all([
+      getSetting<Record<string, unknown> | null>("price_refresh:last", null),
+      isPriceRefreshEnabled(),
+    ]);
+    res.json({ enabled, last });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Status read failed." });
+  }
+});
+
+// Toggle the DAILY price-refresh cron (independent of the conveyor kill
+// switch — pausing crawling shouldn't stop price/sale freshness).
+app.post("/api/price-refresh/enabled", async (req, res) => {
+  const enabled = req.body?.enabled;
+  if (typeof enabled !== "boolean") {
+    return res.status(400).json({ error: "Body must be { enabled: boolean }" });
+  }
+  try {
+    await setPriceRefreshEnabled(enabled);
+    res.json({ enabled });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Toggle failed." });
   }
 });
 

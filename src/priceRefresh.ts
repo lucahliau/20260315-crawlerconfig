@@ -40,11 +40,24 @@ import { representativeVariantPricing, type ShopifyProduct } from "./shopifyInge
 import { enqueueUploadUrls } from "./queue.js";
 import {
   getPool,
-  isAutoPipelineEnabled,
   getSetting,
   setSetting,
   listRetailerPipelineStates,
 } from "./pipelineStore.js";
+
+/**
+ * Dedicated switch for the DAILY price-refresh cron, independent of the
+ * conveyor kill switch (`auto_pipeline`) — pausing crawling shouldn't stop
+ * cheap price/sale freshness. Default ON; toggle via
+ * `POST /api/price-refresh/enabled` or the pipeline_settings KV.
+ */
+export async function isPriceRefreshEnabled(): Promise<boolean> {
+  return getSetting<boolean>("price_refresh_enabled", true);
+}
+
+export async function setPriceRefreshEnabled(enabled: boolean): Promise<void> {
+  await setSetting("price_refresh_enabled", enabled);
+}
 
 export interface PriceRefreshOutcome {
   retailer: string;
@@ -66,7 +79,7 @@ export interface PriceRefreshOptions {
   dryRun?: boolean;
   /** Enqueue full re-uploads for products whose source gallery changed (default true). */
   enqueueImageChanges?: boolean;
-  /** Stop when the conveyor kill switch is off — true for CRON sweeps only.
+  /** Stop when the price-refresh switch is off — true for CRON sweeps only.
    *  Manual runs (CLI / dashboard API) are explicit user intent and bypass it. */
   honorKillSwitch?: boolean;
   onLog?: (msg: string) => void;
@@ -358,8 +371,8 @@ export async function runPriceRefreshSweep(opts?: PriceRefreshOptions): Promise<
   log(`[price-refresh] sweep starting over ${configs.length} configured retailer(s).`);
   const outcomes: PriceRefreshOutcome[] = [];
   for (const config of configs) {
-    if (opts?.honorKillSwitch && !(await isAutoPipelineEnabled())) {
-      log("[price-refresh] kill switch off — stopping sweep.");
+    if (opts?.honorKillSwitch && !(await isPriceRefreshEnabled())) {
+      log("[price-refresh] price_refresh_enabled off — stopping sweep.");
       break;
     }
     if (await getSetting<boolean>(`autopilot_optout:${config.retailer}`, false)) continue;
