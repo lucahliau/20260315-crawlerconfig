@@ -2855,7 +2855,9 @@ const server = app.listen(PORT, () => {
               }
               await refreshRetailerPrices(config, pool);
             } else {
-              await runPriceRefreshSweep();
+              // Cron-enqueued sweeps honor the conveyor kill switch; manual
+              // "refresh all" runs from the API are explicit intent and don't.
+              await runPriceRefreshSweep({ honorKillSwitch: job?.data?.sweep === true });
             }
           },
         );

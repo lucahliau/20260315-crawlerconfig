@@ -66,6 +66,9 @@ export interface PriceRefreshOptions {
   dryRun?: boolean;
   /** Enqueue full re-uploads for products whose source gallery changed (default true). */
   enqueueImageChanges?: boolean;
+  /** Stop when the conveyor kill switch is off — true for CRON sweeps only.
+   *  Manual runs (CLI / dashboard API) are explicit user intent and bypass it. */
+  honorKillSwitch?: boolean;
   onLog?: (msg: string) => void;
 }
 
@@ -349,7 +352,7 @@ export async function runPriceRefreshSweep(opts?: PriceRefreshOptions): Promise<
   log(`[price-refresh] sweep starting over ${configs.length} configured retailer(s).`);
   const outcomes: PriceRefreshOutcome[] = [];
   for (const config of configs) {
-    if (!(await isAutoPipelineEnabled())) {
+    if (opts?.honorKillSwitch && !(await isAutoPipelineEnabled())) {
       log("[price-refresh] kill switch off — stopping sweep.");
       break;
     }
