@@ -37,6 +37,7 @@ import {
   getPool,
   getRetailerPipelineState,
   getSetting,
+  setSetting,
   isAutoPipelineEnabled,
   recordScrapeError,
   recordUploadUrlResult,
@@ -385,6 +386,22 @@ async function handleProcessingJob(data: ProcessingJobData, jobId: string): Prom
     }
   }
 
+  // Per-process dashboard controls. A manual FIRST batch (Start button) always
+  // runs — explicit intent; everything automatic (sweeps, idle bootstraps,
+  // chained re-enqueues) honors the per-kind toggle and defers to a priority.
+  const isManualFirstBatch = !data.sweep && (data.chainDepth ?? 0) === 0;
+  if (!isManualFirstBatch) {
+    if (!(await getSetting<boolean>(`process_enabled:${data.kind}`, true))) {
+      log(`${data.kind} is toggled OFF — skipping batch`);
+      return;
+    }
+    const priority = await getSetting<string | null>("process_priority", null);
+    if (priority && priority !== data.kind) {
+      log(`deferred — "${priority}" is prioritised (this ${data.kind} batch skipped)`);
+      return;
+    }
+  }
+
   let moreRemains = false;
   try {
     if (data.kind === "nobg") {
@@ -448,12 +465,31 @@ async function handleProcessingJob(data: ProcessingJobData, jobId: string): Prom
     throw err;
   }
 
+  // Prioritised backlog drained → release the other processes automatically.
+  if (!moreRemains) {
+    const priorityNow = await getSetting<string | null>("process_priority", null);
+    if (priorityNow === data.kind) {
+      await setSetting("process_priority", null);
+      log(`prioritised ${data.kind} backlog drained — priority cleared`);
+    }
+  }
+
   const depth = data.chainDepth ?? 0;
   if (moreRemains && depth < PROCESS_CHAIN_DEPTH_MAX) {
     // The kill switch stops ALL chaining (manual runs included) — a manual
     // first batch always runs, but a runaway chain must be stoppable.
     if (!(await isAutoPipelineEnabled())) {
       log("kill switch off — not chaining next batch");
+      return;
+    }
+    // Chains are automatic work: honor the per-kind toggle + any priority.
+    if (!(await getSetting<boolean>(`process_enabled:${data.kind}`, true))) {
+      log(`${data.kind} toggled OFF — not chaining next batch`);
+      return;
+    }
+    const priorityNow = await getSetting<string | null>("process_priority", null);
+    if (priorityNow && priorityNow !== data.kind) {
+      log(`"${priorityNow}" is prioritised — not chaining next ${data.kind} batch`);
       return;
     }
     const nextId = await enqueueProcessing({ ...data, chainDepth: depth + 1 });

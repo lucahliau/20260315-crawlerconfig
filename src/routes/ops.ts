@@ -116,8 +116,21 @@ export function createOpsRouter(): Router {
           Array.isArray((w.metadata as { queues?: unknown }).queues) &&
           ((w.metadata as { queues: string[] }).queues ?? []).includes(QUEUES.PROCESS_NOBG),
       );
+      // Per-process controls for the dashboard rows: the on/off toggle gates
+      // automatic runs (sweeps/idle/chaining) for that kind; priority makes the
+      // worker defer every other kind's batches until the chosen backlog drains.
+      const [nobgEnabled, embedEnabled, personEnabled, priority] = await Promise.all([
+        getSetting<boolean>("process_enabled:nobg", true),
+        getSetting<boolean>("process_enabled:embed", true),
+        getSetting<boolean>("process_enabled:person", true),
+        getSetting<string | null>("process_priority", null),
+      ]);
       res.json({
         totals,
+        controls: {
+          enabled: { nobg: nobgEnabled, embed: embedEnabled, person: personEnabled },
+          priority,
+        },
         rates: {
           nobg: nobgRatesR.rows[0] ?? { last1h: 0, last24h: 0 },
           embeddings: embedRatesR.rows[0] ?? { last1h: 0, last24h: 0 },
@@ -185,6 +198,54 @@ export function createOpsRouter(): Router {
     } catch (err) {
       console.error("[api/processing/cancel] Error:", err);
       res.status(500).json({ error: err instanceof Error ? err.message : "Failed to cancel." });
+    }
+  });
+
+  // Per-process ON/OFF: gates AUTOMATIC runs (sweeps, idle-backlog, chaining)
+  // for that kind. A manual Start still runs its first batch regardless.
+  router.post("/api/processing/toggle", async (req: Request, res: Response) => {
+    const kind = req.body?.kind as string | undefined;
+    const enabled = req.body?.enabled;
+    if (!kind || !["nobg", "embed", "person"].includes(kind) || typeof enabled !== "boolean") {
+      return res
+        .status(400)
+        .json({ error: 'Body must be { kind: "nobg"|"embed"|"person", enabled: boolean }' });
+    }
+    try {
+      await setSetting(`process_enabled:${kind}`, enabled);
+      res.json({ kind, enabled });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Toggle failed." });
+    }
+  });
+
+  // Prioritise one process: the worker defers every OTHER kind's batches until
+  // this kind's backlog drains (then auto-clears). kind:null clears manually.
+  // Setting a priority also enqueues a batch of that kind so it starts now.
+  router.post("/api/processing/priority", async (req: Request, res: Response) => {
+    const kind = req.body?.kind as string | null | undefined;
+    if (kind !== null && (!kind || !["nobg", "embed", "person"].includes(kind))) {
+      return res
+        .status(400)
+        .json({ error: 'Body must be { kind: "nobg"|"embed"|"person"|null }' });
+    }
+    try {
+      await setSetting("process_priority", kind);
+      let jobId: string | null = null;
+      if (kind) {
+        const defaults: Record<string, number> = {
+          nobg: Math.max(1, parseInt(process.env.PROCESS_NOBG_DEFAULT_LIMIT ?? "100", 10)),
+          embed: Math.max(1, parseInt(process.env.PROCESS_EMBED_DEFAULT_LIMIT ?? "2000", 10)),
+          person: Math.max(1, parseInt(process.env.PROCESS_PERSON_DEFAULT_LIMIT ?? "500", 10)),
+        };
+        jobId = await enqueueProcessing({
+          kind: kind as "nobg" | "embed" | "person",
+          limit: defaults[kind],
+        });
+      }
+      res.json({ priority: kind, jobId });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Priority failed." });
     }
   });
 

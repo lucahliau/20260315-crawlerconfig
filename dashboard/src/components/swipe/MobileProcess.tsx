@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type ProcessingResponse, type WorkerTelemetry } from "../../api.ts";
+import { api, type ProcessKind, type ProcessingResponse, type WorkerTelemetry } from "../../api.ts";
 import { cx } from "../ui.tsx";
 
 /**
@@ -142,102 +142,221 @@ export function MobileProcess() {
         />
       </div>
 
-      {/* Queue depth */}
-      <div className="space-y-1.5">
-        <p className="text-xs font-medium text-gray-400">Processing queues</p>
-        {(["process-nobg", "process-embed", "process-person"] as const).map((name) => {
-          const q = queueDepth(name);
-          const labels: Record<string, string> = {
-            "process-nobg": "Background removal",
-            "process-embed": "Embeddings",
-            "process-person": "People-photo scan",
-          };
-          return (
-            <div
-              key={name}
-              className="flex items-center justify-between rounded-xl border border-gray-800 bg-gray-900 px-3 py-2.5 text-[13px]"
-            >
-              <span className="text-gray-200">{labels[name]}</span>
-              <span className="tnum text-gray-400">
-                {q ? `${q.waiting} waiting · ${q.active} active · ${q.failed} failed` : "—"}
-              </span>
-            </div>
-          );
-        })}
+      {/* Per-process control rows */}
+      <div className="space-y-2">
+        <p className="text-xs font-medium text-gray-400">Processes</p>
+        {PROCESS_ROWS.map((row) => (
+          <ProcessRow
+            key={row.kind}
+            def={row}
+            data={data}
+            queue={queueDepth(row.queue)}
+            activeJobs={homeWorker?.metadata.telemetry?.activeJobs ?? []}
+            busy={busy}
+            run={run}
+          />
+        ))}
+        <p className="text-[11px] text-gray-600">
+          <span className="text-gray-500">On</span> = runs automatically (nightly sweeps, idle
+          backlog, chained batches). <span className="text-gray-500">Start</span> queues a batch now
+          regardless. <span className="text-gray-500">Prioritise</span> pauses the other processes
+          until this one's backlog drains (then clears itself).
+        </p>
       </div>
 
-      {/* Actions */}
+      {/* Bulk action */}
       <div className="space-y-2">
         <button
           disabled={busy !== null}
           onClick={() =>
             void run("all", async () => {
               await api.runProcessing("all");
-              return "Queued: background-removal + embedding batches for the home server.";
+              return "Queued: nobg + embed + person batches for the home server.";
             })
           }
           className="flex h-12 w-full items-center justify-center rounded-xl bg-white text-[15px] font-semibold text-gray-900 active:bg-gray-200 disabled:opacity-50"
         >
           {busy === "all" ? "Queueing…" : "Run all processing"}
         </button>
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            disabled={busy !== null}
-            onClick={() =>
-              void run("nobg", async () => {
-                await api.runProcessing("nobg");
-                return "Background-removal batch queued.";
-              })
-            }
-            className="flex h-11 items-center justify-center rounded-xl border border-gray-700 bg-gray-900 text-sm font-medium text-gray-200 active:bg-gray-800 disabled:opacity-50"
-          >
-            {busy === "nobg" ? "Queueing…" : "Remove backgrounds"}
-          </button>
-          <button
-            disabled={busy !== null}
-            onClick={() =>
-              void run("embed", async () => {
-                await api.runProcessing("embed");
-                return "Embedding batch queued.";
-              })
-            }
-            className="flex h-11 items-center justify-center rounded-xl border border-gray-700 bg-gray-900 text-sm font-medium text-gray-200 active:bg-gray-800 disabled:opacity-50"
-          >
-            {busy === "embed" ? "Queueing…" : "Embed items"}
-          </button>
-        </div>
-        <button
-          disabled={busy !== null}
-          onClick={() =>
-            void run("person", async () => {
-              await api.runProcessing("person");
-              return "People-photo scan queued — removes model shots, hides person-only products.";
-            })
-          }
-          className="flex h-11 w-full items-center justify-center rounded-xl border border-gray-700 bg-gray-900 text-sm font-medium text-gray-200 active:bg-gray-800 disabled:opacity-50"
-        >
-          {busy === "person" ? "Queueing…" : "Scan for people in photos"}
-        </button>
-        <div className="grid grid-cols-3 gap-2">
-          {(["nobg", "embed", "person"] as const).map((kind) => (
-            <button
-              key={kind}
-              disabled={busy !== null}
-              onClick={() =>
-                void run(`cancel-${kind}`, async () => {
-                  const r = await api.cancelProcessing(kind);
-                  return `Cancelled ${r.cancelled} queued ${kind} job(s).`;
-                })
-              }
-              className="flex h-10 items-center justify-center rounded-xl border border-gray-800 bg-gray-950 text-xs font-medium text-gray-500 active:bg-gray-900 disabled:opacity-50"
-            >
-              Cancel queued {kind}
-            </button>
-          ))}
-        </div>
         <p className="text-center text-[11px] text-gray-600">
           Jobs run on the M1 at home; the nightly sweep also picks up any backlog.
         </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Per-process rows
+// ---------------------------------------------------------------------------
+
+interface ProcessRowDef {
+  kind: ProcessKind;
+  queue: "process-nobg" | "process-embed" | "process-person";
+  label: string;
+  backlogOf: (d: ProcessingResponse) => number | undefined;
+  rateOf: (d: ProcessingResponse) => string | undefined;
+}
+
+const PROCESS_ROWS: ProcessRowDef[] = [
+  {
+    kind: "nobg",
+    queue: "process-nobg",
+    label: "Background removal",
+    backlogOf: (d) => d.backlog?.needsNobg,
+    rateOf: (d) => `${d.rates.nobg.last1h}/h`,
+  },
+  {
+    kind: "embed",
+    queue: "process-embed",
+    label: "Embeddings",
+    backlogOf: (d) => d.backlog?.needsEmbed,
+    rateOf: (d) => `${d.rates.embeddings.last1h}/h`,
+  },
+  {
+    kind: "person",
+    queue: "process-person",
+    label: "People-photo scan",
+    backlogOf: (d) => d.backlog?.needsPerson ?? d.person?.needsScan,
+    rateOf: (d) => (d.rates.person ? `${d.rates.person.last1h}/h` : undefined),
+  },
+];
+
+function ProcessRow({
+  def,
+  data,
+  queue,
+  activeJobs,
+  busy,
+  run,
+}: {
+  def: ProcessRowDef;
+  data: ProcessingResponse | null;
+  queue: { waiting: number; active: number; failed: number } | undefined;
+  activeJobs: string[];
+  busy: string | null;
+  run: (key: string, fn: () => Promise<string>) => Promise<void>;
+}) {
+  const controls = data?.controls;
+  const enabled = controls?.enabled?.[def.kind] ?? true;
+  const prioritised = controls?.priority === def.kind;
+  const otherPrioritised = !!controls?.priority && !prioritised;
+  // "Actively processing" = the home worker is executing a batch of this kind
+  // right now (heartbeat), or pg-boss shows a claimed job on its queue.
+  const processing = activeJobs.includes(def.kind) || (queue?.active ?? 0) > 0;
+  const waiting = queue?.waiting ?? 0;
+  const backlog = data ? def.backlogOf(data) : undefined;
+  const rate = data ? def.rateOf(data) : undefined;
+
+  return (
+    <div
+      className={cx(
+        "space-y-2 rounded-xl border px-3 py-2.5",
+        prioritised ? "border-amber-700 bg-amber-950/20" : "border-gray-800 bg-gray-900",
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <p className="truncate text-[13px] font-semibold text-gray-100">{def.label}</p>
+            {processing ? (
+              <span className="flex items-center gap-1 rounded-full border border-blue-800 bg-blue-950/60 px-2 py-0.5 text-[10px] font-medium text-blue-300">
+                <span className="size-1.5 animate-pulse rounded-full bg-blue-400" />
+                processing
+              </span>
+            ) : waiting > 0 ? (
+              <span className="rounded-full border border-gray-700 bg-gray-950 px-2 py-0.5 text-[10px] font-medium text-gray-400">
+                queued
+              </span>
+            ) : null}
+            {prioritised && (
+              <span className="rounded-full border border-amber-700 bg-amber-950/60 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                priority
+              </span>
+            )}
+            {otherPrioritised && (
+              <span className="rounded-full border border-gray-800 bg-gray-950 px-2 py-0.5 text-[10px] font-medium text-gray-600">
+                deferred
+              </span>
+            )}
+          </div>
+          <p className="tnum mt-0.5 text-[11px] text-gray-500">
+            {waiting} queued · {queue?.active ?? 0} active
+            {backlog !== undefined ? ` · ${backlog} backlog` : ""}
+            {rate ? ` · ${rate}` : ""}
+            {(queue?.failed ?? 0) > 0 ? ` · ${queue!.failed} failed` : ""}
+          </p>
+        </div>
+        {/* On/off: gates automatic runs (sweep/idle/chaining) for this process */}
+        <button
+          disabled={busy !== null || !controls}
+          onClick={() =>
+            void run(`toggle-${def.kind}`, async () => {
+              await api.toggleProcessing(def.kind, !enabled);
+              return `${def.label} automation ${!enabled ? "ON" : "OFF"}.`;
+            })
+          }
+          className={cx(
+            "relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50",
+            enabled ? "bg-emerald-600" : "bg-gray-700",
+          )}
+          aria-label={`${def.label} automation ${enabled ? "on" : "off"}`}
+        >
+          <span
+            className={cx(
+              "absolute top-0.5 size-5 rounded-full bg-white transition-all",
+              enabled ? "left-[22px]" : "left-0.5",
+            )}
+          />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-3 gap-1.5">
+        <button
+          disabled={busy !== null}
+          onClick={() =>
+            void run(`start-${def.kind}`, async () => {
+              await api.runProcessing(def.kind);
+              return `${def.label} batch queued.`;
+            })
+          }
+          className="flex h-9 items-center justify-center rounded-lg border border-gray-700 bg-gray-950 text-xs font-semibold text-gray-100 active:bg-gray-800 disabled:opacity-50"
+        >
+          {busy === `start-${def.kind}` ? "…" : "Start"}
+        </button>
+        <button
+          disabled={busy !== null || (waiting === 0 && !processing)}
+          onClick={() =>
+            void run(`stop-${def.kind}`, async () => {
+              const r = await api.cancelProcessing(def.kind);
+              return `Stopped ${def.label.toLowerCase()}: ${r.cancelled} queued job(s) cancelled${
+                processing ? " — the running batch finishes, then no more chain" : ""
+              }.`;
+            })
+          }
+          className="flex h-9 items-center justify-center rounded-lg border border-gray-800 bg-gray-950 text-xs font-medium text-gray-400 active:bg-gray-900 disabled:opacity-40"
+        >
+          {busy === `stop-${def.kind}` ? "…" : "Stop"}
+        </button>
+        <button
+          disabled={busy !== null || !controls}
+          onClick={() =>
+            void run(`prio-${def.kind}`, async () => {
+              const r = await api.setProcessingPriority(prioritised ? null : def.kind);
+              return r.priority
+                ? `${def.label} prioritised — other processes wait until its backlog drains.`
+                : "Priority cleared — all processes resume.";
+            })
+          }
+          className={cx(
+            "flex h-9 items-center justify-center rounded-lg border text-xs font-semibold disabled:opacity-50",
+            prioritised
+              ? "border-amber-600 bg-amber-900/40 text-amber-200 active:bg-amber-900/60"
+              : "border-gray-700 bg-gray-950 text-gray-300 active:bg-gray-800",
+          )}
+        >
+          {busy === `prio-${def.kind}` ? "…" : prioritised ? "Unprioritise" : "Prioritise"}
+        </button>
       </div>
     </div>
   );

@@ -187,8 +187,18 @@ export interface WorkerHeartbeat {
   ageSeconds: number;
 }
 
+export type ProcessKind = "nobg" | "embed" | "person";
+
+export interface ProcessingControls {
+  /** Per-process automation toggle: sweeps/idle/chaining only run when true. */
+  enabled: Record<ProcessKind, boolean>;
+  /** When set, the worker defers all OTHER kinds until this backlog drains. */
+  priority: string | null;
+}
+
 export interface ProcessingResponse {
   totals: ProcessingTotals;
+  controls?: ProcessingControls;
   rates: {
     nobg: { last1h: number; last24h: number };
     embeddings: { last1h: number; last24h: number };
@@ -487,6 +497,16 @@ export const api = {
     }),
   cancelProcessing: (kind: "nobg" | "embed" | "person") =>
     request<{ cancelled: number }>("/api/processing/cancel", {
+      method: "POST",
+      body: JSON.stringify({ kind }),
+    }),
+  toggleProcessing: (kind: ProcessKind, enabled: boolean) =>
+    request<{ kind: string; enabled: boolean }>("/api/processing/toggle", {
+      method: "POST",
+      body: JSON.stringify({ kind, enabled }),
+    }),
+  setProcessingPriority: (kind: ProcessKind | null) =>
+    request<{ priority: string | null; jobId: string | null }>("/api/processing/priority", {
       method: "POST",
       body: JSON.stringify({ kind }),
     }),
