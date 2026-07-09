@@ -2761,9 +2761,14 @@ if (fs.existsSync(path.join(DASHBOARD_DIST, "index.html"))) {
 }
 
 // The React dashboard is the primary UI — send the bare domain straight to it.
+// Phones go to the mobile swipe app instead: iOS "Add to Home Screen" saves
+// the CURRENT page as the PWA start URL (no manifest here), so landing a phone
+// on the desktop /app produced a desktop-only home-screen app.
 // The legacy monolithic HTML UI stays reachable at /legacy as a fallback.
-app.get("/", (_req, res) => {
-  res.redirect("/app/");
+app.get("/", (req, res) => {
+  const ua = String(req.headers["user-agent"] ?? "");
+  const isPhone = /iPhone|iPod|Android.*Mobile|Mobile Safari/i.test(ua);
+  res.redirect(isPhone ? "/swipe" : "/app/");
 });
 app.get("/legacy", (_req, res) => {
   res.sendFile(path.join(__dirname, "Ui.html"));
