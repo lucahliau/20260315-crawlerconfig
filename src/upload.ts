@@ -106,6 +106,8 @@ interface ClothingItemInput {
   currency: string;
   salePrice: number | null;
   compareAtPrice: number | null;
+  /** Stock from the source listing/markup: null unknown, false = sold out. */
+  inStock: boolean | null;
   imageUrl: string | null;
   images: string[];
   colors: string[];
@@ -287,6 +289,21 @@ function extractFromJsonLd(product: Record<string, unknown>): Partial<ClothingIt
         }
       }
     }
+
+    // Availability from schema.org offers ("http://schema.org/InStock",
+    // "OutOfStock", "SoldOut", "Discontinued"…): in stock when ANY offer says
+    // so; sold out only when availability is present and NONE do.
+    let sawAvailability = false;
+    let anyInStock = false;
+    for (const offer of offers) {
+      const availability = String(offer.availability ?? "").toLowerCase();
+      if (!availability) continue;
+      sawAvailability = true;
+      if (availability.includes("instock") || availability.includes("limitedavailability") || availability.includes("preorder")) {
+        anyInStock = true;
+      }
+    }
+    if (sawAvailability) result.inStock = anyInStock;
 
     // Extract sizes and colors from offer variant names
     const sizes = new Set<string>();
@@ -667,6 +684,7 @@ function extractProductData(html: string, url: string, config: Config): Clothing
     currency: "",
     salePrice: null,
     compareAtPrice: null,
+    inStock: null,
     imageUrl: null,
     images: [],
     colors: [],
@@ -848,6 +866,7 @@ function buildShopifyNativeItem(product: ShopifyProduct, url: string, config: Co
     currency: "",
     salePrice: f.salePrice,
     compareAtPrice: f.compareAtPrice,
+    inStock: f.inStock,
     imageUrl: f.images[0] ?? null,
     images: f.images,
     colors: f.colors,
@@ -1040,7 +1059,7 @@ async function upsertClothingItem(item: ClothingItemInput, pool: Pool): Promise<
       "externalId", "manufacturerCode", "productType", "isClothing",
       "classificationConfidence", "classifiedAt", "lastVerifiedAt", "active",
       "createdAt", "updatedAt",
-      "salePrice", "compareAtPrice"
+      "salePrice", "compareAtPrice", "inStock"
     ) VALUES (
       gen_random_uuid(), $1, $2, $3, $4, $5,
       $6, $7, $8, $9, $10, $11,
@@ -1048,7 +1067,7 @@ async function upsertClothingItem(item: ClothingItemInput, pool: Pool): Promise<
       $17, $18, $19, $20,
       $21, NOW(), NOW(), true,
       NOW(), NOW(),
-      $22, $23
+      $22, $23, $25
     )
     ON CONFLICT ("retailer", "externalId") DO UPDATE SET
       "name" = EXCLUDED."name",
@@ -1059,6 +1078,9 @@ async function upsertClothingItem(item: ClothingItemInput, pool: Pool): Promise<
       "price" = EXCLUDED."price",
       "salePrice" = EXCLUDED."salePrice",
       "compareAtPrice" = EXCLUDED."compareAtPrice",
+      -- Keep the previous stock verdict when this crawl learned nothing
+      -- (non-Shopify page without offer availability).
+      "inStock" = COALESCE(EXCLUDED."inStock", "ClothingItem"."inStock"),
       "currency" = EXCLUDED."currency",
       "imageUrl" = EXCLUDED."imageUrl",
       "images" = EXCLUDED."images",
@@ -1108,6 +1130,7 @@ async function upsertClothingItem(item: ClothingItemInput, pool: Pool): Promise<
     item.salePrice,
     item.compareAtPrice,
     imagesChanged,
+    item.inStock,
   ];
 
   await pool.query(query, values);

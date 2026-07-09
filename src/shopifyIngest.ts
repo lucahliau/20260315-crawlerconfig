@@ -15,6 +15,7 @@ export interface ShopifyVariant {
   compare_at_price?: string | number | null;
   sku?: string | null;
   title?: string | null;
+  available?: boolean | null;
 }
 
 export interface ShopifyImage {
@@ -52,6 +53,7 @@ export interface ShopifyMappedFields {
   price: number | null;
   salePrice: number | null;
   compareAtPrice: number | null;
+  inStock: boolean | null;
   sizes: string[];
   colors: string[];
   tags: string[];
@@ -78,33 +80,56 @@ function stripHtml(html: string | null | undefined): string {
 }
 
 /**
- * Representative variant pricing = the lowest-priced variant (matches the
- * price Shopify surfaces on the listing). Sale = that variant's
- * compare_at_price > price. Shared by the full ingest and the price-refresh
- * sweep so both use the exact same convention.
+ * Representative variant pricing = the lowest-priced PURCHASABLE variant
+ * (matches the price Shopify surfaces on the listing; a sold-out size's price
+ * isn't what a shopper can pay). Falls back to the lowest-priced variant
+ * overall when nothing is available. Sale = that variant's compare_at_price >
+ * price. Also derives product stock: `inStock` = any variant available; null
+ * when the listing carries no availability data. Shared by the full ingest
+ * and the price-refresh sweep so both use the exact same convention.
  */
 export function representativeVariantPricing(product: ShopifyProduct): {
   price: number | null;
   salePrice: number | null;
   compareAtPrice: number | null;
+  inStock: boolean | null;
 } {
-  let repPrice: number | null = null;
-  let repCompareAt: number | null = null;
-  for (const v of product.variants ?? []) {
-    const p = toNumber(v?.price);
-    if (p == null) continue;
-    if (repPrice == null || p < repPrice) {
-      repPrice = p;
-      repCompareAt = toNumber(v?.compare_at_price);
+  const variants = product.variants ?? [];
+  let sawAvailability = false;
+  let anyAvailable = false;
+  for (const v of variants) {
+    if (typeof v?.available === "boolean") {
+      sawAvailability = true;
+      if (v.available) anyAvailable = true;
     }
   }
+  const inStock = sawAvailability ? anyAvailable : null;
+
+  const pick = (pool: ShopifyVariant[]): { price: number | null; compareAt: number | null } => {
+    let repPrice: number | null = null;
+    let repCompareAt: number | null = null;
+    for (const v of pool) {
+      const p = toNumber(v?.price);
+      if (p == null) continue;
+      if (repPrice == null || p < repPrice) {
+        repPrice = p;
+        repCompareAt = toNumber(v?.compare_at_price);
+      }
+    }
+    return { price: repPrice, compareAt: repCompareAt };
+  };
+
+  // Price from available variants when stock data exists; else all variants.
+  let picked = pick(sawAvailability ? variants.filter((v) => v?.available === true) : variants);
+  if (picked.price == null) picked = pick(variants);
+
   let salePrice: number | null = null;
   let compareAtPrice: number | null = null;
-  if (repPrice != null && repCompareAt != null && repCompareAt > repPrice) {
-    compareAtPrice = repCompareAt;
-    salePrice = repPrice;
+  if (picked.price != null && picked.compareAt != null && picked.compareAt > picked.price) {
+    compareAtPrice = picked.compareAt;
+    salePrice = picked.price;
   }
-  return { price: repPrice, salePrice, compareAtPrice };
+  return { price: picked.price, salePrice, compareAtPrice, inStock };
 }
 
 /** Map one Shopify product object to our item fields. Pure + deterministic. */
@@ -121,7 +146,7 @@ export function mapShopifyProductFields(product: ShopifyProduct, origin: string)
     images = [product.image.src];
   }
 
-  const { price: repPrice, salePrice, compareAtPrice } = representativeVariantPricing(product);
+  const { price: repPrice, salePrice, compareAtPrice, inStock } = representativeVariantPricing(product);
   const variants = product.variants ?? [];
 
   // Sizes / colors from the product options (the clean structured source).
@@ -159,6 +184,7 @@ export function mapShopifyProductFields(product: ShopifyProduct, origin: string)
     price: repPrice,
     salePrice,
     compareAtPrice,
+    inStock,
     sizes: [...sizes],
     colors: [...colors],
     tags,

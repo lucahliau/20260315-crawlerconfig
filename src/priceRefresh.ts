@@ -72,6 +72,8 @@ export interface PriceRefreshOutcome {
   imagesChanged: number;
   reuploadsEnqueued: number;
   missingFromListing: number;
+  /** Rows marked inStock=false because they vanished from a COMPLETE listing. */
+  markedSoldOut: number;
   durationMs: number;
 }
 
@@ -97,6 +99,7 @@ interface CatalogRow {
   price: number | null;
   salePrice: number | null;
   compareAtPrice: number | null;
+  inStock: boolean | null;
   sourceImages: string[] | null;
 }
 
@@ -156,6 +159,7 @@ export async function refreshRetailerPrices(
     imagesChanged: 0,
     reuploadsEnqueued: 0,
     missingFromListing: 0,
+    markedSoldOut: 0,
     durationMs: 0,
   };
   const finish = (status: PriceRefreshOutcome["status"], reason?: string): PriceRefreshOutcome => {
@@ -211,10 +215,11 @@ export async function refreshRetailerPrices(
     price: string | null;
     salePrice: string | null;
     compareAtPrice: string | null;
+    inStock: boolean | null;
     sourceImages: unknown;
   }>(
     `SELECT id, "sourceUrl", price::text, "salePrice"::text AS "salePrice",
-            "compareAtPrice"::text AS "compareAtPrice",
+            "compareAtPrice"::text AS "compareAtPrice", "inStock",
             metadata->'sourceImages' AS "sourceImages"
        FROM "ClothingItem"
       WHERE retailer = $1`,
@@ -230,6 +235,7 @@ export async function refreshRetailerPrices(
       price: toNum(r.price),
       salePrice: toNum(r.salePrice),
       compareAtPrice: toNum(r.compareAtPrice),
+      inStock: typeof r.inStock === "boolean" ? r.inStock : null,
       sourceImages: Array.isArray(r.sourceImages)
         ? (r.sourceImages as unknown[]).filter((s): s is string => typeof s === "string")
         : null,
@@ -256,6 +262,8 @@ export async function refreshRetailerPrices(
     const pricingSource = usProduct ?? product;
     const raw = representativeVariantPricing(pricingSource);
     if (raw.price == null) continue;
+    // null availability data (rare) → keep the row's existing verdict.
+    const newInStock = raw.inStock;
     const rawCurrency = usProduct ? "USD" : storeCurrency;
     const priceUrl = usProduct ? `${usOrigin}/products/${handle}` : rows[0].sourceUrl;
 
@@ -276,10 +284,12 @@ export async function refreshRetailerPrices(
         }
       }
 
+      const effectiveStock = newInStock ?? row.inStock;
       const changed =
         !numbersEqual(row.price, n.price) ||
         !numbersEqual(row.salePrice, n.salePrice) ||
-        !numbersEqual(row.compareAtPrice, n.compareAtPrice);
+        !numbersEqual(row.compareAtPrice, n.compareAtPrice) ||
+        effectiveStock !== row.inStock;
       if (!changed) continue;
 
       out.updated++;
@@ -303,20 +313,40 @@ export async function refreshRetailerPrices(
             SET price = $2,
                 "salePrice" = $3,
                 "compareAtPrice" = $4,
+                "inStock" = $6,
                 currency = 'USD',
                 "lastVerifiedAt" = NOW(),
                 "updatedAt" = NOW(),
                 metadata = COALESCE(metadata, '{}'::jsonb) || $5::jsonb
           WHERE id = $1`,
-        [row.id, n.price, n.salePrice, n.compareAtPrice, JSON.stringify(metaPatch)],
+        [row.id, n.price, n.salePrice, n.compareAtPrice, JSON.stringify(metaPatch), effectiveStock],
       );
     }
   }
 
   if (listing.complete) {
-    for (const handle of rowsByHandle.keys()) {
-      if (!seenHandles.has(handle)) out.missingFromListing += rowsByHandle.get(handle)!.length;
+    // Rows whose product vanished from the store's COMPLETE listing =
+    // delisted. Per product decision (2026-07-09): never hide them — mark
+    // inStock=false so the app shows a "SOLD OUT" tag. If the product ever
+    // reappears in a listing, the matched path above flips it back.
+    const delistedIds: string[] = [];
+    for (const [handle, rows] of rowsByHandle) {
+      if (seenHandles.has(handle)) continue;
+      out.missingFromListing += rows.length;
+      for (const row of rows) {
+        if (row.inStock !== false) delistedIds.push(row.id);
+      }
     }
+    if (delistedIds.length > 0 && !dryRun) {
+      await pool.query(
+        `UPDATE "ClothingItem"
+            SET "inStock" = false, "updatedAt" = NOW(),
+                metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
+          WHERE id = ANY($1::text[])`,
+        [delistedIds, JSON.stringify({ delistedAt: new Date().toISOString() })],
+      );
+    }
+    out.markedSoldOut = delistedIds.length;
   }
 
   // Changed galleries → full re-upload for just those URLs (images + reprocess
@@ -337,7 +367,7 @@ export async function refreshRetailerPrices(
   }
 
   log(
-    `[price-refresh:${config.retailer}] listed=${out.listed} matched=${out.matchedRows} updated=${out.updated} onSale=${out.onSale} imagesChanged=${out.imagesChanged} (reuploads=${out.reuploadsEnqueued}) missing=${out.missingFromListing}${dryRun ? " [dry-run]" : ""}`,
+    `[price-refresh:${config.retailer}] listed=${out.listed} matched=${out.matchedRows} updated=${out.updated} onSale=${out.onSale} imagesChanged=${out.imagesChanged} (reuploads=${out.reuploadsEnqueued}) missing=${out.missingFromListing} markedSoldOut=${out.markedSoldOut}${dryRun ? " [dry-run]" : ""}`,
   );
   return finish("ok");
 }
@@ -398,6 +428,7 @@ export async function runPriceRefreshSweep(opts?: PriceRefreshOptions): Promise<
             imagesChanged: 0,
             reuploadsEnqueued: 0,
             missingFromListing: 0,
+            markedSoldOut: 0,
             durationMs: RETAILER_DEADLINE_MS,
           });
         }, RETAILER_DEADLINE_MS);
@@ -420,6 +451,7 @@ export async function runPriceRefreshSweep(opts?: PriceRefreshOptions): Promise<
         imagesChanged: 0,
         reuploadsEnqueued: 0,
         missingFromListing: 0,
+        markedSoldOut: 0,
         durationMs: 0,
       });
     }
