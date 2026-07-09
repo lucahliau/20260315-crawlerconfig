@@ -50,6 +50,12 @@ import {
 } from "./pipelineStore.js";
 import { ErrorCodes, classifyError, type ErrorCode } from "./errorCodes.js";
 import {
+  loadRefreshableConfigs,
+  refreshRetailerPrices,
+  runPriceRefreshSweep,
+} from "./priceRefresh.js";
+import {
+  enqueuePriceRefresh,
   enqueueUploadUrls,
   getBoss,
   getQueueStats,
@@ -57,6 +63,7 @@ import {
   QUEUES,
   retryDeadLetterJob,
   stopBoss,
+  type PriceRefreshJobData,
   type PipelineSweepJobData,
 } from "./queue.js";
 import { safeParseConfig } from "./schemas/config.js";
@@ -2016,6 +2023,54 @@ app.post("/api/upload/:retailer/enqueue", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Price refresh — cheap /products.json price+sale sweep (no image traffic)
+// ---------------------------------------------------------------------------
+
+app.post("/api/price-refresh/all", async (_req, res) => {
+  try {
+    const jobId = await enqueuePriceRefresh({});
+    if (!jobId) {
+      return res
+        .status(409)
+        .json({ error: "Queue unavailable or an identical refresh is already queued today." });
+    }
+    res.status(202).json({ enqueued: true, jobId, scope: "all" });
+  } catch (err) {
+    console.error("[api/price-refresh/all] Error:", err);
+    res.status(500).json({ error: err instanceof Error ? err.message : "Enqueue failed." });
+  }
+});
+
+app.post("/api/price-refresh/:retailer", async (req, res) => {
+  try {
+    const retailer = req.params.retailer;
+    const config = await loadStoredConfig(retailer);
+    if (!config) {
+      return res.status(404).json({ error: `No config for retailer "${retailer}"` });
+    }
+    const jobId = await enqueuePriceRefresh({ retailer });
+    if (!jobId) {
+      return res
+        .status(409)
+        .json({ error: "Queue unavailable or an identical refresh is already queued today." });
+    }
+    res.status(202).json({ enqueued: true, jobId, scope: retailer });
+  } catch (err) {
+    console.error("[api/price-refresh] Error:", err);
+    res.status(500).json({ error: err instanceof Error ? err.message : "Enqueue failed." });
+  }
+});
+
+app.get("/api/price-refresh/status", async (_req, res) => {
+  try {
+    const last = await getSetting<Record<string, unknown> | null>("price_refresh:last", null);
+    res.json({ last });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Status read failed." });
+  }
+});
+
 app.get("/api/discovered-brands", (_req, res) => {
   try {
     if (!fs.existsSync(DISCOVERED_BRANDS_PATH)) {
@@ -2779,6 +2834,29 @@ const server = app.listen(PORT, () => {
           { batchSize: 1, pollingIntervalSeconds: 30 },
           async () => {
             await runWeeklyRecrawlSweep();
+          },
+        );
+        // Price refresh runs in the server too — it's HTTP+DB only (no
+        // browser, no image transfer), so the always-on Railway dyno is the
+        // right home for it.
+        await boss.work<PriceRefreshJobData>(
+          QUEUES.PRICE_REFRESH,
+          { batchSize: 1, pollingIntervalSeconds: 30 },
+          async ([job]) => {
+            const retailer = job?.data?.retailer;
+            if (retailer) {
+              const pool = getPool();
+              if (!pool) return;
+              const configs = await loadRefreshableConfigs();
+              const config = configs.find((c) => c.retailer === retailer);
+              if (!config) {
+                console.warn(`[price-refresh] no valid config for "${retailer}" — skipping.`);
+                return;
+              }
+              await refreshRetailerPrices(config, pool);
+            } else {
+              await runPriceRefreshSweep();
+            }
           },
         );
       }

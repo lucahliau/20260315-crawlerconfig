@@ -5,12 +5,11 @@ import { getStagehandModel } from "./stagehandModel.js";
 import { getStagehandBrowserOptions } from "./stagehandConfig.js";
 import type { Config } from "./schemas/config.js";
 import {
-  convertToUsd,
   inferCurrencyFromHostname,
-  resolveCurrencyForUsd,
-  roundUsdPrice,
-  vatRateForSource,
+  normalizePriceTriple,
 } from "./currencyToUsd.js";
+import { ensureFreshFxRates } from "./fxRates.js";
+import { getShopifyStoreCurrency } from "./shopifyStore.js";
 import { resolveBrand } from "./brandName.js";
 import {
   extractJsonLdBlocks,
@@ -121,6 +120,9 @@ interface ClothingItemInput {
   retailer: string;
   externalId: string | null;
   manufacturerCode: string | null;
+  /** True when `currency` came from a hostname/USD fallback rather than the
+   *  page markup — lets the loop upgrade it from the store's /cart.json. */
+  currencyInferred?: boolean;
 }
 
 export interface UploadProgress {
@@ -720,6 +722,7 @@ function extractProductData(html: string, url: string, config: Config): Clothing
 function finalizeCurrencyHint(result: ClothingItemInput, url: string): void {
   if (!result.currency?.trim()) {
     result.currency = inferCurrencyFromHostname(url) ?? "USD";
+    result.currencyInferred = true;
   }
 }
 
@@ -957,41 +960,27 @@ function normalizeItemPriceToUsd(item: ClothingItemInput, sourceUrl: string): vo
 
   const originalPrice = item.price;
   const rawCurrency = item.currency;
-  const { iso, notes } = resolveCurrencyForUsd(sourceUrl, originalPrice, rawCurrency);
 
-  // Strip the home-market VAT/GST baked into EU/UK/etc. consumer prices: a US
-  // shopper buying as an export isn't charged it, so the catalog price shouldn't
-  // carry it (it was inflating prices ~15-25% vs the brand's US storefront). USD
-  // and unknown sources strip nothing. See currencyToUsd.vatRateForSource.
-  const vat = vatRateForSource(sourceUrl, iso);
-  const exVat = (v: number): number => (vat > 0 ? v / (1 + vat) : v);
-
-  const { usd, unknownCurrency } = convertToUsd(exVat(originalPrice), iso);
-  const rounded = roundUsdPrice(usd);
+  // Shared normalizer: resolve real currency, strip the home-market VAT/GST
+  // baked into EU/UK/etc. consumer prices (a US shopper buying as an export
+  // isn't charged it), FX all three price fields with the same rate, then
+  // re-assert the sale invariant (compareAtPrice > price else both null).
+  const n = normalizePriceTriple(sourceUrl, rawCurrency, originalPrice, item.salePrice, item.compareAtPrice);
+  const { iso, notes, vatStripped: vat, unknownCurrency } = n;
 
   if (iso !== "USD" || notes.length > 0 || vat > 0) {
     const vatNote = vat > 0 ? ` less ${Math.round(vat * 100)}% VAT` : "";
     log(
-      `    FX: ${originalPrice} ${iso}${vatNote} → ~$${rounded} USD${notes.length ? ` (${notes.join("; ")})` : ""}`,
+      `    FX: ${originalPrice} ${iso}${vatNote} → ~$${n.price} USD${notes.length ? ` (${notes.join("; ")})` : ""}`,
     );
   } else if (unknownCurrency) {
     log(`    FX: no rate for "${iso}" — leaving nominal amount as USD`);
   }
 
-  item.price = rounded;
+  item.price = n.price;
   item.currency = "USD";
-
-  // Convert the sale fields with the SAME resolved currency/rate + VAT strip, then
-  // re-assert the sale invariant: compareAtPrice must exceed the effective price to
-  // count as a real sale, else null both (handles FX rounding + spurious signals).
-  const toUsd = (v: number | null): number | null =>
-    v == null ? null : roundUsdPrice(convertToUsd(exVat(v), iso).usd);
-  item.salePrice = toUsd(item.salePrice);
-  item.compareAtPrice = toUsd(item.compareAtPrice);
-  if (item.compareAtPrice == null || item.compareAtPrice <= item.price) {
-    item.salePrice = null;
-    item.compareAtPrice = null;
-  }
+  item.salePrice = n.salePrice;
+  item.compareAtPrice = n.compareAtPrice;
 
   const shouldAddMeta = iso !== "USD" || notes.length > 0 || unknownCurrency || vat > 0;
   if (shouldAddMeta) {
@@ -1210,6 +1199,9 @@ export async function uploadRetailer(
     await pool.query("SELECT 1");
     log("  Database connection OK");
 
+    // Freshen FX rates (KV-cached daily; falls back to the hardcoded table).
+    await ensureFreshFxRates();
+
     // Initialize browser if needed
     if (needsBrowser) {
       log("  Initializing headless browser...");
@@ -1325,6 +1317,19 @@ export async function uploadRetailer(
             }
           }
 
+          // Currency upgrade: when no currency was found in the markup (we only
+          // guessed from the hostname — wrong for GBP/EUR stores on .com hosts,
+          // e.g. Drake's), ask the store's own /cart.json. Shopify answers with
+          // its checkout currency; non-Shopify sites 404 and we keep the guess.
+          if (item.currencyInferred && item.price != null) {
+            const storeCurrency = await getShopifyStoreCurrency(url);
+            if (storeCurrency && storeCurrency !== item.currency) {
+              log(`    Currency: ${item.currency} (hostname guess) → ${storeCurrency} (store cart.json)`);
+              item.currency = storeCurrency;
+              item.currencyInferred = false;
+            }
+          }
+
           // Brand identity: keep the scraped brand when it's a real brand name (it is
           // for single brands AND for multi-brand stockists), but replace it with the
           // crawl target's discovered name when it's a distributor/operating company,
@@ -1377,20 +1382,50 @@ export async function uploadRetailer(
           }
 
           // Upload images to R2
-          const r2Images: string[] = [];
+          let r2Images: string[] = [];
           const allImages = item.images.length > 0 ? item.images : (item.imageUrl ? [item.imageUrl] : []);
           itemName = item.name ?? undefined;
           imageCount = allImages.length;
 
-          // Upload a product's images to R2 concurrently — they're distinct CDN
-          // assets (not storefront hits), so parallelizing is polite and ~Nx
-          // faster than the old sequential loop. Order preserved via the index.
-          const eid = externalId;
-          const r2Results = await Promise.all(
-            allImages.map((img, imgIdx) => uploadImageToR2(img, config.retailer, eid, imgIdx)),
+          // Fingerprint skip: when this row was already uploaded from EXACTLY the
+          // same source image URLs (recorded as metadata.sourceImages on every
+          // upsert), reuse its existing R2 URLs and move zero image bytes. This is
+          // what makes routine re-crawls price/metadata-cheap — images transfer
+          // only when the retailer actually changed the gallery.
+          let imagesReused = false;
+          const prevRow = await pool.query<{
+            imageUrl: string | null;
+            images: string[] | null;
+            sourceImages: unknown;
+          }>(
+            'SELECT "imageUrl", images, metadata->\'sourceImages\' AS "sourceImages" FROM "ClothingItem" WHERE retailer = $1 AND "externalId" = $2',
+            [config.retailer, externalId],
           );
-          for (const r2Url of r2Results) {
-            if (r2Url) r2Images.push(r2Url);
+          const prev = prevRow.rows[0];
+          const prevSourceImages = Array.isArray(prev?.sourceImages)
+            ? (prev.sourceImages as unknown[]).filter((s): s is string => typeof s === "string")
+            : null;
+          if (
+            prev &&
+            prevSourceImages &&
+            prevSourceImages.length > 0 &&
+            (prev.images?.length ?? 0) > 0 &&
+            arraysEqual(prevSourceImages, allImages)
+          ) {
+            r2Images = prev.images!;
+            imagesReused = true;
+            log(`    Images unchanged (${allImages.length} source URLs match) — reusing existing R2 gallery`);
+          } else {
+            // Upload a product's images to R2 concurrently — they're distinct CDN
+            // assets (not storefront hits), so parallelizing is polite and ~Nx
+            // faster than the old sequential loop. Order preserved via the index.
+            const eid = externalId;
+            const r2Results = await Promise.all(
+              allImages.map((img, imgIdx) => uploadImageToR2(img, config.retailer, eid, imgIdx)),
+            );
+            for (const r2Url of r2Results) {
+              if (r2Url) r2Images.push(r2Url);
+            }
           }
           uploadedToR2 = r2Images.length > 0;
 
@@ -1421,6 +1456,15 @@ export async function uploadRetailer(
 
           item.imageUrl = r2Images[0];
           item.images = r2Images;
+
+          // Record the source-gallery fingerprint for the next crawl's skip check
+          // (and for the price-refresh sweep's gallery-change detection).
+          item.metadata = {
+            ...(item.metadata && typeof item.metadata === "object" && !Array.isArray(item.metadata)
+              ? (item.metadata as Record<string, unknown>)
+              : {}),
+            sourceImages: allImages,
+          };
 
           // Ensure externalId is set for upsert
           item.externalId = externalId;
@@ -1464,6 +1508,7 @@ export async function uploadRetailer(
                 category: item.category,
                 subcategory: item.subcategory,
                 price: item.price,
+                imagesReused,
               },
             });
           }

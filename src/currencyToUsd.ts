@@ -172,13 +172,27 @@ export interface ConvertToUsdResult {
   unknownCurrency: boolean;
 }
 
+// Live FX overlay (see fxRates.ts). When a daily-refreshed rate is available it
+// wins over the hardcoded rolling average; the hardcoded table remains the
+// always-works fallback so conversion never depends on a third-party API.
+let LIVE_USD_PER_UNIT: Record<string, number> | null = null;
+
+export function setLiveFxRates(rates: Record<string, number> | null): void {
+  LIVE_USD_PER_UNIT = rates;
+}
+
+export function getEffectiveUsdPerUnit(currencyIso: string): number | null {
+  const iso = currencyIso.toUpperCase();
+  return LIVE_USD_PER_UNIT?.[iso] ?? USD_PER_UNIT[iso] ?? null;
+}
+
 /**
- * Convert amount from `currencyIso` to USD using `USD_PER_UNIT`.
+ * Convert amount from `currencyIso` to USD using the live rate when loaded,
+ * else the hardcoded `USD_PER_UNIT` average.
  * Unknown codes: no conversion (treat as USD) and `unknownCurrency: true`.
  */
 export function convertToUsd(amount: number, currencyIso: string): ConvertToUsdResult {
-  const iso = currencyIso.toUpperCase();
-  const usdPerUnit = USD_PER_UNIT[iso];
+  const usdPerUnit = getEffectiveUsdPerUnit(currencyIso);
   if (usdPerUnit == null) {
     return { usd: amount, usdPerUnit: 1, unknownCurrency: true };
   }
@@ -256,4 +270,56 @@ export function vatRateForSource(url: string, currencyIso: string): number {
   const country = countryFromUrl(url);
   if (country) return VAT_BY_COUNTRY[country] ?? 0;
   return VAT_BY_CURRENCY[iso] ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// Shared price-triple normalization (upload path + price-refresh sweep)
+// ---------------------------------------------------------------------------
+
+export interface NormalizedPriceTriple {
+  price: number;
+  salePrice: number | null;
+  compareAtPrice: number | null;
+  iso: string;
+  vatStripped: number;
+  unknownCurrency: boolean;
+  notes: string[];
+}
+
+/**
+ * Normalize a (price, salePrice, compareAtPrice) triple from a source listing
+ * to catalog USD: resolve the real currency (explicit > mis-declared-USD fix >
+ * hostname), strip the home-market VAT baked into non-US consumer prices, FX
+ * to USD with the same resolved rate for all three fields, then re-assert the
+ * sale invariant (compareAtPrice > price, else both null).
+ */
+export function normalizePriceTriple(
+  sourceUrl: string,
+  rawCurrency: string,
+  price: number,
+  salePrice: number | null,
+  compareAtPrice: number | null,
+): NormalizedPriceTriple {
+  const { iso, notes } = resolveCurrencyForUsd(sourceUrl, price, rawCurrency);
+  const vat = vatRateForSource(sourceUrl, iso);
+  const exVat = (v: number): number => (vat > 0 ? v / (1 + vat) : v);
+
+  const main = convertToUsd(exVat(price), iso);
+  const toUsd = (v: number | null): number | null =>
+    v == null ? null : roundUsdPrice(convertToUsd(exVat(v), iso).usd);
+
+  const out: NormalizedPriceTriple = {
+    price: roundUsdPrice(main.usd),
+    salePrice: toUsd(salePrice),
+    compareAtPrice: toUsd(compareAtPrice),
+    iso,
+    vatStripped: vat,
+    unknownCurrency: main.unknownCurrency,
+    notes,
+  };
+  if (out.compareAtPrice == null || out.compareAtPrice <= out.price) {
+    out.salePrice = null;
+    out.compareAtPrice = null;
+  }
+  return out;
 }

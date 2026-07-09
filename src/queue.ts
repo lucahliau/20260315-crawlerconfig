@@ -39,6 +39,8 @@ export const QUEUES = {
   PROCESS_PERSON: "process-person",
   /** Control jobs claimed by the SERVER (weekly re-crawl sweep). */
   PIPELINE_SWEEP: "pipeline-sweep",
+  /** Cheap price/sale refresh via Shopify /products.json — claimed by the SERVER. */
+  PRICE_REFRESH: "price-refresh",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -78,6 +80,30 @@ export interface ProcessingJobData {
 
 export interface PipelineSweepJobData {
   kind: "weekly-recrawl";
+}
+
+export interface PriceRefreshJobData {
+  /** Single retailer, or absent for a full sweep over every configured retailer. */
+  retailer?: string;
+  /** True when enqueued by the daily cron. */
+  sweep?: boolean;
+}
+
+/**
+ * Enqueue a price refresh (single retailer or full sweep). Date-bucketed
+ * singletonKey so a double-fire can't stack identical runs.
+ */
+export async function enqueuePriceRefresh(data: PriceRefreshJobData): Promise<string | null> {
+  const boss = await getBoss();
+  if (!boss) return null;
+  const day = new Date().toISOString().slice(0, 10);
+  const singletonKey = `price-refresh:${data.retailer ?? "all"}:${day}`;
+  return boss.send(QUEUES.PRICE_REFRESH, data as unknown as Record<string, unknown>, {
+    retryLimit: 1,
+    retryDelay: 60,
+    expireInHours: 4,
+    singletonKey,
+  });
 }
 
 /**

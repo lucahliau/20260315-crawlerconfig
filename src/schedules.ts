@@ -44,7 +44,10 @@ export async function registerSchedules(): Promise<void> {
     { tz: TZ },
   );
   await boss.schedule(QUEUES.PIPELINE_SWEEP, "0 6 * * 1", { kind: "weekly-recrawl" }, { tz: TZ });
+  // Daily price/sale refresh: cheap /products.json listing sweep (no image
+  // traffic) so catalog prices + sales track the storefronts within a day.
+  await boss.schedule(QUEUES.PRICE_REFRESH, "0 5 * * *", { sweep: true }, { tz: TZ });
   console.log(
-    `[schedules] registered: nobg nightly 01:00 (limit ${nobgLimit}), embed nightly 04:00 (limit ${embedLimit}), person-scan 02:00+14:00 (limit ${personLimit}), weekly re-crawl Mon 06:00 (${TZ}).`,
+    `[schedules] registered: nobg nightly 01:00 (limit ${nobgLimit}), embed nightly 04:00 (limit ${embedLimit}), person-scan 02:00+14:00 (limit ${personLimit}), weekly re-crawl Mon 06:00, daily price refresh 05:00 (${TZ}).`,
   );
 }

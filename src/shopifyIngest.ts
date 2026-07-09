@@ -77,6 +77,36 @@ function stripHtml(html: string | null | undefined): string {
     .trim();
 }
 
+/**
+ * Representative variant pricing = the lowest-priced variant (matches the
+ * price Shopify surfaces on the listing). Sale = that variant's
+ * compare_at_price > price. Shared by the full ingest and the price-refresh
+ * sweep so both use the exact same convention.
+ */
+export function representativeVariantPricing(product: ShopifyProduct): {
+  price: number | null;
+  salePrice: number | null;
+  compareAtPrice: number | null;
+} {
+  let repPrice: number | null = null;
+  let repCompareAt: number | null = null;
+  for (const v of product.variants ?? []) {
+    const p = toNumber(v?.price);
+    if (p == null) continue;
+    if (repPrice == null || p < repPrice) {
+      repPrice = p;
+      repCompareAt = toNumber(v?.compare_at_price);
+    }
+  }
+  let salePrice: number | null = null;
+  let compareAtPrice: number | null = null;
+  if (repPrice != null && repCompareAt != null && repCompareAt > repPrice) {
+    compareAtPrice = repCompareAt;
+    salePrice = repPrice;
+  }
+  return { price: repPrice, salePrice, compareAtPrice };
+}
+
 /** Map one Shopify product object to our item fields. Pure + deterministic. */
 export function mapShopifyProductFields(product: ShopifyProduct, origin: string): ShopifyMappedFields {
   const handle = (product.handle ?? "").trim();
@@ -91,25 +121,8 @@ export function mapShopifyProductFields(product: ShopifyProduct, origin: string)
     images = [product.image.src];
   }
 
-  // Representative variant = the lowest-priced one (matches the price Shopify
-  // surfaces on the listing). Sale = that variant's compare_at_price > price.
+  const { price: repPrice, salePrice, compareAtPrice } = representativeVariantPricing(product);
   const variants = product.variants ?? [];
-  let repPrice: number | null = null;
-  let repCompareAt: number | null = null;
-  for (const v of variants) {
-    const p = toNumber(v?.price);
-    if (p == null) continue;
-    if (repPrice == null || p < repPrice) {
-      repPrice = p;
-      repCompareAt = toNumber(v?.compare_at_price);
-    }
-  }
-  let salePrice: number | null = null;
-  let compareAtPrice: number | null = null;
-  if (repPrice != null && repCompareAt != null && repCompareAt > repPrice) {
-    compareAtPrice = repCompareAt;
-    salePrice = repPrice;
-  }
 
   // Sizes / colors from the product options (the clean structured source).
   const sizes = new Set<string>();
