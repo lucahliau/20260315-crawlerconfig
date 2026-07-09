@@ -72,6 +72,12 @@ export interface PriceRefreshOptions {
   onLog?: (msg: string) => void;
 }
 
+/** Hard cap per retailer inside a sweep — see the Promise.race below. */
+const RETAILER_DEADLINE_MS = Math.max(
+  60_000,
+  parseInt(process.env.PRICE_REFRESH_RETAILER_DEADLINE_MS ?? "1200000", 10),
+);
+
 interface CatalogRow {
   id: string;
   sourceUrl: string;
@@ -358,7 +364,33 @@ export async function runPriceRefreshSweep(opts?: PriceRefreshOptions): Promise<
     }
     if (await getSetting<boolean>(`autopilot_optout:${config.retailer}`, false)) continue;
     try {
-      const outcome = await refreshRetailerPrices(config, pool, opts);
+      // Hard per-retailer deadline: one pathological store (stalled body,
+      // hostile pacing) must never wedge the whole sweep — it wedged the first
+      // production run for 2h+. The raced-out promise is abandoned; its
+      // sockets die with their own fetch timeouts.
+      let deadlineTimer: NodeJS.Timeout | undefined;
+      const deadline = new Promise<PriceRefreshOutcome>((resolve) => {
+        deadlineTimer = setTimeout(() => {
+          log(`[price-refresh:${config.retailer}] retailer deadline (${RETAILER_DEADLINE_MS / 60000} min) exceeded — moving on.`);
+          resolve({
+            retailer: config.retailer,
+            status: "error",
+            reason: "retailer deadline exceeded",
+            storeCurrency: null,
+            usStorefront: null,
+            listed: 0,
+            matchedRows: 0,
+            updated: 0,
+            onSale: 0,
+            imagesChanged: 0,
+            reuploadsEnqueued: 0,
+            missingFromListing: 0,
+            durationMs: RETAILER_DEADLINE_MS,
+          });
+        }, RETAILER_DEADLINE_MS);
+      });
+      const outcome = await Promise.race([refreshRetailerPrices(config, pool, opts), deadline]);
+      clearTimeout(deadlineTimer);
       outcomes.push(outcome);
     } catch (err) {
       log(`[price-refresh:${config.retailer}] FAILED: ${(err as Error).message}`);

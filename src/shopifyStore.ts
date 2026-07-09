@@ -33,8 +33,22 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Minimal polite fetch with retry/backoff (429/5xx), mirroring upload.ts. */
-async function fetchWithRetry(url: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<Response | null> {
+interface FetchTextResult {
+  ok: boolean;
+  status: number;
+  text: string | null;
+}
+
+/**
+ * Minimal polite fetch with retry/backoff (429/5xx). Returns the BODY TEXT,
+ * read while the abort timeout is still armed — `fetch()` resolves when the
+ * headers arrive, so an unguarded `res.json()` afterwards can hang forever on
+ * a stalled body stream (this wedged the first production sweep for 2h+).
+ */
+async function fetchTextWithRetry(
+  url: string,
+  timeoutMs = FETCH_TIMEOUT_MS,
+): Promise<FetchTextResult | null> {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -43,8 +57,17 @@ async function fetchWithRetry(url: string, timeoutMs = FETCH_TIMEOUT_MS): Promis
         headers: { "User-Agent": USER_AGENT },
         signal: controller.signal,
       });
-      clearTimeout(timeout);
-      if (res.ok) return res;
+      if (res.ok) {
+        // Still under the abort window — a stalled body aborts, not hangs.
+        const text = await res.text();
+        return { ok: true, status: res.status, text };
+      }
+      // Free the socket; we never read non-ok bodies.
+      try {
+        await res.body?.cancel();
+      } catch {
+        /* already closed */
+      }
       if ((res.status === 429 || res.status >= 500) && attempt < MAX_RETRIES) {
         const retryAfter = Number(res.headers.get("retry-after"));
         let backoff: number;
@@ -58,14 +81,24 @@ async function fetchWithRetry(url: string, timeoutMs = FETCH_TIMEOUT_MS): Promis
         await delay(backoff);
         continue;
       }
-      return res;
+      return { ok: false, status: res.status, text: null };
     } catch {
-      clearTimeout(timeout);
       if (attempt === MAX_RETRIES) return null;
       await delay(BACKOFF_BASE_MS * 2 ** (attempt - 1));
+    } finally {
+      clearTimeout(timeout);
     }
   }
   return null;
+}
+
+function parseJson<T>(text: string | null): T | null {
+  if (text == null) return null;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
 }
 
 interface CachedValue<T> {
@@ -96,12 +129,10 @@ export async function getShopifyStoreCurrency(originOrUrl: string): Promise<stri
 
   let value: string | null = null;
   try {
-    const res = await fetchWithRetry(`${origin}/cart.json`, 10_000);
-    if (res?.ok) {
-      const data = (await res.json()) as { currency?: unknown };
-      if (typeof data.currency === "string" && /^[A-Za-z]{3}$/.test(data.currency.trim())) {
-        value = data.currency.trim().toUpperCase();
-      }
+    const res = await fetchTextWithRetry(`${origin}/cart.json`, 10_000);
+    const data = res?.ok ? parseJson<{ currency?: unknown }>(res.text) : null;
+    if (data && typeof data.currency === "string" && /^[A-Za-z]{3}$/.test(data.currency.trim())) {
+      value = data.currency.trim().toUpperCase();
     }
   } catch {
     value = null;
@@ -160,19 +191,17 @@ export async function listShopifyProducts(
 
   for (let page = 1; page <= MAX_PAGES; page++) {
     if (page > 1) await delay(interPageDelayMs);
-    const res = await fetchWithRetry(`${origin}/products.json?limit=${PAGE_SIZE}&page=${page}`);
+    const res = await fetchTextWithRetry(`${origin}/products.json?limit=${PAGE_SIZE}&page=${page}`);
     if (!res?.ok) {
       onLog?.(`    [listing] ${origin} page ${page}: ${res ? `HTTP ${res.status}` : "fetch failed"} — stopping`);
       return out;
     }
-    let products: ShopifyProduct[];
-    try {
-      const data = (await res.json()) as { products?: ShopifyProduct[] };
-      products = Array.isArray(data.products) ? data.products : [];
-    } catch {
+    const data = parseJson<{ products?: ShopifyProduct[] }>(res.text);
+    if (!data) {
       onLog?.(`    [listing] ${origin} page ${page}: invalid JSON — stopping`);
       return out;
     }
+    const products: ShopifyProduct[] = Array.isArray(data.products) ? data.products : [];
     out.pagesFetched = page;
     if (products.length === 0) {
       out.complete = true;
