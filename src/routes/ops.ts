@@ -57,13 +57,16 @@ export function createOpsRouter(): Router {
                COUNT(*) FILTER (WHERE "embeddedAt" > NOW() - interval '24 hours')::int AS last24h
         FROM "ItemEmbedding"
       `);
-      // hasNobg has no dedicated timestamp; updatedAt moves when the flag is set,
-      // which makes it a serviceable throughput proxy while the worker runs.
+      // Count REAL nobg completions via the metadata.nobgAt stamp written by
+      // setHasNobgForKeys. The old updatedAt proxy exploded whenever a
+      // price/stock sweep touched already-processed rows (33k/h fiction).
+      // Rows processed before the stamp existed simply don't count — rates
+      // reflect throughput from this deploy forward.
       const nobgRatesQ = pg.query(`
-        SELECT COUNT(*) FILTER (WHERE "updatedAt" > NOW() - interval '1 hour')::int   AS last1h,
-               COUNT(*) FILTER (WHERE "updatedAt" > NOW() - interval '24 hours')::int AS last24h
+        SELECT COUNT(*) FILTER (WHERE (metadata->>'nobgAt')::timestamptz > NOW() - interval '1 hour')::int   AS last1h,
+               COUNT(*) FILTER (WHERE (metadata->>'nobgAt')::timestamptz > NOW() - interval '24 hours')::int AS last24h
         FROM "ClothingItem"
-        WHERE "hasNobg" = true
+        WHERE metadata ? 'nobgAt'
       `);
       // People-photo scan coverage. Guarded (.catch) so a pre-migration DB
       // (no hasPerson/personScannedAt columns yet) returns zeros instead of

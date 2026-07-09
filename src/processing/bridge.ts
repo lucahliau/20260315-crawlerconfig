@@ -135,7 +135,11 @@ export async function setHasNobgForKeys(keys: string[]): Promise<number> {
   if (!pool) return 0;
   const result = await pool.query(
     `UPDATE "ClothingItem" ci
-     SET "hasNobg" = true, "updatedAt" = NOW()
+     SET "hasNobg" = true, "updatedAt" = NOW(),
+         -- Real completion timestamp for throughput stats. updatedAt is NOT a
+         -- usable proxy: price/stock sweeps bump it on tens of thousands of
+         -- already-processed rows, which made the dashboard nobg rate explode.
+         metadata = COALESCE(ci.metadata, '{}'::jsonb) || jsonb_build_object('nobgAt', to_jsonb(NOW()))
      FROM unnest($1::text[]) AS k(key)
      WHERE ci."hasNobg" IS DISTINCT FROM true
        AND (ci."imageUrl" = k.key OR ci."imageUrl" LIKE '%/' || k.key)`,
