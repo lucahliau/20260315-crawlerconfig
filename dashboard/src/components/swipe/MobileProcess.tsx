@@ -46,6 +46,13 @@ export function MobileProcess() {
     [busy, load],
   );
 
+  // Auto-dismiss the success toast so it doesn't linger over the list.
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [notice]);
+
   const totals = data?.totals;
   const backlog = data?.backlog;
   const online = data?.homeServerOnline ?? false;
@@ -84,17 +91,6 @@ export function MobileProcess() {
           <MachineVitals t={homeWorker.metadata.telemetry} />
         )}
       </div>
-
-      {loadError && (
-        <div className="rounded-xl border border-red-900 bg-red-950/60 px-3.5 py-2.5 text-xs text-red-300">
-          {loadError}
-        </div>
-      )}
-      {notice && (
-        <div className="rounded-xl border border-emerald-800 bg-emerald-950/50 px-3.5 py-2.5 text-xs text-emerald-300">
-          {notice}
-        </div>
-      )}
 
       {/* Coverage cards */}
       <div className="grid grid-cols-2 gap-2">
@@ -182,6 +178,24 @@ export function MobileProcess() {
           Jobs run on the M1 at home; the nightly sweep also picks up any backlog.
         </p>
       </div>
+
+      {/* Fixed toast — lives OUTSIDE the scroll flow so tapping a control never
+          reflows the list (the old inline banners shoved the page on every tap). */}
+      {(loadError || notice) && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-24 z-50 flex justify-center px-5">
+          <div
+            className={cx(
+              "pointer-events-auto max-w-md rounded-xl border px-3.5 py-2.5 text-xs shadow-lg backdrop-blur",
+              loadError
+                ? "border-red-900 bg-red-950/90 text-red-200"
+                : "border-emerald-800 bg-emerald-950/90 text-emerald-200",
+            )}
+            onClick={() => (loadError ? setLoadError(null) : setNotice(null))}
+          >
+            {loadError ?? notice}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
