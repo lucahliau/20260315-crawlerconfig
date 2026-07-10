@@ -96,7 +96,10 @@ const WORKER_QUEUES = (process.env.WORKER_QUEUES ?? QUEUES.UPLOAD_URL)
 // A processing-capable worker (background removal / embeddings) ALSO runs the
 // people-photo scan. Auto-including it means enabling the scan needs no
 // WORKER_QUEUES .env edit on the M1 — a code push + auto-update is enough.
+// WORKER_CLAIM_PERSON=false opts a helper machine out (e.g. the M4 assisting
+// with nobg/embed only, leaving the person scan to the M1).
 if (
+  process.env.WORKER_CLAIM_PERSON !== "false" &&
   (WORKER_QUEUES.includes(QUEUES.PROCESS_NOBG) || WORKER_QUEUES.includes(QUEUES.PROCESS_EMBED)) &&
   !WORKER_QUEUES.includes(QUEUES.PROCESS_PERSON)
 ) {
