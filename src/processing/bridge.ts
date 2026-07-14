@@ -126,13 +126,24 @@ function meaningfulTail(tail: string[], n: number): string[] {
 /**
  * Flip hasNobg=true for items whose FIRST image (imageUrl) was just processed.
  * Targeted by exact R2 key — the backend's getNobgUrl() derives the nobg
- * variant from imageUrl, so this matches its semantics. The weekly
- * `populate-has-nobg` reconciliation (backend repo) heals anything missed.
+ * variant from imageUrl, so this matches its semantics. The reconcile loop
+ * (worker.ts, id-targeted) heals anything missed.
+ *
+ * PERF (2026-07-14 incident): this must stay INDEXABLE EQUALITY ONLY. The old
+ * `imageUrl LIKE '%/' || key` suffix match forced a full-table scan per batch;
+ * concurrent batch completions saturated the shared Supabase DB and starved the
+ * backend API (statement timeouts) + pooler (ECHECKOUTTIMEOUT) for 1h+.
+ * imageUrl is stored either as the bare key or as `${R2_PUBLIC_URL}/${key}`, so
+ * we match both exact forms; rows uploaded under an older public base miss here
+ * and are healed by the reconcile loop instead. Backed by the ClothingItem_imageUrl_idx
+ * index (backend migration 20260714).
  */
 export async function setHasNobgForKeys(keys: string[]): Promise<number> {
   if (keys.length === 0) return 0;
   const pool = getPool();
   if (!pool) return 0;
+  const pub = (process.env.R2_PUBLIC_URL ?? "").replace(/\/$/, "");
+  const candidates = pub ? [...keys, ...keys.map((k) => `${pub}/${k}`)] : keys;
   const result = await pool.query(
     `UPDATE "ClothingItem" ci
      SET "hasNobg" = true, "updatedAt" = NOW(),
@@ -140,10 +151,10 @@ export async function setHasNobgForKeys(keys: string[]): Promise<number> {
          -- usable proxy: price/stock sweeps bump it on tens of thousands of
          -- already-processed rows, which made the dashboard nobg rate explode.
          metadata = COALESCE(ci.metadata, '{}'::jsonb) || jsonb_build_object('nobgAt', to_jsonb(NOW()))
-     FROM unnest($1::text[]) AS k(key)
+     FROM unnest($1::text[]) AS k(u)
      WHERE ci."hasNobg" IS DISTINCT FROM true
-       AND (ci."imageUrl" = k.key OR ci."imageUrl" LIKE '%/' || k.key)`,
-    [keys],
+       AND ci."imageUrl" = k.u`,
+    [candidates],
   );
   return result.rowCount ?? 0;
 }
