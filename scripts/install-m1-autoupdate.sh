@@ -31,6 +31,16 @@ command -v npx >/dev/null || { echo "npx (Node) not found"; exit 1; }
 chmod +x "$REPO/scripts/auto-update.sh"
 mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
 
+# The job MUST launch via node, not bash: macOS TCC gates launchd access to
+# ~/Desktop by the job's responsible binary, and on this Mac only node holds
+# the Desktop-folder grant (the worker runs via `exec npm` for the same
+# reason). A /bin/bash job is denied with "Operation not permitted" and
+# launchctl shows exit 126 (seen after the macOS 26.5.1 update, 2026-07).
+# bash runs as a CHILD of node here and inherits the grant.
+NODE_BIN="$(command -v node || true)"
+[ -n "$NODE_BIN" ] || NODE_BIN="/opt/homebrew/bin/node"
+[ -x "$NODE_BIN" ] || { echo "node not found (PATH or /opt/homebrew/bin)"; exit 1; }
+
 step "Writing LaunchAgent ($LABEL, every ${INTERVAL}s)"
 cat > "$PLIST" <<PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -40,8 +50,9 @@ cat > "$PLIST" <<PLIST_EOF
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>$REPO/scripts/auto-update.sh</string>
+    <string>$NODE_BIN</string>
+    <string>-e</string>
+    <string>const cp=require('child_process');try{cp.execFileSync('/bin/bash',['$REPO/scripts/auto-update.sh'],{stdio:'inherit'});}catch(e){process.exit(typeof e.status==='number'?e.status:1);}</string>
   </array>
   <key>WorkingDirectory</key><string>$REPO</string>
   <key>StartInterval</key><integer>$INTERVAL</integer>
