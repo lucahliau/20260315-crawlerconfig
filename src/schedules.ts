@@ -17,9 +17,9 @@ export async function registerSchedules(): Promise<void> {
     console.warn("[schedules] queue disabled — schedules not registered.");
     return;
   }
-  const nobgLimit = Math.max(1, parseInt(process.env.PROCESS_NOBG_SWEEP_LIMIT ?? "200", 10));
-  const embedLimit = Math.max(1, parseInt(process.env.PROCESS_EMBED_SWEEP_LIMIT ?? "5000", 10));
-  const personLimit = Math.max(1, parseInt(process.env.PROCESS_PERSON_SWEEP_LIMIT ?? "4000", 10));
+  const nobgLimit = Math.max(1, parseInt(process.env.PROCESS_NOBG_SWEEP_LIMIT ?? "100", 10));
+  const embedLimit = Math.max(1, parseInt(process.env.PROCESS_EMBED_SWEEP_LIMIT ?? "250", 10));
+  const personLimit = Math.max(1, parseInt(process.env.PROCESS_PERSON_SWEEP_LIMIT ?? "100", 10));
 
   // boss.schedule upserts the cron per queue — idempotent across restarts.
   await boss.schedule(

@@ -114,7 +114,7 @@ export async function enqueuePriceRefresh(data: PriceRefreshJobData): Promise<st
  */
 export async function enqueueProcessing(
   data: ProcessingJobData,
-  opts?: { singletonKey?: string },
+  opts?: { singletonKey?: string; startAfterSeconds?: number },
 ): Promise<string | null> {
   const boss = await getBoss();
   if (!boss) return null;
@@ -133,6 +133,9 @@ export async function enqueueProcessing(
     retryBackoff: true,
     expireInHours: 2,
     ...(opts?.singletonKey ? { singletonKey: opts.singletonKey } : {}),
+    ...(opts?.startAfterSeconds
+      ? { startAfter: new Date(Date.now() + opts.startAfterSeconds * 1000) }
+      : {}),
   });
 }
 
@@ -192,8 +195,15 @@ export async function getBoss(): Promise<PgBoss | null> {
     return null;
   }
   startPromise = (async () => {
+    const configuredPoolMax = parseInt(process.env.PGBOSS_DB_POOL_MAX ?? "2", 10);
+    const poolMax = Number.isFinite(configuredPoolMax)
+      ? Math.max(1, Math.min(configuredPoolMax, 4))
+      : 2;
     const boss = new PgBoss({
       connectionString: dbUrl,
+      // pg-boss has its own pool; cap it explicitly so queue polling and
+      // maintenance cannot consume the shared database's foreground headroom.
+      max: poolMax,
       // pg-boss creates its own `pgboss` schema by default — leave it. The
       // maintenance/scheduling supervisor runs by default (needed for
       // boss.schedule cron sweeps).

@@ -62,10 +62,18 @@ export function getPool(): Pool | null {
   if (pool) return pool;
   const dbUrl = (process.env.DATABASE_URL ?? "").replace(/^["']+|["']+$/g, "");
   if (!dbUrl) return null;
+  const configuredMax = parseInt(process.env.CRAWLER_DB_POOL_MAX ?? "3", 10);
+  const maxConnections = Number.isFinite(configuredMax)
+    ? Math.max(1, Math.min(configuredMax, 5))
+    : 3;
   pool = new Pool({
     connectionString: dbUrl,
-    max: 5,
+    // Shared by pipeline persistence and catalog writes. Keep this small so
+    // background work cannot crowd out the foreground API on shared Supabase.
+    max: maxConnections,
     idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 5_000,
+    application_name: "clothedd-crawler",
   });
   return pool;
 }

@@ -1,5 +1,5 @@
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { Pool } from "pg";
+import type { Pool } from "pg";
 import { Stagehand } from "@browserbasehq/stagehand";
 import { getStagehandModel } from "./stagehandModel.js";
 import { getStagehandBrowserOptions } from "./stagehandConfig.js";
@@ -19,6 +19,7 @@ import {
 } from "./htmlExtract.js";
 import { classifyItem, normalizeGender, type Gender } from "./classify.js";
 import { mapShopifyProductFields, type ShopifyProduct } from "./shopifyIngest.js";
+import { getPool } from "./pipelineStore.js";
 
 // ---------------------------------------------------------------------------
 // Logging — same swappable pattern as explore.ts / crawl.ts
@@ -1200,12 +1201,8 @@ export async function uploadRetailer(
   log(`  Delay between requests: ${delayMs}ms`);
   log(`  Requires browser: ${needsBrowser}`);
 
-  const dbUrl = (process.env.DATABASE_URL ?? "").replace(/^["']+|["']+$/g, "");
-  const pool = new Pool({
-    connectionString: dbUrl,
-    max: 3,
-    idleTimeoutMillis: 30_000,
-  });
+  const pool = getPool();
+  if (!pool) throw new Error("DATABASE_URL is missing — upload cannot persist catalog rows");
 
   let stagehand: Stagehand | null = null;
 
@@ -1577,7 +1574,6 @@ export async function uploadRetailer(
       }
     }
   } finally {
-    await pool.end();
     if (stagehand) await stagehand.close();
     _logFn = console.log;
   }

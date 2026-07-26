@@ -196,7 +196,8 @@ export async function getProcessingBacklog(): Promise<ProcessingBacklog> {
        COUNT(*) FILTER (WHERE ci."hasNobg" IS NOT TRUE) AS needs_nobg,
        COUNT(*) FILTER (WHERE ci."hasNobg" AND e."itemId" IS NULL) AS needs_embed
      FROM "ClothingItem" ci
-     LEFT JOIN (SELECT DISTINCT "itemId" FROM "ItemEmbedding") e ON e."itemId" = ci.id
+     LEFT JOIN "ItemEmbedding" e
+       ON e."itemId" = ci.id AND e.model = 'clip-vit-b-32-image'
      WHERE ci.active = true`,
   );
   return {

@@ -107,6 +107,66 @@ if (
 }
 
 const PROCESS_CHAIN_DEPTH_MAX = 50;
+const PROCESS_CHAIN_PAUSE_SECONDS = Math.max(
+  1,
+  parseInt(process.env.PROCESS_CHAIN_PAUSE_SECONDS ?? "5", 10),
+);
+
+// API-aware capacity gate: background processing must yield whenever the
+// foreground catalog is degraded. Healthy recovery uses hysteresis so one lucky
+// probe cannot restart a backlog drain into a still-fragile database.
+const BACKEND_READY_URL =
+  process.env.BACKEND_READY_URL ??
+  "https://20260311-clothes-backend-production.up.railway.app/ready";
+const BACKEND_READY_TIMEOUT_MS = Math.max(
+  500,
+  parseInt(process.env.BACKEND_READY_TIMEOUT_MS ?? "2500", 10),
+);
+const BACKEND_READY_MAX_LATENCY_MS = Math.max(
+  250,
+  parseInt(process.env.BACKEND_READY_MAX_LATENCY_MS ?? "1500", 10),
+);
+const BACKEND_HEALTHY_PROBES_TO_RESUME = Math.max(
+  1,
+  parseInt(process.env.BACKEND_HEALTHY_PROBES_TO_RESUME ?? "3", 10),
+);
+let backendHealthyStreak = 0;
+let backendCapacityCachedAt = 0;
+let backendCapacityCached = false;
+
+async function backendHasProcessingCapacity(): Promise<boolean> {
+  const now = Date.now();
+  if (now - backendCapacityCachedAt < 30_000) return backendCapacityCached;
+
+  const startedAt = Date.now();
+  let healthy = false;
+  try {
+    const response = await fetch(BACKEND_READY_URL, {
+      signal: AbortSignal.timeout(BACKEND_READY_TIMEOUT_MS),
+      headers: { accept: "application/json" },
+    });
+    const latencyMs = Date.now() - startedAt;
+    healthy = response.ok && latencyMs <= BACKEND_READY_MAX_LATENCY_MS;
+  } catch {
+    healthy = false;
+  }
+
+  backendHealthyStreak = healthy ? backendHealthyStreak + 1 : 0;
+  backendCapacityCached =
+    healthy && backendHealthyStreak >= BACKEND_HEALTHY_PROBES_TO_RESUME;
+  backendCapacityCachedAt = Date.now();
+  return backendCapacityCached;
+}
+
+// pg-boss registers one handler per processing queue. batchSize=1 limits each
+// queue independently, so nobg/embed/person could still overlap. This tail
+// serializes all three globally without changing the durable queue contract.
+let processingTail: Promise<void> = Promise.resolve();
+function runProcessingExclusively(work: () => Promise<void>): Promise<void> {
+  const run = processingTail.then(work, work);
+  processingTail = run.catch(() => undefined);
+  return run;
+}
 
 // ---------------------------------------------------------------------------
 // Capacity governor (background removal)
@@ -394,6 +454,18 @@ async function handleProcessingJob(data: ProcessingJobData, jobId: string): Prom
   // runs — explicit intent; everything automatic (sweeps, idle bootstraps,
   // chained re-enqueues) honors the per-kind toggle and defers to a priority.
   const isManualFirstBatch = !data.sweep && (data.chainDepth ?? 0) === 0;
+  if (!isManualFirstBatch && !(await backendHasProcessingCapacity())) {
+    const retryInSeconds = 60;
+    const nextId = await enqueueProcessing(
+      { ...data, sweep: true },
+      { startAfterSeconds: retryInSeconds },
+    );
+    log(
+      `foreground API degraded — deferred ${data.kind} for ${retryInSeconds}s (job ${nextId})`,
+    );
+    statusJobFinished(jobId, data.kind, "deferred: foreground API degraded");
+    return;
+  }
   if (!isManualFirstBatch) {
     if (!(await getSetting<boolean>(`process_enabled:${data.kind}`, true))) {
       log(`${data.kind} is toggled OFF — skipping batch`);
@@ -496,7 +568,10 @@ async function handleProcessingJob(data: ProcessingJobData, jobId: string): Prom
       log(`"${priorityNow}" is prioritised — not chaining next ${data.kind} batch`);
       return;
     }
-    const nextId = await enqueueProcessing({ ...data, chainDepth: depth + 1 });
+    const nextId = await enqueueProcessing(
+      { ...data, chainDepth: depth + 1 },
+      { startAfterSeconds: PROCESS_CHAIN_PAUSE_SECONDS },
+    );
     log(`backlog remains — chained next ${data.kind} batch (job ${nextId}, depth ${depth + 1})`);
   }
 }
@@ -519,7 +594,7 @@ async function maybeTriggerProcessingAfterDrain(): Promise<void> {
     if (waiting > 0) return;
     if (!(await isAutoPipelineEnabled())) return;
     if (!(await getSetting<boolean>("gate_processing", true))) return;
-    const limit = Math.max(1, parseInt(process.env.PROCESS_NOBG_DEFAULT_LIMIT ?? "100", 10));
+    const limit = Math.max(1, parseInt(process.env.PROCESS_NOBG_DEFAULT_LIMIT ?? "50", 10));
     const hourBucket = new Date().toISOString().slice(0, 13);
     const id = await enqueueProcessing(
       { kind: "nobg", limit, sweep: true },
@@ -529,7 +604,7 @@ async function maybeTriggerProcessingAfterDrain(): Promise<void> {
     // Also kick a people-photo scan so freshly-uploaded items from a new brand
     // are vetted promptly (the "never added" guard), not only on the 2×/day cron.
     if (WORKER_QUEUES.includes(QUEUES.PROCESS_PERSON)) {
-      const personLimit = Math.max(1, parseInt(process.env.PROCESS_PERSON_DEFAULT_LIMIT ?? "500", 10));
+      const personLimit = Math.max(1, parseInt(process.env.PROCESS_PERSON_DEFAULT_LIMIT ?? "100", 10));
       const pid = await enqueueProcessing(
         { kind: "person", limit: personLimit, sweep: true },
         { singletonKey: `person:drain:${hourBucket}` },
@@ -555,7 +630,7 @@ async function maybeTriggerProcessingAfterDrain(): Promise<void> {
 // tick can't stack duplicate batches.
 const IDLE_SWEEP_INTERVAL_MS = Math.max(
   30_000,
-  parseInt(process.env.IDLE_SWEEP_INTERVAL_MS ?? "120000", 10),
+  parseInt(process.env.IDLE_SWEEP_INTERVAL_MS ?? "600000", 10),
 );
 
 async function idleBacklogLoop(): Promise<void> {
@@ -573,19 +648,19 @@ async function idleBacklogLoop(): Promise<void> {
             queue: QUEUES.PROCESS_NOBG,
             kind: "nobg" as const,
             needs: backlog.needsNobg,
-            limit: Math.max(1, parseInt(process.env.PROCESS_NOBG_DEFAULT_LIMIT ?? "100", 10)),
+            limit: Math.max(1, parseInt(process.env.PROCESS_NOBG_DEFAULT_LIMIT ?? "50", 10)),
           },
           {
             queue: QUEUES.PROCESS_EMBED,
             kind: "embed" as const,
             needs: backlog.needsEmbed,
-            limit: Math.max(1, parseInt(process.env.PROCESS_EMBED_DEFAULT_LIMIT ?? "2000", 10)),
+            limit: Math.max(1, parseInt(process.env.PROCESS_EMBED_DEFAULT_LIMIT ?? "250", 10)),
           },
           {
             queue: QUEUES.PROCESS_PERSON,
             kind: "person" as const,
             needs: backlog.needsPerson,
-            limit: Math.max(1, parseInt(process.env.PROCESS_PERSON_DEFAULT_LIMIT ?? "500", 10)),
+            limit: Math.max(1, parseInt(process.env.PROCESS_PERSON_DEFAULT_LIMIT ?? "100", 10)),
           },
         ];
         for (const t of targets) {
@@ -845,7 +920,7 @@ async function main(): Promise<void> {
         for (const j of list) {
           console.log(`[worker=${WORKER_ID}] claimed ${queue} job ${j.id} (limit=${j.data.limit})`);
           recordActivity(`claimed ${queue} job ${j.id} (limit ${j.data.limit})`);
-          await handleProcessingJob(j.data, j.id);
+          await runProcessingExclusively(() => handleProcessingJob(j.data, j.id));
         }
       },
     );
